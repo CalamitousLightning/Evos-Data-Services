@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException, Query
+6from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 import os
@@ -21,117 +21,11 @@ from passlib.context import CryptContext
 
 from datetime import datetime, timedelta
 import uuid
-import asyncio
 
 
 load_dotenv()
 
 app = FastAPI()
-
-# =========================
-# BACKGROUND: RETRY STUCK ORDERS
-# =========================
-async def retry_stuck_orders():
-    """
-    Runs every 5 minutes.
-    Finds orders that are paid but have no datamart_ref
-    (provider was never triggered) and retries the purchase.
-    """
-    await asyncio.sleep(60)  # wait 60s after startup before first run
-    while True:
-        try:
-            print("RETRY JOB: checking for stuck orders...")
-
-            cutoff = (datetime.utcnow() - timedelta(hours=2)).isoformat()
-
-            stuck = supabase.table("orders")                 .select("*")                 .in_("status", ["paid", "processing"])                 .is_("datamart_ref", "null")                 .gte("created_at", cutoff)                 .execute()
-
-            orders = stuck.data or []
-            print(f"RETRY JOB: found {len(orders)} stuck orders")
-
-            for order in orders:
-                try:
-                    provider = get_provider(order["network"])
-                    if not provider:
-                        print(f"RETRY JOB: no provider for order {order['id']}")
-                        continue
-
-                    print(f"RETRY JOB: retrying order {order['id']} via {provider}")
-
-                    if provider == "DATAMART":
-                        dm_response = requests.post(
-                            f"{DATAMART_BASE}/purchase",
-                            headers={"X-API-Key": DATAMART_API_KEY},
-                            json={
-                                "phoneNumber": order["phone_number"],
-                                "network": NETWORK_MAP.get(order["network"]),
-                                "capacity": extract_capacity(order["bundle"]),
-                                "gateway": "wallet"
-                            },
-                            timeout=REQUEST_TIMEOUT
-                        )
-                        dm = dm_response.json()
-                        dm_data = dm.get("data", {})
-                        if dm_data.get("orderReference"):
-                            supabase.table("orders")                                 .update({
-                                    "status": "processing",
-                                    "datamart_ref": dm_data.get("orderReference"),
-                                    "datamart_order_id": dm_data.get("orderId")
-                                })                                 .eq("id", order["id"])                                 .execute()
-                            process_agent_profit(order["id"], order["paystack_ref"])
-                            print(f"RETRY JOB: order {order['id']} retried via DATAMART ✅")
-
-                    elif provider == "BUNDLES_GHANA":
-                        BG_NETWORK_MAP = {
-                            "MTN": "MTN", "TELECEL": "Telecel",
-                            "AIRTELTIGO": "AirtelTigo", "AT": "AirtelTigo",
-                        }
-                        network_name = BG_NETWORK_MAP.get(order["network"].upper(), order["network"])
-                        bg_bundles = call_bundles_ghana(f"/bundles?network={network_name}")
-
-                        if not bg_bundles.get("success"):
-                            print(f"RETRY JOB: BG fetch failed for order {order['id']}")
-                            continue
-
-                        bundle_volume = order["bundle"].upper().replace(" ", "")
-                        matched = next(
-                            (b for b in bg_bundles.get("bundles", [])
-                             if b.get("volume", "").upper().replace(" ", "") == bundle_volume
-                             and b.get("status") == "active"),
-                            None
-                        )
-                        if not matched:
-                            print(f"RETRY JOB: no BG bundle matched for order {order['id']}")
-                            continue
-
-                        bg_order = call_bundles_ghana("/order", method="POST", body={
-                            "bundle_id": matched["id"],
-                            "phone": order["phone_number"],
-                            "webhook_url": "https://api.evosdata.xyz/webhook/bundlesghana"
-                        })
-
-                        if bg_order.get("success"):
-                            bg_ref = bg_order["order"]["reference"]
-                            supabase.table("orders")                                 .update({
-                                    "status": "processing",
-                                    "datamart_ref": bg_ref,
-                                    "datamart_order_id": str(bg_order["order"]["id"])
-                                })                                 .eq("id", order["id"])                                 .execute()
-                            process_agent_profit(order["id"], order["paystack_ref"])
-                            print(f"RETRY JOB: order {order['id']} retried via BUNDLES_GHANA ✅")
-
-                except Exception as e:
-                    print(f"RETRY JOB: error retrying order {order.get('id')}: {str(e)}")
-
-        except Exception as e:
-            print("RETRY JOB ERROR:", str(e))
-
-        await asyncio.sleep(300)  # run every 5 minutes
-
-
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(retry_stuck_orders())
 
 # =========================
 # PRODUCTION CORS (CLEAN)
@@ -160,11 +54,17 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET_KEY")
 
 DATAMART_API_KEY = os.getenv("DATAMART_API_KEY")
+DATAMART_WEBHOOK_SECRET = os.getenv("DATAMART_WEBHOOK_SECRET")
 DATAMART_BASE = "https://api.datamartgh.shop/api/developer"
 
 BUNDLES_GHANA_API_KEY = os.getenv("BUNDLES_GHANA_API_KEY")
 BUNDLES_GHANA_API_SECRET = os.getenv("BUNDLES_GHANA_API_SECRET")
-BUNDLES_GHANA_BASE = "https://bundlesghana.store/api/v1"
+BUNDLES_GHANA_BASE = "https://evosdata.xyz/.netlify/functions/bundlesProxy"
+
+MOOLRE_BASE = os.getenv("MOOLRE_BASE", "https://api.moolre.com/open/transact")  # confirm exact base URL
+MOOLRE_USERNAME = os.getenv("MOOLRE_USERNAME")
+MOOLRE_API_KEY = os.getenv("MOOLRE_API_KEY")
+MOOLRE_ACCOUNT_NUMBER = os.getenv("MOOLRE_ACCOUNT_NUMBER")
 
 # =========================
 # SAFETY CHECK (PRODUCTION SAFE)
@@ -174,8 +74,12 @@ required_envs = {
     "SUPABASE_KEY": SUPABASE_KEY,
     "PAYSTACK_SECRET_KEY": PAYSTACK_SECRET,
     "DATAMART_API_KEY": DATAMART_API_KEY,
+    "DATAMART_WEBHOOK_SECRET": DATAMART_WEBHOOK_SECRET,
     "BUNDLES_GHANA_API_KEY": BUNDLES_GHANA_API_KEY,
     "BUNDLES_GHANA_API_SECRET": BUNDLES_GHANA_API_SECRET,
+    "MOOLRE_USERNAME": MOOLRE_USERNAME,       # add these
+    "MOOLRE_API_KEY": MOOLRE_API_KEY,
+    "MOOLRE_ACCOUNT_NUMBER": MOOLRE_ACCOUNT_NUMBER,
 }
 
 missing = [k for k, v in required_envs.items() if not v]
@@ -231,27 +135,59 @@ NETWORK_MAP = {
     "AIRTELTIGO": "AT_PREMIUM"
 }
 
+
+MOOLRE_CHANNEL_MAP = {
+    "MTN": 1,
+    "TELECEL": 6,
+    "AIRTELTIGO": 7,
+}
+
 # =========================
 # BUNDLES GHANA HELPER
 # =========================
 def call_bundles_ghana(endpoint: str, method: str = "GET", body: dict = None):
-    headers = {
-        "X-API-KEY": BUNDLES_GHANA_API_KEY,
-        "X-API-SECRET": BUNDLES_GHANA_API_SECRET,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-    url = f"{BUNDLES_GHANA_BASE}{endpoint}"
+    if not endpoint or not isinstance(endpoint, str):
+        raise Exception(f"Invalid Bundles Ghana endpoint: {endpoint}")
     try:
-        if method == "POST":
-            res = requests.post(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT)
-        else:
-            res = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+        print("CALLING BG PATH:", endpoint, "METHOD:", method)
+        res = requests.post(
+            BUNDLES_GHANA_BASE,
+            json={
+                "path": endpoint,
+                "method": method,
+                "body": body
+            },
+            timeout=REQUEST_TIMEOUT
+        )
+        print("BG PROXY STATUS:", res.status_code)
+        print("BG PROXY BODY:", res.text[:300])
         return res.json()
     except Exception as e:
-        print("BUNDLES GHANA REQUEST ERROR:", str(e))
+        print("BUNDLES GHANA PROXY ERROR:", str(e))
         return {"success": False, "error": str(e)}
 
+# =========================
+# MOOLRE HELPER
+# =========================
+def call_moolre(endpoint: str, body: dict):
+    try:
+        res = requests.post(
+            f"{MOOLRE_BASE}/{endpoint}",
+            headers={
+                "X-API-USER": MOOLRE_USERNAME,
+                "X-API-KEY": MOOLRE_API_KEY,
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=REQUEST_TIMEOUT
+        )
+        print(f"MOOLRE {endpoint} STATUS:", res.status_code)
+        print(f"MOOLRE {endpoint} BODY:", res.text[:300])
+        return res.json()
+    except Exception as e:
+        print("MOOLRE ERROR:", str(e))
+        return {"status": 0, "message": str(e)}
+        
 # =========================
 # PASSWORD SECURITY
 # =========================
@@ -463,7 +399,33 @@ def get_user_orders(user_id: int = Query(...)):
     except Exception as e:
         print("GET ORDERS ERROR:", str(e))
         raise HTTPException(status_code=500, detail="Failed to fetch orders")
-
+ 
+ 
+# =========================
+# ORDER TRACKING BY PHONE
+# =========================
+@app.get("/orders/track")
+def track_orders(phone: str = Query(...)):
+    try:
+        cleaned = phone.strip()
+        if not cleaned:
+            raise HTTPException(400, "Phone number required")
+ 
+        orders = supabase.table("orders") \
+            .select("network, bundle, price, phone_number, status, created_at, evosdata_ref, paystack_ref") \
+            .eq("phone_number", cleaned) \
+            .order("created_at", desc=True) \
+            .limit(10) \
+            .execute()
+ 
+        return {"orders": orders.data or []}
+ 
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("TRACK ERROR:", str(e))
+        raise HTTPException(500, "Failed to fetch orders")
+ 
 
 # =========================
 # CREATE ORDER (PRODUCTION SAFE)
@@ -476,7 +438,6 @@ def create_order(data: CreateOrderRequest):
 
     try:
         import uuid
-import asyncio
         from datetime import datetime, timedelta
 
         # =========================
@@ -1345,23 +1306,28 @@ async def agent_sales(agent_id: int):
     }
 
 
-
-
-
 # =========================
-# AGENT WITHDRAW
+# AGENT WITHDRAW (AUTO via Moolre)
 # =========================
-
 
 @app.post("/agent/withdraw")
 async def request_withdrawal(payload: dict):
 
     agent_id = payload.get("agent_id")
     amount = payload.get("amount")
+    mobile_number = payload.get("mobile_number")
+    network = payload.get("network")
+    account_name = payload.get("account_name", "")
 
     if not agent_id or not amount:
         return {"error": "Missing fields"}
 
+    if not mobile_number or not network:
+        return {"error": "Mobile money number and network are required"}
+
+    # =========================
+    # CHECK WALLET
+    # =========================
     wallet = supabase.table("agent_wallets") \
         .select("balance") \
         .eq("agent_id", agent_id) \
@@ -1373,33 +1339,273 @@ async def request_withdrawal(payload: dict):
 
     balance = float(wallet.data[0]["balance"])
 
-    if amount > balance:
+    if float(amount) > balance:
         return {"error": "Insufficient balance"}
 
-    if amount < 5:
-        return {"error": "Minimum withdrawal is 5"}
+    if float(amount) < 5:
+        return {"error": "Minimum withdrawal is GH₵5"}
 
-    # hold funds immediately
-    new_balance = balance - amount
-
+    # =========================
+    # DEDUCT WALLET IMMEDIATELY
+    # =========================
+    new_balance = balance - float(amount)
     supabase.table("agent_wallets") \
         .update({"balance": new_balance}) \
         .eq("agent_id", agent_id) \
         .execute()
 
-    supabase.table("agent_withdrawals") \
+    # =========================
+    # GET MOOLRE CHANNEL
+    # =========================
+    channel = MOOLRE_CHANNEL_MAP.get(network) or MOOLRE_CHANNEL_MAP.get(network.upper())
+
+    if not channel:
+        supabase.table("agent_wallets") \
+            .update({"balance": balance}) \
+            .eq("agent_id", agent_id) \
+            .execute()
+        return {"error": f"Unsupported network: {network}"}
+
+    # =========================
+    # UNIQUE REF
+    # =========================
+    external_ref = f"EVOS-WD-{agent_id}-{uuid.uuid4().hex[:8].upper()}"
+
+    # =========================
+    # SAVE WITHDRAWAL RECORD
+    # =========================
+    wd = supabase.table("agent_withdrawals") \
         .insert({
             "agent_id": agent_id,
-            "amount": amount,
-            "account_name": payload.get("account_name"),
-            "account_number": payload.get("account_number"),
-            "bank_name": payload.get("bank_name")
+            "amount": float(amount),
+            "account_name": account_name,
+            "account_number": mobile_number,
+            "bank_name": network,
+            "status": "processing",
+            "moolre_ref": external_ref,
         }) \
         .execute()
 
-    return {"status": "request submitted"}
+    if not wd.data:
+        supabase.table("agent_wallets") \
+            .update({"balance": balance}) \
+            .eq("agent_id", agent_id) \
+            .execute()
+        return {"error": "Failed to create withdrawal record"}
+
+    withdrawal_id = wd.data[0]["id"]
+
+    # =========================
+    # INITIATE MOOLRE TRANSFER
+    # =========================
+    try:
+        moolre_res = call_moolre("transfer", {
+            "type": 1,
+            "channel": channel,
+            "currency": "GHS",
+            "amount": str(float(amount)),
+            "receiver": mobile_number,
+            "externalref": external_ref,
+            "reference": f"EVOS Agent Withdrawal #{withdrawal_id}",
+            "accountnumber": MOOLRE_ACCOUNT_NUMBER,
+        })
+
+        # ✅ FIX: Moolre returns status as string "1" not integer 1
+        if str(moolre_res.get("status")) == "1":
+            tx_data = moolre_res.get("data", {})
+            tx_status = tx_data.get("txstatus", 0) if isinstance(tx_data, dict) else 0
+            final_status = "paid" if tx_status == 1 else "processing"
+
+            supabase.table("agent_withdrawals") \
+                .update({"status": final_status}) \
+                .eq("id", withdrawal_id) \
+                .execute()
+
+            # ✅ LOG TRANSACTION
+            supabase.table("agent_transactions") \
+                .insert({
+                    "agent_id": agent_id,
+                    "amount": -float(amount),
+                    "type": "withdrawal",
+                    "reference": external_ref
+                }) \
+                .execute()
+
+            return {
+                "status": "success",
+                "message": "Transfer initiated. Funds will arrive shortly.",
+                "withdrawal_id": withdrawal_id,
+                "transfer_status": final_status,
+            }
+        else:
+            # Moolre rejected — refund wallet
+            supabase.table("agent_wallets") \
+                .update({"balance": balance}) \
+                .eq("agent_id", agent_id) \
+                .execute()
+            supabase.table("agent_withdrawals") \
+                .update({"status": "failed"}) \
+                .eq("id", withdrawal_id) \
+                .execute()
+
+            error_msg = moolre_res.get("message", "Transfer failed")
+            if isinstance(error_msg, list):
+                error_msg = " ".join(error_msg)
+            return {"error": error_msg or "Moolre transfer failed"}
+
+    except Exception as e:
+        print("MOOLRE TRANSFER ERROR:", str(e))
+        supabase.table("agent_wallets") \
+            .update({"balance": balance}) \
+            .eq("agent_id", agent_id) \
+            .execute()
+        supabase.table("agent_withdrawals") \
+            .update({"status": "failed"}) \
+            .eq("id", withdrawal_id) \
+            .execute()
+        return {"error": "Transfer service error. Funds refunded to wallet."}
 
 
+# =========================
+# WITHDRAWAL STATUS CHECK
+# =========================
+@app.get("/agent/withdrawal/status/{withdrawal_id}")
+async def check_withdrawal_status(withdrawal_id: int):
+    try:
+        wd = supabase.table("agent_withdrawals") \
+            .select("*") \
+            .eq("id", withdrawal_id) \
+            .limit(1) \
+            .execute()
+
+        if not wd.data:
+            return {"error": "Withdrawal not found"}
+
+        row = wd.data[0]
+        moolre_ref = row.get("moolre_ref")
+
+        if not moolre_ref or row.get("status") in ["paid", "failed", "rejected"]:
+            return {"status": row.get("status"), "withdrawal": row}
+
+        status_res = call_moolre("status", {
+            "type": 1,
+            "idtype": 1,
+            "id": moolre_ref,
+            "accountnumber": MOOLRE_ACCOUNT_NUMBER,
+        })
+
+        # ✅ FIX: Moolre returns status as string "1" not integer 1
+        if str(status_res.get("status")) == "1":
+            tx_status = status_res.get("data", {}).get("txstatus", 0)
+            final_status = "paid" if tx_status == 1 else "failed" if tx_status == 2 else "processing"
+
+            if final_status != row.get("status"):
+                supabase.table("agent_withdrawals") \
+                    .update({"status": final_status}) \
+                    .eq("id", withdrawal_id) \
+                    .execute()
+
+                if final_status == "failed":
+                    wlt = supabase.table("agent_wallets") \
+                        .select("balance") \
+                        .eq("agent_id", row["agent_id"]) \
+                        .limit(1) \
+                        .execute()
+                    if wlt.data:
+                        supabase.table("agent_wallets") \
+                            .update({"balance": float(wlt.data[0]["balance"]) + float(row["amount"])}) \
+                            .eq("agent_id", row["agent_id"]) \
+                            .execute()
+
+        return {"status": final_status, "withdrawal": row}
+
+    except Exception as e:
+        print("WITHDRAWAL STATUS ERROR:", str(e))
+        return {"error": "Failed to check status"}
+
+
+# =========================
+# MOOLRE WEBHOOK
+# =========================
+@app.post("/webhook/moolre")
+async def moolre_webhook(request: Request):
+    try:
+        payload = await request.json()
+        print("MOOLRE WEBHOOK:", payload)
+
+        # ✅ FIX: externalref and txstatus are nested inside "data" for transfer webhooks
+        data = payload.get("data", {})
+        external_ref = data.get("externalref") or payload.get("externalref")
+        tx_status = data.get("txstatus") if isinstance(data, dict) else payload.get("txstatus")
+
+        print("MOOLRE WEBHOOK EXTERNALREF:", external_ref)
+        print("MOOLRE WEBHOOK TXSTATUS:", tx_status)
+
+        if not external_ref:
+            return {"received": True}
+
+        # Only process EVOS withdrawal refs — ignore collection webhooks
+        if not str(external_ref).startswith("EVOS-WD-"):
+            print("MOOLRE WEBHOOK: ignoring non-withdrawal ref", external_ref)
+            return {"received": True}
+
+        wd = supabase.table("agent_withdrawals") \
+            .select("*") \
+            .eq("moolre_ref", external_ref) \
+            .limit(1) \
+            .execute()
+
+        if not wd.data:
+            print("MOOLRE WEBHOOK: withdrawal not found for ref", external_ref)
+            return {"received": True}
+
+        row = wd.data[0]
+
+        # ✅ FIX: compare tx_status as integer
+        final_status = (
+            "paid" if tx_status == 1
+            else "failed" if tx_status == 2
+            else "processing"
+        )
+
+        supabase.table("agent_withdrawals") \
+            .update({"status": final_status}) \
+            .eq("moolre_ref", external_ref) \
+            .execute()
+
+        # ✅ LOG TRANSACTION on webhook confirmation
+        if final_status == "paid" and row.get("status") != "paid":
+            supabase.table("agent_transactions") \
+                .insert({
+                    "agent_id": row["agent_id"],
+                    "amount": -float(row["amount"]),
+                    "type": "withdrawal",
+                    "reference": external_ref
+                }) \
+                .execute()
+
+        # Refund wallet if failed
+        if final_status == "failed" and row.get("status") != "failed":
+            wlt = supabase.table("agent_wallets") \
+                .select("balance") \
+                .eq("agent_id", row["agent_id"]) \
+                .limit(1) \
+                .execute()
+            if wlt.data:
+                current = float(wlt.data[0]["balance"])
+                supabase.table("agent_wallets") \
+                    .update({"balance": current + float(row["amount"])}) \
+                    .eq("agent_id", row["agent_id"]) \
+                    .execute()
+                print(f"MOOLRE WEBHOOK: refunded GH₵{row['amount']} to agent {row['agent_id']}")
+
+        print(f"MOOLRE WEBHOOK: withdrawal {external_ref} updated to {final_status}")
+        return {"received": True}
+
+    except Exception as e:
+        print("MOOLRE WEBHOOK ERROR:", str(e))
+        return {"received": False}
+        
 # =========================
 # ADMIN WITHDRAWALS
 # =========================
@@ -1701,7 +1907,6 @@ async def create_store_order(payload: dict):
 
     try:
         import uuid
-import asyncio
         import requests
 
         # =========================
@@ -1824,7 +2029,7 @@ import asyncio
             "email": customer_email,
             "amount": int(agent_price * 100),
             "reference": reference,
-            "callback_url": "https://evosdata.netlify.app/success",
+            "callback_url": f"https://evosdata.xyz/store/{agent_id}",
             "metadata": {
                 "order_id": order_id,
                 "agent_id": agent_id,
@@ -2258,7 +2463,6 @@ async def ussd(request: Request):
 from fastapi import Request
 from fastapi.responses import Response
 import uuid
-import asyncio
 import requests
 
 sessions = {}
