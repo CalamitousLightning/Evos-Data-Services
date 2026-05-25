@@ -1,4 +1,4 @@
-6from fastapi import FastAPI, Request, HTTPException, Query
+from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 import os
@@ -22,6 +22,7 @@ from passlib.context import CryptContext
 from datetime import datetime, timedelta
 import uuid
 
+import asyncio
 
 load_dotenv()
 
@@ -376,6 +377,156 @@ def get_prices():
     except Exception as e:
         print("PRICES ERROR:", str(e))
         raise HTTPException(status_code=500, detail="Failed to load prices")
+
+
+
+
+
+# =========================
+# BACKGROUND: RETRY STUCK ORDERS
+# =========================
+async def retry_stuck_orders():
+    await asyncio.sleep(60)  # wait 60s after startup before first run
+
+    while True:
+        try:
+            print("RETRY JOB: scanning for stuck orders...")
+
+            # Orders older than 10 mins but within 3 hours
+            # with no provider ref — catches both "paid" and "processing" stuck orders
+            cutoff = (datetime.utcnow() - timedelta(hours=3)).isoformat()
+            floor  = (datetime.utcnow() - timedelta(minutes=10)).isoformat()
+
+            stuck = supabase.table("orders") \
+                .select("*") \
+                .in_("status", ["paid", "processing"]) \
+                .is_("datamart_ref", "null") \
+                .gte("created_at", cutoff) \
+                .lte("created_at", floor) \
+                .execute()
+
+            orders = stuck.data or []
+            print(f"RETRY JOB: {len(orders)} stuck orders found")
+
+            for order in orders:
+                try:
+                    provider = get_provider(order["network"])
+
+                    if not provider:
+                        print(f"RETRY JOB: no provider for order {order['id']}")
+                        continue
+
+                    print(f"RETRY JOB: retrying order {order['id']} via {provider}")
+
+                    # =====================================
+                    # DATAMART
+                    # =====================================
+                    if provider == "DATAMART":
+                        dm_response = requests.post(
+                            f"{DATAMART_BASE}/purchase",
+                            headers={"X-API-Key": DATAMART_API_KEY},
+                            json={
+                                "phoneNumber": order["phone_number"],
+                                "network": NETWORK_MAP.get(order["network"]),
+                                "capacity": extract_capacity(order["bundle"]),
+                                "gateway": "wallet"
+                            },
+                            timeout=REQUEST_TIMEOUT
+                        )
+
+                        dm = dm_response.json()
+                        dm_data = dm.get("data", {})
+
+                        if dm_data.get("orderReference"):
+                            supabase.table("orders") \
+                                .update({
+                                    "status": "processing",
+                                    "datamart_ref": dm_data.get("orderReference"),
+                                    "datamart_order_id": dm_data.get("orderId")
+                                }) \
+                                .eq("id", order["id"]) \
+                                .execute()
+
+                            process_agent_profit(order["id"], order["paystack_ref"])
+                            print(f"RETRY JOB: order {order['id']} sent to DATAMART ✅")
+                        else:
+                            print(f"RETRY JOB: DATAMART rejected order {order['id']}: {dm}")
+
+                    # =====================================
+                    # BUNDLES GHANA
+                    # =====================================
+                    elif provider == "BUNDLES_GHANA":
+                        BG_NETWORK_MAP = {
+                            "MTN": "MTN",
+                            "TELECEL": "Telecel",
+                            "AIRTELTIGO": "AirtelTigo",
+                            "AT": "AirtelTigo",
+                        }
+                        network_name = BG_NETWORK_MAP.get(order["network"].upper(), order["network"])
+                        bg_bundles = call_bundles_ghana(f"/bundles?network={network_name}")
+
+                        if not bg_bundles.get("success"):
+                            print(f"RETRY JOB: BG bundle fetch failed for order {order['id']}")
+                            continue
+
+                        bundle_volume = order["bundle"].upper().replace(" ", "")
+                        matched = next(
+                            (b for b in bg_bundles.get("bundles", [])
+                             if b.get("volume", "").upper().replace(" ", "") == bundle_volume
+                             and b.get("status") == "active"),
+                            None
+                        )
+
+                        if not matched:
+                            print(f"RETRY JOB: no BG bundle match for order {order['id']}")
+                            continue
+
+                        bg_order = call_bundles_ghana("/order", method="POST", body={
+                            "bundle_id": matched["id"],
+                            "phone": order["phone_number"],
+                            "webhook_url": "https://evos-business-hub.onrender.com/webhook/bundlesghana"
+                        })
+
+                        if bg_order.get("success"):
+                            supabase.table("orders") \
+                                .update({
+                                    "status": "processing",
+                                    "datamart_ref": bg_order["order"]["reference"],
+                                    "datamart_order_id": str(bg_order["order"]["id"])
+                                }) \
+                                .eq("id", order["id"]) \
+                                .execute()
+
+                            process_agent_profit(order["id"], order["paystack_ref"])
+                            print(f"RETRY JOB: order {order['id']} sent to BUNDLES_GHANA ✅")
+                        else:
+                            print(f"RETRY JOB: BG rejected order {order['id']}: {bg_order}")
+
+                    # =====================================
+                    # Mark failed after 3hrs still stuck
+                    # =====================================
+                    order_age = datetime.utcnow() - datetime.fromisoformat(
+                        order["created_at"].replace("Z", "")
+                    )
+                    if order_age > timedelta(hours=3):
+                        supabase.table("orders") \
+                            .update({"status": "failed"}) \
+                            .eq("id", order["id"]) \
+                            .execute()
+                        print(f"RETRY JOB: order {order['id']} marked failed after 3hrs")
+
+                except Exception as e:
+                    print(f"RETRY JOB: error on order {order.get('id')}: {str(e)}")
+
+        except Exception as e:
+            print("RETRY JOB ERROR:", str(e))
+
+        await asyncio.sleep(300)  # every 5 minutes
+
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(retry_stuck_orders())
 
 
 
