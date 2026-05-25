@@ -400,7 +400,7 @@ async def retry_stuck_orders():
             stuck = supabase.table("orders") \
                 .select("*") \
                 .in_("status", ["paid", "processing"]) \
-                .is_("datamart_ref", "null") \
+                .is_("datamart_ref", None) \
                 .gte("created_at", cutoff) \
                 .lte("created_at", floor) \
                 .execute()
