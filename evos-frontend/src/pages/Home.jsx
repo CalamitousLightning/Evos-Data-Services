@@ -190,11 +190,11 @@ export default function Home({ setPage, theme }) {
             <h2 style={styles.agentTitle}>Run your own data store & earn on every sale</h2>
             <p style={styles.agentDesc}>
               Set your own markup, get a personal store link, and earn profit automatically
-              on every order your customers place. You need 20 successful orders to qualify.
+              on every order your customers place. You need 3 - 5 successful orders to qualify.
             </p>
             <div style={styles.agentPoints}>
               {[
-                "📦 Complete 20 successful orders to qualify",
+                "📦 Complete 3- 5 successful orders daily to qualify",
                 "⏳ Limited agent slots available — don't miss out",
                 "💰 Set your own markup and earn automatically",
                 "📩 Contact us via WhatsApp to get onboarded",
@@ -207,7 +207,7 @@ export default function Home({ setPage, theme }) {
             <div style={styles.agentBtns}>
               <button
                 style={styles.agentWaBtn}
-                onClick={() => window.open("https://wa.me/233208718943?text=Hi, I'd like to become an EVOS agent", "_blank")}
+                onClick={() => window.open("https://wa.me/233208718943?text=Hi, I'd like to become an EVOS Data Service agent", "_blank")}
               >
                 💬 WhatsApp Us
               </button>
@@ -249,7 +249,7 @@ export default function Home({ setPage, theme }) {
           <div>
             <h3 style={styles.footerHead}>Other Products</h3>
             <p style={styles.footerLink} onClick={() => window.open("https://evosgpt.xyz", "_blank")}>EVOS GPT</p>
-            <p style={styles.footerMuted}>Evos Business Hub (coming soon)</p>
+            <p style={styles.footerLink} onClick={() => window.open("https://evoshub.xyz", "_blank")}>EVOS BUSINESS HUB (PARENT)</p>
           </div>
           <div>
             <h3 style={styles.footerHead}>Legal</h3>
@@ -282,7 +282,7 @@ export default function Home({ setPage, theme }) {
                 💬 WhatsApp Chat
               </button>
               <button style={styles.chatOption}
-                onClick={() => window.open("https://whatsapp.com/channel/0029VaTrnsZEgGfFXkIcjt1M", "_blank")}>
+                onClick={() => window.open("https://chat.whatsapp.com/CYSA7PRIlK0JklgVtQfhnR", "_blank")}>
                 👥 Community
               </button>
               <button style={styles.chatOption}
