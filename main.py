@@ -2035,8 +2035,8 @@ async def public_agent_store(agent_id: int):
             "status": "success",
             "agent_id": agent_id,
             "agent_name": (
-                u.get("full_name")
-                or u.get("username")
+                u.get("username")
+                or u.get("full_name")
                 or "Agent"
             ),
             "prices": bundles
