@@ -1953,33 +1953,23 @@ def save_agent_pricing(payload: dict):
 # =========================
 @app.get("/store/{agent_id}")
 async def public_agent_store(agent_id: int):
-
     try:
         # =========================
         # VERIFY AGENT ACCOUNT
         # =========================
         user = supabase.table("users") \
-            .select("id,username,full_name,role,agent_status") \
+            .select("id,username,full_name,store_name,role,agent_status") \
             .eq("id", agent_id) \
             .limit(1) \
             .execute()
 
         if not user.data:
-            return {
-                "status": "error",
-                "message": "Store not found"
-            }
+            return {"status": "error", "message": "Store not found"}
 
         u = user.data[0]
 
-        if (
-            u.get("role") != "agent" or
-            u.get("agent_status") != "approved"
-        ):
-            return {
-                "status": "error",
-                "message": "Store unavailable"
-            }
+        if u.get("role") != "agent" or u.get("agent_status") != "approved":
+            return {"status": "error", "message": "Store unavailable"}
 
         # =========================
         # LOAD BASE PRICES
@@ -1998,7 +1988,6 @@ async def public_agent_store(agent_id: int):
             .execute()
 
         markup_map = {}
-
         for m in (markups.data or []):
             key = f"{m['network'].strip().lower()}::{m['bundle'].strip().lower()}"
             markup_map[key] = float(m.get("markup", 0) or 0)
@@ -2007,35 +1996,30 @@ async def public_agent_store(agent_id: int):
         # BUILD STORE PRODUCTS
         # =========================
         bundles = []
-
         for row in (prices.data or []):
-
             network = row.get("network", "").strip()
             bundle = row.get("bundle", "").strip()
-
             key = f"{network.lower()}::{bundle.lower()}"
-
             base_price = float(row.get("cost_price", 0) or 0)
             markup = float(markup_map.get(key, 0))
-
-            final_price = round(base_price + markup, 2)
-
             bundles.append({
                 "network": network,
                 "bundle": bundle,
                 "base_price": base_price,
                 "markup": markup,
-                "final_price": final_price
+                "final_price": round(base_price + markup, 2)
             })
 
         # =========================
         # RETURN STORE
+        # Priority: store_name > username > full_name > "Agent"
         # =========================
         return {
             "status": "success",
             "agent_id": agent_id,
             "agent_name": (
-                u.get("username")
+                u.get("store_name")
+                or u.get("username")
                 or u.get("full_name")
                 or "Agent"
             ),
@@ -2044,12 +2028,59 @@ async def public_agent_store(agent_id: int):
 
     except Exception as e:
         print("STORE ERROR:", str(e))
+        return {"status": "error", "message": "Failed to load store"}
+
+
+# =========================
+# SAVE STORE NAME
+# =========================
+@app.post("/agent/store-name")
+async def save_store_name(payload: dict):
+    try:
+        agent_id = payload.get("agent_id")
+        store_name = str(payload.get("store_name", "")).strip()
+
+        if not agent_id:
+            return {"error": "agent_id required"}
+
+        if len(store_name) > 40:
+            return {"error": "Store name must be 40 characters or less"}
+
+        supabase.table("users") \
+            .update({"store_name": store_name or None}) \
+            .eq("id", agent_id) \
+            .execute()
+
+        return {"status": "success", "store_name": store_name}
+
+    except Exception as e:
+        print("SAVE STORE NAME ERROR:", str(e))
+        return {"error": "Failed to save store name"}
+
+
+# =========================
+# GET STORE NAME
+# =========================
+@app.get("/agent/store-name/{agent_id}")
+async def get_store_name(agent_id: int):
+    try:
+        res = supabase.table("users") \
+            .select("store_name, username") \
+            .eq("id", agent_id) \
+            .limit(1) \
+            .execute()
+
+        if not res.data:
+            return {"error": "Agent not found"}
 
         return {
-            "status": "error",
-            "message": "Failed to load store"
+            "store_name": res.data[0].get("store_name") or "",
+            "username": res.data[0].get("username") or ""
         }
 
+    except Exception as e:
+        print("GET STORE NAME ERROR:", str(e))
+        return {"error": "Failed to fetch store name"}
 # =========================
 # STORE ORDER (PAYSTACK READY + MATCHES DB)
 # =========================
