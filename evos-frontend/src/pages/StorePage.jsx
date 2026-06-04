@@ -112,7 +112,9 @@ function ConfirmModal({ selected, networkLabel, networkCfg, onClose, onConfirm, 
 // MAIN STORE PAGE
 // =========================
 export default function StorePage({ setPage }) {
-  const agentId = window.location.pathname.split("/store/")[1];
+  // Extract only the numeric agent ID — ignore the slug segment if present
+  // Handles both /store/1 and /store/1/besah-andy-store
+  const agentId = window.location.pathname.split("/store/")[1]?.split("/")[0];
 
   const [loading, setLoading] = useState(true);
   const [store, setStore] = useState(null);
