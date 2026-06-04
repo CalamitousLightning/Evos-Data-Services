@@ -50,11 +50,40 @@ export default function Home({ setPage, theme }) {
     "During network congestion, some orders may delay.",
   ];
 
-  const networks = [
-    { name: "MTN", color: "#FFC107", emoji: "🟡" },
-    { name: "Telecel", color: "#ef4444", emoji: "🔴" },
-    { name: "AirtelTigo", color: "#6366f1", emoji: "🔵" },
+  const quickNetworks = [
+    {
+      name: "MTN",
+      label: "MTN",
+      emoji: "🟡",
+      color: "#FFC107",
+      bg: "linear-gradient(135deg, rgba(255,193,7,0.22), rgba(255,193,7,0.07))",
+      border: "rgba(255,193,7,0.5)",
+      glow: "rgba(255,193,7,0.25)",
+    },
+    {
+      name: "TELECEL",
+      label: "Telecel",
+      emoji: "🔴",
+      color: "#ef4444",
+      bg: "linear-gradient(135deg, rgba(239,68,68,0.22), rgba(239,68,68,0.07))",
+      border: "rgba(239,68,68,0.5)",
+      glow: "rgba(239,68,68,0.25)",
+    },
+    {
+      name: "AIRTELTIGO",
+      label: "AirtelTigo",
+      emoji: "🔵",
+      color: "#6366f1",
+      bg: "linear-gradient(135deg, rgba(99,102,241,0.22), rgba(99,102,241,0.07))",
+      border: "rgba(99,102,241,0.5)",
+      glow: "rgba(99,102,241,0.25)",
+    },
   ];
+
+  const handleNetworkClick = (networkName) => {
+    localStorage.setItem("selectedNetwork", networkName);
+    setPage("shop");
+  };
 
   return (
     <div style={styles.container}>
@@ -78,14 +107,29 @@ export default function Home({ setPage, theme }) {
           powered by EVOS Business HUB.
         </p>
 
-        {/* NETWORK PILLS */}
-        <div style={styles.networkPills}>
-          {networks.map((n) => (
-            <div key={n.name} style={{ ...styles.pill, borderColor: n.color + "55" }}>
-              <span>{n.emoji}</span>
-              <span style={{ color: n.color, fontWeight: 700, fontSize: 13 }}>{n.name}</span>
-            </div>
-          ))}
+        {/* ===== PLACE ORDER NOW — NETWORK CARDS ===== */}
+        <div style={styles.orderNowBox}>
+          <p style={styles.orderNowLabel}>⚡ Place Order Now — Pick your network</p>
+          <div style={styles.orderNowGrid}>
+            {quickNetworks.map((n) => (
+              <div
+                key={n.name}
+                style={{
+                  ...styles.orderNowCard,
+                  background: n.bg,
+                  border: `1.5px solid ${n.border}`,
+                  boxShadow: `0 4px 20px ${n.glow}`,
+                }}
+                onClick={() => handleNetworkClick(n.name)}
+              >
+                <span style={styles.orderNowEmoji}>{n.emoji}</span>
+                <span style={{ ...styles.orderNowName, color: n.color }}>
+                  {n.label}
+                </span>
+                <span style={{ ...styles.orderNowArrow, color: n.color }}>→</span>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* CTA BUTTONS */}
@@ -194,7 +238,7 @@ export default function Home({ setPage, theme }) {
             </p>
             <div style={styles.agentPoints}>
               {[
-                "📦 Complete 3- 5 successful orders daily to qualify",
+                "📦 Complete 3-5 successful orders daily to qualify",
                 "⏳ Limited agent slots available — don't miss out",
                 "💰 Set your own markup and earn automatically",
                 "📩 Contact us via WhatsApp to get onboarded",
@@ -392,26 +436,59 @@ const styles = {
     fontSize: 16,
     color: "#94a3b8",
     maxWidth: 520,
-    margin: "0 auto 24px",
+    margin: "0 auto 28px",
     lineHeight: 1.65,
   },
-  networkPills: {
-    display: "flex",
-    justifyContent: "center",
-    gap: 10,
-    flexWrap: "wrap",
+
+  // PLACE ORDER NOW — network cards
+  orderNowBox: {
+    background: "rgba(0,0,0,0.25)",
+    border: "1px solid rgba(255,255,255,0.1)",
+    borderRadius: 20,
+    padding: "18px 16px 20px",
     marginBottom: 28,
+    maxWidth: 500,
+    marginLeft: "auto",
+    marginRight: "auto",
   },
-  pill: {
+  orderNowLabel: {
+    fontSize: 13,
+    fontWeight: 800,
+    color: "#94a3b8",
+    marginBottom: 14,
+    textTransform: "uppercase",
+    letterSpacing: "0.6px",
+  },
+  orderNowGrid: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr 1fr",
+    gap: 10,
+  },
+  orderNowCard: {
     display: "flex",
+    flexDirection: "column",
     alignItems: "center",
     gap: 6,
-    padding: "6px 14px",
-    borderRadius: 50,
-    border: "1px solid",
-    background: "rgba(255,255,255,0.05)",
-    fontSize: 13,
+    padding: "16px 10px",
+    borderRadius: 16,
+    cursor: "pointer",
+    transition: "transform 0.15s, box-shadow 0.15s",
   },
+  orderNowEmoji: {
+    fontSize: 30,
+    lineHeight: 1,
+  },
+  orderNowName: {
+    fontSize: 13,
+    fontWeight: 900,
+    letterSpacing: "0.3px",
+  },
+  orderNowArrow: {
+    fontSize: 13,
+    fontWeight: 900,
+    opacity: 0.8,
+  },
+
   heroBtns: {
     display: "flex",
     justifyContent: "center",
@@ -668,7 +745,13 @@ const styles = {
   footerHead: { fontSize: 13, fontWeight: 800, color: "#e5e7eb", marginBottom: 10 },
   footerLink: { fontSize: 13, color: "#38bdf8", cursor: "pointer", marginBottom: 6 },
   footerMuted: { fontSize: 13, color: "#64748b", marginBottom: 6 },
-  footerCopy: { textAlign: "center", fontSize: 12, color: "#475569", paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.04)" },
+  footerCopy: {
+    textAlign: "center",
+    fontSize: 12,
+    color: "#475569",
+    paddingTop: 16,
+    borderTop: "1px solid rgba(255,255,255,0.04)",
+  },
 
   // FLOATING SUPPORT
   floatWrap: {
