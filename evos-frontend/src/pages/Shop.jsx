@@ -7,7 +7,6 @@ export default function Shop() {
   const [bundle, setBundle] = useState("");
   const [bundlePrice, setBundlePrice] = useState(0);
   const [phone, setPhone] = useState("");
-  const [confirmPhone, setConfirmPhone] = useState("");
   const [email, setEmail] = useState(localStorage.getItem("email") || "");
   const [prices, setPrices] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -19,6 +18,14 @@ export default function Shop() {
   const user_id = user?.id || null;
 
   useEffect(() => {
+    // Auto-select network if coming from Home page quick-buy
+    const saved = localStorage.getItem("selectedNetwork");
+    if (saved) {
+      setNetwork(saved);
+      setStep(2);
+      localStorage.removeItem("selectedNetwork");
+    }
+
     const loadPrices = async () => {
       try {
         const res = await API.get("/prices");
@@ -34,7 +41,6 @@ export default function Shop() {
   const OUT_OF_STOCK = [];
   const isOutOfStock = (name) => OUT_OF_STOCK.includes(name);
 
-  // ✅ Sort bundles lowest price first
   const bundles = prices
     .filter((p) => p.network === network)
     .sort((a, b) => Number(a.price) - Number(b.price));
@@ -47,8 +53,7 @@ export default function Shop() {
       if (!network || !bundle) { setError("Select network and bundle"); return; }
       if (!phone) { setError("Enter phone number"); return; }
       if (!validPhone(phone)) { setError("Phone must be 10 digits and start with 0"); return; }
-      if (phone !== confirmPhone) { setError("Phone numbers do not match"); return; }
-      if (!agree) { setError("You must confirm refund policy"); return; }
+      if (!agree) { setError("You must confirm the refund policy"); return; }
 
       setLoading(true);
       const res = await API.post("/orders/create", {
@@ -254,6 +259,7 @@ export default function Shop() {
 
             <p style={styles.stepLabel}>Step 3 of 3 · Complete Order</p>
 
+            {/* ORDER SUMMARY */}
             <div style={styles.summaryCard}>
               <div style={styles.summaryRow}>
                 <span style={styles.summaryLabel}>Network</span>
@@ -277,24 +283,31 @@ export default function Shop() {
               </div>
             </div>
 
+            {/* SINGLE PHONE FIELD */}
             <label style={styles.inputLabel}>📱 Recipient Phone Number</label>
             <input
-              style={styles.input}
+              style={{
+                ...styles.input,
+                borderColor: phone && !validPhone(phone)
+                  ? "rgba(239,68,68,0.6)"
+                  : phone && validPhone(phone)
+                  ? "rgba(34,197,94,0.6)"
+                  : "rgba(255,255,255,0.08)",
+              }}
               type="tel"
               placeholder="e.g. 0244000000"
               value={phone}
+              maxLength={10}
               onChange={(e) => setPhone(e.target.value)}
             />
+            {phone.length > 0 && !validPhone(phone) && (
+              <p style={styles.phoneHint}>⚠️ Must be 10 digits starting with 0</p>
+            )}
+            {phone.length > 0 && validPhone(phone) && (
+              <p style={styles.phoneHintGood}>✅ Looks good!</p>
+            )}
 
-            <label style={styles.inputLabel}>🔁 Confirm Phone Number</label>
-            <input
-              style={styles.input}
-              type="tel"
-              placeholder="Re-enter phone number"
-              value={confirmPhone}
-              onChange={(e) => setConfirmPhone(e.target.value)}
-            />
-
+            {/* EMAIL FIELD */}
             <label style={styles.inputLabel}>📧 Email (for receipt)</label>
             <input
               style={styles.input}
@@ -304,6 +317,7 @@ export default function Shop() {
               onChange={(e) => setEmail(e.target.value)}
             />
 
+            {/* POLICY CHECKBOX */}
             <label style={styles.checkWrap}>
               <input
                 type="checkbox"
@@ -318,6 +332,7 @@ export default function Shop() {
               </span>
             </label>
 
+            {/* PAY BUTTON */}
             <button
               onClick={handleBuy}
               disabled={loading}
@@ -382,6 +397,7 @@ const styles = {
   },
   title: { fontSize: 26, fontWeight: 900, color: "#f1f5f9", margin: "0 0 6px" },
   subtitle: { fontSize: 14, color: "#64748b", margin: 0 },
+
   progressWrap: {
     display: "flex", justifyContent: "center", alignItems: "center",
     gap: 0, marginBottom: 28, position: "relative",
@@ -401,12 +417,14 @@ const styles = {
     position: "absolute", top: 16, left: "16%", right: "16%",
     height: 2, background: "rgba(255,255,255,0.08)", zIndex: 0,
   },
+
   error: {
     background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)",
     color: "#f87171", padding: "12px 16px", borderRadius: 12,
     marginBottom: 16, fontSize: 14, maxWidth: 480,
     margin: "0 auto 16px", textAlign: "center",
   },
+
   wrapper: { maxWidth: 480, margin: "0 auto" },
   box: {
     background: "rgba(15,23,42,0.9)", backdropFilter: "blur(20px)",
@@ -416,8 +434,11 @@ const styles = {
   },
   stepLabel: {
     fontSize: 12, color: "#38bdf8", fontWeight: 700,
-    textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 18, margin: "0 0 18px",
+    textTransform: "uppercase", letterSpacing: "0.8px",
+    margin: "0 0 18px",
   },
+
+  // NETWORK STEP
   networkGrid: { display: "flex", flexDirection: "column", gap: 12, marginBottom: 20 },
   networkCard: {
     padding: "16px 18px", borderRadius: 16, cursor: "pointer",
@@ -435,6 +456,8 @@ const styles = {
   },
   infoRow: { display: "flex", justifyContent: "center", gap: 20 },
   infoText: { fontSize: 12, color: "#475569", fontWeight: 600 },
+
+  // BUNDLE STEP
   backBtn: {
     background: "none", border: "none", color: "#38bdf8",
     fontSize: 14, fontWeight: 700, cursor: "pointer",
@@ -454,9 +477,11 @@ const styles = {
   bundleSize: { fontWeight: 900, fontSize: 18, color: "#f1f5f9", marginBottom: 6 },
   bundlePrice: { fontWeight: 800, fontSize: 16, color: "#38bdf8", marginBottom: 8 },
   bundleTap: { fontSize: 11, color: "#38bdf8", opacity: 0.6 },
+
+  // CHECKOUT STEP
   summaryCard: {
     background: "rgba(2,6,23,0.7)", border: "1px solid rgba(255,255,255,0.06)",
-    borderRadius: 16, padding: "6px 16px", marginBottom: 20,
+    borderRadius: 16, padding: "6px 16px", marginBottom: 22,
   },
   summaryRow: {
     display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -464,16 +489,29 @@ const styles = {
   },
   summaryLabel: { fontSize: 13, color: "#64748b" },
   summaryVal: { fontSize: 15, fontWeight: 700, color: "#e5e7eb" },
-  inputLabel: { display: "block", fontSize: 12, color: "#64748b", fontWeight: 700, marginBottom: 6 },
-  input: {
-    width: "100%", padding: "13px 14px", marginBottom: 14, borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.08)", background: "rgba(2,6,23,0.75)",
-    color: "#fff", outline: "none", fontSize: 14, boxSizing: "border-box",
+
+  inputLabel: {
+    display: "block", fontSize: 12, color: "#64748b",
+    fontWeight: 700, marginBottom: 6,
   },
+  input: {
+    width: "100%", padding: "13px 14px", marginBottom: 6, borderRadius: 12,
+    border: "1.5px solid", background: "rgba(2,6,23,0.75)",
+    color: "#fff", outline: "none", fontSize: 14, boxSizing: "border-box",
+    transition: "border-color 0.2s",
+  },
+  phoneHint: {
+    fontSize: 12, color: "#f87171", margin: "0 0 14px", paddingLeft: 2,
+  },
+  phoneHintGood: {
+    fontSize: 12, color: "#22c55e", margin: "0 0 14px", paddingLeft: 2,
+  },
+
   checkWrap: {
     display: "flex", gap: 10, alignItems: "flex-start",
     background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)",
     padding: "12px 14px", borderRadius: 12, marginBottom: 16, cursor: "pointer",
+    marginTop: 8,
   },
   checkText: { fontSize: 13, color: "#94a3b8", lineHeight: 1.55 },
   buyBtn: {
@@ -483,6 +521,8 @@ const styles = {
     boxShadow: "0 4px 20px rgba(34,197,94,0.3)",
   },
   secureNote: { textAlign: "center", fontSize: 12, color: "#475569", margin: 0 },
+
+  // FLOATING SUPPORT
   floatWrap: {
     position: "fixed", bottom: 24, right: 20, zIndex: 9999,
     display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10,
@@ -491,7 +531,10 @@ const styles = {
     background: "#0f172a", border: "1px solid rgba(255,255,255,0.1)",
     borderRadius: 18, padding: 18, width: 270, boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
   },
-  chatHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
+  chatHeader: {
+    display: "flex", justifyContent: "space-between",
+    alignItems: "center", marginBottom: 10,
+  },
   chatClose: { background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 14 },
   chatMsg: { fontSize: 13, color: "#94a3b8", lineHeight: 1.55, margin: "0 0 12px" },
   chatOptions: { display: "flex", flexDirection: "column", gap: 8 },
