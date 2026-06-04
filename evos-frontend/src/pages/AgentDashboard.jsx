@@ -2,6 +2,24 @@ import { useEffect, useState } from "react";
 
 const API_BASE = "https://api.evosdata.xyz";
 
+// Converts store name → URL slug
+// "Besah Andy Store" → "besah-andy-store"
+const slugify = (name) =>
+  name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")   // strip special chars
+    .replace(/\s+/g, "-")            // spaces → hyphens
+    .replace(/-+/g, "-")             // collapse double hyphens
+    .replace(/^-|-$/g, "");          // trim leading/trailing hyphens
+
+// Builds the full store link given agent id + store name
+const buildStoreLink = (agentId, storeName) => {
+  const base = `${window.location.origin}/store/${agentId}`;
+  const slug = storeName ? slugify(storeName) : "";
+  return slug ? `${base}/${slug}` : base;
+};
+
 export default function AgentDashboard({ user, setPage }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -44,16 +62,18 @@ export default function AgentDashboard({ user, setPage }) {
         const txData = await txRes.json();
         const nameData = await nameRes.json();
 
+        const currentName = nameData.store_name || "";
+
         setStats({
           wallet_balance: Number(data.wallet_balance || 0),
           total_sales: Number(data.total_sales || 0),
           total_profit: Number(data.total_profit || 0),
           total_orders: Number(data.total_orders || 0),
-          store_link: data.store_link || `${window.location.origin}/store/${user.id}`,
+          // Use slugified link if agent has a store name, fallback to plain /store/{id}
+          store_link: buildStoreLink(user.id, currentName),
           transactions: txData.transactions || [],
         });
 
-        const currentName = nameData.store_name || "";
         setStoreName(currentName);
         setStoreNameInput(currentName);
 
@@ -88,7 +108,13 @@ export default function AgentDashboard({ user, setPage }) {
       });
       const data = await res.json();
       if (data.status === "success") {
-        setStoreName(storeNameInput.trim());
+        const newName = storeNameInput.trim();
+        setStoreName(newName);
+        // Immediately update the displayed store link with the new slug
+        setStats((prev) => ({
+          ...prev,
+          store_link: buildStoreLink(user.id, newName),
+        }));
         setStoreNameMsg("✅ Store name saved!");
       } else {
         setStoreNameMsg(data.error || "Failed to save");
@@ -201,7 +227,10 @@ export default function AgentDashboard({ user, setPage }) {
                 )}
               </div>
               <p style={styles.storeNameHint}>
-                This is the name customers see on your store page. Leave blank to use your username.
+                This name appears on your store page and in your store link.
+                e.g. <span style={{ color: "#38bdf8", fontFamily: "monospace", fontSize: 11 }}>
+                  /store/{user?.id}/{storeName ? slugify(storeName) : "your-store-name"}
+                </span>
               </p>
               <input
                 type="text"
@@ -349,7 +378,7 @@ const styles = {
   storeNameHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 },
   storeNameTitle: { fontWeight: 800, fontSize: 14, color: "#f1f5f9" },
   storeNameCurrent: { fontSize: 12, color: "#64748b" },
-  storeNameHint: { fontSize: 12, color: "#475569", margin: "0 0 12px", lineHeight: 1.5 },
+  storeNameHint: { fontSize: 12, color: "#475569", margin: "0 0 12px", lineHeight: 1.6 },
   storeNameInput: { width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(2,6,23,0.75)", color: "#e5e7eb", fontSize: 14, marginBottom: 8, boxSizing: "border-box", outline: "none" },
   storeNameBtn: { marginTop: 10, width: "100%", padding: "12px", borderRadius: 12, border: "none", background: "linear-gradient(135deg, #38bdf8, #0ea5e9)", color: "#000", fontWeight: 900, fontSize: 14 },
 
