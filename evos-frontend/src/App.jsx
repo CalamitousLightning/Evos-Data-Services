@@ -17,17 +17,12 @@ import ETATrack from "./pages/ETATrack";
 import AgentBuyData from "./pages/AgentBuyData";
 import AgentDeposit from "./pages/AgentDeposit";
 
-
 export default function App() {
   const [page, setPage] = useState("home");
   const [menuOpen, setMenuOpen] = useState(false);
   const [user, setUser] = useState(null);
 
   const theme = "dark";
-
-
-
-
 
   // =========================
   // INITIAL LOAD
@@ -77,10 +72,10 @@ export default function App() {
       "/agent-store": "agent-store",
       "/agent-withdraw": "agent-withdraw",
       "/agent-buy-data": "agent-buy-data",
+      "/agent-deposit": "agent-deposit",
       "/admin-withdrawals": "admin-withdrawals",
       "/track": "track-order",
-      "/eta-track": "eta-track",      
-      "/agent-deposit": "agent-deposit",
+      "/eta-track": "eta-track",
     };
 
     setPage(routeMap[path] || "home");
@@ -118,12 +113,12 @@ export default function App() {
       "agent-store": "/agent-store",
       "agent-withdraw": "/agent-withdraw",
       "agent-buy-data": "/agent-buy-data",
+      "agent-deposit": "/agent-deposit",
       "admin-withdrawals": "/admin-withdrawals",
       store: "/store",
       "track-order": "/track",
       "eta-track": "/eta-track",
       "order-tracking": "/eta-track",
-      "agent-deposit": "/agent-deposit",
     };
 
     window.history.pushState({}, "", routes[target] || "/");
@@ -156,10 +151,10 @@ export default function App() {
         return <AgentWithdraw user={user} setPage={navigate} />;
       case "agent-buy-data":
         return <AgentBuyData user={user} setPage={navigate} />;
-      case "admin-withdrawals":
-        return <AdminWithdrawals user={user} setPage={navigate} />;
       case "agent-deposit":
         return <AgentDeposit user={user} setPage={navigate} />;
+      case "admin-withdrawals":
+        return <AdminWithdrawals user={user} setPage={navigate} />;
       case "store":
         return <StorePage setPage={navigate} theme={theme} />;
       case "track-order":
@@ -171,9 +166,6 @@ export default function App() {
         return <ETATrack setPage={navigate} />;
       default:
         return <Home setPage={navigate} theme={theme} />;
-
-
-
     }
   };
 
