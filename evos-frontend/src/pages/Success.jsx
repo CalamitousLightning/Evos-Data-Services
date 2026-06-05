@@ -1,37 +1,68 @@
 import { useEffect, useState } from "react";
-import API from "../api";
+
+const API_BASE = "https://api.evosdata.xyz";
 
 export default function Success() {
   const [status, setStatus] = useState("verifying");
-  const [message, setMessage] = useState("");
+  const [detail, setDetail] = useState({});
 
-  // 🔥 GET REFERENCE FROM URL
   const params = new URLSearchParams(window.location.search);
-  const reference = params.get("reference");
+  const rawRef    = params.get("reference") || "";
+  const trxref    = params.get("trxref") || "";
+  const reference = rawRef.startsWith("EVOS-") ? rawRef : trxref || rawRef;
+  const type      = params.get("type");
 
   useEffect(() => {
     const verify = async () => {
       if (!reference) {
         setStatus("error");
-        setMessage("No payment reference found.");
+        setDetail({ message: "No payment reference found." });
         return;
       }
-
       try {
-        // 🔥 CALL BACKEND SYNC
-        const res = await API.post(`/orders/sync/${reference}`);
+        if (type === "deposit" || reference.startsWith("EVOS-DEP-")) {
+          const res = await fetch(`${API_BASE}/agent/deposit/verify`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reference }),
+          });
+          const data = await res.json();
 
-        setStatus("success");
-        setMessage(res.data.status || "Payment verified");
+          if (data.status === "credited" || data.status === "already_credited") {
+            setStatus("deposit_success");
+            setDetail({ credited: data.credited_amount, balance: data.wallet_balance });
+          } else {
+            setStatus("error");
+            setDetail({ message: data.error || "Deposit verification failed." });
+          }
+        } else {
+          const res = await fetch(`${API_BASE}/orders/sync/${reference}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+          });
+          const data = await res.json();
 
+          if (
+            data.status === "success" ||
+            data.status === "processing" ||
+            data.status === "successful"
+          ) {
+            setStatus("order_success");
+            setDetail({ orderStatus: data.status });
+          } else {
+            setStatus("error");
+            setDetail({ message: data.message || "Order verification failed." });
+          }
+        }
       } catch (err) {
+        console.error(err);
         setStatus("error");
-        setMessage("Failed to verify payment");
+        setDetail({ message: "Network error. Please contact support." });
       }
     };
 
     verify();
-  }, [reference]);
+  }, [reference, type]);
 
   return (
     <div style={styles.container}>
@@ -42,7 +73,8 @@ export default function Success() {
           <p style={styles.info}>🔄 Verifying your payment...</p>
         )}
 
-        {status === "success" && (
+        {/* ── covers both order and deposit success ── */}
+        {(status === "order_success" || status === "deposit_success") && (
           <p style={styles.success}>
             ✅ Payment successful! Your order is being processed.
           </p>
@@ -50,7 +82,7 @@ export default function Success() {
 
         {status === "error" && (
           <p style={styles.error}>
-            ❌ {message}
+            ❌ {detail.message}  {/* ← was `message`, now `detail.message` */}
           </p>
         )}
 
@@ -81,17 +113,9 @@ const styles = {
     width: "90%",
     maxWidth: "400px",
   },
-  info: {
-    color: "#3b82f6",
-  },
-  success: {
-    color: "#10b981",
-    fontWeight: "bold",
-  },
-  error: {
-    color: "#ef4444",
-    fontWeight: "bold",
-  },
+  info:    { color: "#3b82f6" },
+  success: { color: "#10b981", fontWeight: "bold" },
+  error:   { color: "#ef4444", fontWeight: "bold" },
   button: {
     marginTop: "20px",
     padding: "10px 20px",
