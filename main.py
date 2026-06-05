@@ -1947,7 +1947,353 @@ def save_agent_pricing(payload: dict):
         
 
 
+# =========================
+# AGENT WALLET DEPOSIT
+# =========================
+# Two endpoints:
+#   POST /agent/deposit/initiate  → creates Paystack payment, returns payment_url
+#   POST /agent/deposit/verify    → called from success page, verifies + credits wallet
 
+import httpx
+import os
+import uuid
+
+PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET_KEY")  # same key you use elsewhere
+
+
+# =========================
+# INITIATE DEPOSIT
+# =========================
+@app.post("/agent/deposit/initiate")
+async def initiate_deposit(payload: dict):
+    try:
+        agent_id    = payload.get("agent_id")
+        amount      = float(payload.get("amount", 0))       # wallet credit amount
+        total_charge = float(payload.get("total_charge", 0)) # what agent actually pays
+
+        if not agent_id or amount < 1:
+            return {"error": "agent_id and amount (min GH₵ 1) are required"}
+
+        # Fetch agent email for Paystack
+        user_res = supabase.table("users") \
+            .select("email, username") \
+            .eq("id", agent_id) \
+            .limit(1) \
+            .execute()
+
+        if not user_res.data:
+            return {"error": "Agent not found"}
+
+        agent_email = user_res.data[0].get("email", "")
+        reference   = f"EVOS-DEP-{agent_id}-{uuid.uuid4().hex[:10].upper()}"
+
+        # Save pending deposit record so we can credit wallet on verify
+        supabase.table("wallet_deposits").insert({
+            "agent_id":     agent_id,
+            "reference":    reference,
+            "amount":       amount,         # wallet credit amount
+            "total_charge": total_charge,   # what Paystack charged
+            "status":       "pending",
+        }).execute()
+
+        # Initiate Paystack transaction
+        # amount in pesewas (GH₵ × 100)
+        async with httpx.AsyncClient() as client:
+            res = await client.post(
+                "https://api.paystack.co/transaction/initialize",
+                headers={
+                    "Authorization": f"Bearer {PAYSTACK_SECRET}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "email":     agent_email,
+                    "amount":    int(total_charge * 100),
+                    "reference": reference,
+                    "currency":  "GHS",
+                    "metadata": {
+                        "agent_id":  agent_id,
+                        "type":      "wallet_deposit",
+                        "credit_amount": amount,
+                    },
+                    "callback_url": f"{os.getenv('FRONTEND_URL', 'https://evosdata.xyz')}/success?type=deposit",
+                },
+            )
+            data = res.json()
+
+        if not data.get("status"):
+            return {"error": data.get("message", "Paystack init failed")}
+
+        return {
+            "status":      "created",
+            "reference":   reference,
+            "payment_url": data["data"]["authorization_url"],
+        }
+
+    except Exception as e:
+        print("DEPOSIT INITIATE ERROR:", str(e))
+        return {"error": "Failed to initiate deposit"}
+
+
+# =========================
+# VERIFY + CREDIT WALLET
+# =========================
+@app.post("/agent/deposit/verify")
+async def verify_deposit(payload: dict):
+    try:
+        reference = payload.get("reference", "").strip()
+
+        if not reference:
+            return {"error": "reference required"}
+
+        # Only process EVOS-DEP- references
+        if not reference.startswith("EVOS-DEP-"):
+            return {"error": "Invalid deposit reference"}
+
+        # Check if already processed (idempotency guard)
+        existing = supabase.table("wallet_deposits") \
+            .select("*") \
+            .eq("reference", reference) \
+            .limit(1) \
+            .execute()
+
+        if not existing.data:
+            return {"error": "Deposit record not found"}
+
+        deposit = existing.data[0]
+
+        if deposit.get("status") == "credited":
+            # Already credited — return current balance safely
+            user_res = supabase.table("users") \
+                .select("wallet_balance") \
+                .eq("id", deposit["agent_id"]) \
+                .limit(1) \
+                .execute()
+            balance = float(user_res.data[0].get("wallet_balance", 0)) if user_res.data else 0
+            return {"status": "already_credited", "wallet_balance": balance}
+
+        # Verify with Paystack
+        async with httpx.AsyncClient() as client:
+            res = await client.get(
+                f"https://api.paystack.co/transaction/verify/{reference}",
+                headers={"Authorization": f"Bearer {PAYSTACK_SECRET}"},
+            )
+            data = res.json()
+
+        if not data.get("status") or data["data"].get("status") != "success":
+            # Mark failed
+            supabase.table("wallet_deposits") \
+                .update({"status": "failed"}) \
+                .eq("reference", reference) \
+                .execute()
+            return {"error": "Payment not successful", "paystack_status": data["data"].get("status")}
+
+        agent_id      = deposit["agent_id"]
+        credit_amount = float(deposit["amount"])
+
+        # Credit wallet — fetch current balance then add
+        user_res = supabase.table("users") \
+            .select("wallet_balance") \
+            .eq("id", agent_id) \
+            .limit(1) \
+            .execute()
+
+        if not user_res.data:
+            return {"error": "Agent not found"}
+
+        current_balance = float(user_res.data[0].get("wallet_balance", 0) or 0)
+        new_balance     = round(current_balance + credit_amount, 2)
+
+        # Update wallet + mark deposit credited in one go
+        supabase.table("users") \
+            .update({"wallet_balance": new_balance}) \
+            .eq("id", agent_id) \
+            .execute()
+
+        supabase.table("wallet_deposits") \
+            .update({"status": "credited"}) \
+            .eq("reference", reference) \
+            .execute()
+
+        # Log wallet transaction
+        supabase.table("wallet_transactions").insert({
+            "agent_id":  agent_id,
+            "type":      "credit",
+            "amount":    credit_amount,
+            "reference": reference,
+            "note":      "Wallet top-up via Paystack",
+        }).execute()
+
+        return {
+            "status":         "credited",
+            "credited_amount": credit_amount,
+            "wallet_balance":  new_balance,
+        }
+
+    except Exception as e:
+        print("DEPOSIT VERIFY ERROR:", str(e))
+        return {"error": "Verification failed"}
+
+
+# =========================
+# AGENT BUY DATA (WALLET DEDUCTION)
+# =========================
+# POST /agent/buy-data
+# Agent buys at base/cost price, deducted from wallet balance.
+# No Paystack — instant wallet deduction then provider dispatch.
+
+@app.post("/agent/buy-data")
+async def agent_buy_data(payload: dict):
+    try:
+        agent_id     = payload.get("agent_id")
+        network      = str(payload.get("network", "")).strip()
+        bundle       = str(payload.get("bundle", "")).strip()
+        phone_number = str(payload.get("phone_number", "")).strip()
+
+        # ── Validate inputs ──
+        if not all([agent_id, network, bundle, phone_number]):
+            return {"status": "error", "message": "agent_id, network, bundle and phone_number are required"}
+
+        if len(phone_number) < 9:
+            return {"status": "error", "message": "Invalid phone number"}
+
+        # ── Fetch base price ──
+        price_res = supabase.table("base_prices") \
+            .select("cost_price") \
+            .ilike("network", network) \
+            .ilike("bundle", bundle) \
+            .limit(1) \
+            .execute()
+
+        if not price_res.data:
+            return {"status": "error", "message": "Bundle not found"}
+
+        cost_price = float(price_res.data[0].get("cost_price", 0))
+
+        if cost_price <= 0:
+            return {"status": "error", "message": "Invalid bundle price"}
+
+        # ── Fetch agent wallet ──
+        agent_res = supabase.table("users") \
+            .select("wallet_balance, username") \
+            .eq("id", agent_id) \
+            .eq("role", "agent") \
+            .eq("agent_status", "approved") \
+            .limit(1) \
+            .execute()
+
+        if not agent_res.data:
+            return {"status": "error", "message": "Agent not found or not approved"}
+
+        wallet_balance = float(agent_res.data[0].get("wallet_balance", 0) or 0)
+
+        # ── Insufficient funds check ──
+        if wallet_balance < cost_price:
+            return {
+                "status": "error",
+                "message": f"Insufficient wallet balance. Need GH₵ {cost_price:.2f}, have GH₵ {wallet_balance:.2f}",
+            }
+
+        # ── Deduct wallet immediately (reserve funds) ──
+        new_balance = round(wallet_balance - cost_price, 2)
+        supabase.table("users") \
+            .update({"wallet_balance": new_balance}) \
+            .eq("id", agent_id) \
+            .execute()
+
+        # ── Create order record ──
+        reference = f"EVOS-AGT-{agent_id}-{uuid.uuid4().hex[:10].upper()}"
+
+        order_res = supabase.table("orders").insert({
+            "agent_id":     agent_id,
+            "network":      network,
+            "bundle":       bundle,
+            "phone_number": phone_number,
+            "amount":       cost_price,
+            "reference":    reference,
+            "status":       "processing",
+            "order_type":   "agent_self",   # distinguish from customer store orders
+        }).execute()
+
+        if not order_res.data:
+            # Rollback wallet deduction if order insert failed
+            supabase.table("users") \
+                .update({"wallet_balance": wallet_balance}) \
+                .eq("id", agent_id) \
+                .execute()
+            return {"status": "error", "message": "Failed to create order"}
+
+        order_id = order_res.data[0].get("id")
+
+        # ── Log wallet debit transaction ──
+        supabase.table("wallet_transactions").insert({
+            "agent_id":  agent_id,
+            "type":      "debit",
+            "amount":    cost_price,
+            "reference": reference,
+            "note":      f"Data purchase: {network} {bundle} → {phone_number}",
+        }).execute()
+
+        # ── Dispatch to provider ──
+        # Uses same get_provider() + provider dispatch logic as store orders
+        try:
+            provider = await get_provider(network)
+
+            if provider == "datamart":
+                datamart_ref = await send_datamart_order(
+                    network=network,
+                    bundle=bundle,
+                    phone=phone_number,
+                    reference=reference,
+                )
+                supabase.table("orders") \
+                    .update({"datamart_ref": datamart_ref, "status": "processing"}) \
+                    .eq("id", order_id) \
+                    .execute()
+
+            elif provider == "databoss":
+                await send_databoss_order(
+                    network=network,
+                    bundle=bundle,
+                    phone=phone_number,
+                    reference=reference,
+                )
+                supabase.table("orders") \
+                    .update({"status": "processing"}) \
+                    .eq("id", order_id) \
+                    .execute()
+
+            elif provider == "bundles_ghana":
+                await send_bundles_ghana_order(
+                    network=network,
+                    bundle=bundle,
+                    phone=phone_number,
+                    reference=reference,
+                )
+                supabase.table("orders") \
+                    .update({"status": "processing"}) \
+                    .eq("id", order_id) \
+                    .execute()
+
+            else:
+                print(f"AGENT BUY DATA: Unknown provider '{provider}' for {network}")
+
+        except Exception as dispatch_err:
+            # Provider dispatch failed — order stays in processing for retry system to pick up
+            print(f"AGENT BUY DATA DISPATCH ERROR: {str(dispatch_err)}")
+            # Do NOT refund here — retry system will reattempt within 10 min
+
+        return {
+            "status":    "success",
+            "message":   f"{bundle} queued for {phone_number}",
+            "reference": reference,
+            "order_id":  order_id,
+            "new_wallet_balance": new_balance,
+        }
+
+    except Exception as e:
+        print("AGENT BUY DATA ERROR:", str(e))
+        return {"status": "error", "message": "Something went wrong. Please try again."}
+        
 # =========================
 # AGENT STORE (FULL CORRECTED + PRODUCTION READY)
 # =========================
