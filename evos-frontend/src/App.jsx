@@ -14,13 +14,13 @@ import AdminWithdrawals from "./pages/AdminWithdrawals";
 import StorePage from "./pages/StorePage";
 import OrderTracking from "./pages/OrderTracking";
 import ETATrack from "./pages/ETATrack";
+import AgentBuyData from "./pages/AgentBuyData";
 
 export default function App() {
   const [page, setPage] = useState("home");
   const [menuOpen, setMenuOpen] = useState(false);
   const [user, setUser] = useState(null);
 
-  // Always dark — brand is built for dark
   const theme = "dark";
 
   // =========================
@@ -38,6 +38,13 @@ export default function App() {
     return () => {
       window.removeEventListener("popstate", detectRoute);
     };
+  }, []);
+
+  // Close sidebar on Escape key
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") setMenuOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   // =========================
@@ -63,6 +70,7 @@ export default function App() {
       "/agent-pricing": "agent-pricing",
       "/agent-store": "agent-store",
       "/agent-withdraw": "agent-withdraw",
+      "/agent-buy-data": "agent-buy-data",
       "/admin-withdrawals": "admin-withdrawals",
       "/track": "track-order",
       "/eta-track": "eta-track",
@@ -102,6 +110,7 @@ export default function App() {
       "agent-pricing": "/agent-pricing",
       "agent-store": "/agent-store",
       "agent-withdraw": "/agent-withdraw",
+      "agent-buy-data": "/agent-buy-data",
       "admin-withdrawals": "/admin-withdrawals",
       store: "/store",
       "track-order": "/track",
@@ -137,6 +146,8 @@ export default function App() {
         return <AgentStore user={user} setPage={navigate} />;
       case "agent-withdraw":
         return <AgentWithdraw user={user} setPage={navigate} />;
+      case "agent-buy-data":
+        return <AgentBuyData user={user} setPage={navigate} />;
       case "admin-withdrawals":
         return <AdminWithdrawals user={user} setPage={navigate} />;
       case "store":
@@ -155,14 +166,13 @@ export default function App() {
 
   return (
     <div style={appStyle}>
-      {/* Dark overlay over background image */}
+      {/* Background overlay */}
       <div style={overlayStyle} />
 
       <div style={{ position: "relative", zIndex: 2 }}>
 
         {/* ======= NAVBAR ======= */}
         <nav style={navStyle}>
-
           {/* LOGO + BRAND */}
           <div style={logoWrap} onClick={() => navigate("home")}>
             <img
@@ -177,53 +187,162 @@ export default function App() {
             </div>
           </div>
 
-          {/* MENU ICON */}
-          <div
+          {/* HAMBURGER / CLOSE */}
+          <button
             style={menuIconStyle}
             onClick={() => setMenuOpen(!menuOpen)}
+            aria-label="Toggle menu"
           >
-            {menuOpen ? "✕" : "☰"}
-          </div>
+            <span style={burgerLine(menuOpen, 0)} />
+            <span style={burgerLine(menuOpen, 1)} />
+            <span style={burgerLine(menuOpen, 2)} />
+          </button>
         </nav>
 
-        {/* ======= DROPDOWN MENU ======= */}
+        {/* ======= SIDEBAR OVERLAY (dim background) ======= */}
         {menuOpen && (
-          <div style={dropdownStyle}>
-            <button onClick={() => navigate("shop")} style={menuBtn}>🛒 Buy Data</button>
-            <button onClick={() => navigate("orders")} style={menuBtn}>📦 Orders</button>
-            <button onClick={() => navigate("dashboard")} style={menuBtn}>📊 Dashboard</button>
-            <button onClick={() => navigate("eta-track")} style={menuBtn}>📍 Track Order</button>
-
-            {user && (
-              <button onClick={() => navigate("agent-dashboard")} style={agentBtn}>
-                {isAgentActive ? "🚀 Agent Dashboard" : "🚀 Become Agent"}
-              </button>
-            )}
-
-            {isAgentActive && (
-              <button onClick={() => navigate("agent-withdraw")} style={menuBtn}>
-                💳 Withdraw
-              </button>
-            )}
-
-            {isAdmin && (
-              <button onClick={() => navigate("admin-withdrawals")} style={menuBtn}>
-                🛠 Withdrawals
-              </button>
-            )}
-
-            <div style={menuDivider} />
-
-            {user ? (
-              <button onClick={logout} style={dangerBtn}>🚪 Logout</button>
-            ) : (
-              <>
-                <button onClick={() => navigate("login")} style={menuBtn}>Login</button>
-                <button onClick={() => navigate("register")} style={primaryBtn}>Register</button>
-              </>
-            )}
-          </div>
+          <div
+            style={sidebarOverlay}
+            onClick={() => setMenuOpen(false)}
+          />
         )}
+
+        {/* ======= SIDEBAR ======= */}
+        <div style={sidebar(menuOpen)}>
+
+          {/* Sidebar header */}
+          <div style={sidebarHeader}>
+            <div style={sidebarBrand}>
+              <img
+                src="/evosdata.png"
+                alt="EVOS Logo"
+                style={{ width: 32, height: 32, objectFit: "contain", borderRadius: 8 }}
+                onError={(e) => { e.target.style.display = "none"; }}
+              />
+              <div>
+                <div style={{ color: "#38bdf8", fontWeight: 900, fontSize: 15, letterSpacing: "0.5px" }}>EVOSDATA</div>
+                <div style={{ color: "#475569", fontSize: 9, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>by EVOS Business HUB</div>
+              </div>
+            </div>
+            <button style={sidebarCloseBtn} onClick={() => setMenuOpen(false)}>✕</button>
+          </div>
+
+          {/* User badge */}
+          {user && (
+            <div style={sidebarUserBadge}>
+              <div style={sidebarAvatar}>{user.username?.[0]?.toUpperCase() || "U"}</div>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 13, color: "#f1f5f9" }}>@{user.username}</div>
+                <div style={{ fontSize: 11, color: isAgentActive ? "#22c55e" : "#64748b", fontWeight: 600 }}>
+                  {isAgentActive ? "✅ Active Agent" : isAdmin ? "🛠 Admin" : "Customer"}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div style={sidebarDivider} />
+
+          {/* MAIN NAV */}
+          <div style={sidebarSection}>
+            <div style={sidebarSectionLabel}>Main</div>
+            {[
+              { icon: "🏠", label: "Home", target: "home" },
+              { icon: "🛒", label: "Buy Data", target: "shop" },
+              { icon: "📦", label: "My Orders", target: "orders" },
+              { icon: "📊", label: "Dashboard", target: "dashboard" },
+              { icon: "📍", label: "Track Order", target: "eta-track" },
+            ].map((item) => (
+              <button
+                key={item.target}
+                style={sidebarBtn(page === item.target)}
+                onClick={() => navigate(item.target)}
+              >
+                <span style={sidebarBtnIcon}>{item.icon}</span>
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          {/* AGENT NAV */}
+          {(user) && (
+            <>
+              <div style={sidebarDivider} />
+              <div style={sidebarSection}>
+                <div style={sidebarSectionLabel}>Agent</div>
+                <button
+                  style={sidebarBtn(page === "agent-dashboard")}
+                  onClick={() => navigate("agent-dashboard")}
+                >
+                  <span style={sidebarBtnIcon}>🚀</span>
+                  {isAgentActive ? "Agent Dashboard" : "Become Agent"}
+                </button>
+                {isAgentActive && (
+                  <>
+                    <button
+                      style={sidebarBtn(page === "agent-buy-data")}
+                      onClick={() => navigate("agent-buy-data")}
+                    >
+                      <span style={sidebarBtnIcon}>📡</span>
+                      Buy Data (Base Price)
+                    </button>
+                    <button
+                      style={sidebarBtn(page === "agent-pricing")}
+                      onClick={() => navigate("agent-pricing")}
+                    >
+                      <span style={sidebarBtnIcon}>💰</span>
+                      Manage Pricing
+                    </button>
+                    <button
+                      style={sidebarBtn(page === "agent-withdraw")}
+                      onClick={() => navigate("agent-withdraw")}
+                    >
+                      <span style={sidebarBtnIcon}>💳</span>
+                      Withdraw Funds
+                    </button>
+                  </>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* ADMIN NAV */}
+          {isAdmin && (
+            <>
+              <div style={sidebarDivider} />
+              <div style={sidebarSection}>
+                <div style={sidebarSectionLabel}>Admin</div>
+                <button
+                  style={sidebarBtn(page === "admin-withdrawals")}
+                  onClick={() => navigate("admin-withdrawals")}
+                >
+                  <span style={sidebarBtnIcon}>🛠</span>
+                  Withdrawals
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* AUTH */}
+          <div style={{ marginTop: "auto" }}>
+            <div style={sidebarDivider} />
+            <div style={{ padding: "12px 16px 24px", display: "flex", flexDirection: "column", gap: 8 }}>
+              {user ? (
+                <button style={sidebarLogoutBtn} onClick={logout}>
+                  🚪 Sign Out
+                </button>
+              ) : (
+                <>
+                  <button style={sidebarBtn(false)} onClick={() => navigate("login")}>
+                    <span style={sidebarBtnIcon}>🔑</span> Login
+                  </button>
+                  <button style={sidebarPrimaryBtn} onClick={() => navigate("register")}>
+                    ✨ Register
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
 
         {/* ======= PAGE CONTENT ======= */}
         <main style={contentStyle}>
@@ -262,7 +381,7 @@ const navStyle = {
   padding: "10px 16px",
   position: "sticky",
   top: 0,
-  zIndex: 100,
+  zIndex: 200,
   backdropFilter: "blur(16px)",
   WebkitBackdropFilter: "blur(16px)",
   background: "rgba(2,6,23,0.75)",
@@ -305,75 +424,180 @@ const brandSub = {
   textTransform: "uppercase",
 };
 
+// Animated hamburger button
 const menuIconStyle = {
-  fontSize: 20,
+  width: 38,
+  height: 38,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 5,
+  borderRadius: 10,
+  background: "rgba(255,255,255,0.06)",
+  border: "1px solid rgba(255,255,255,0.08)",
   cursor: "pointer",
-  color: "#e5e7eb",
-  width: 36,
-  height: 36,
+  padding: 0,
+};
+
+const burgerLine = (open, index) => {
+  const base = {
+    display: "block",
+    width: 18,
+    height: 2,
+    borderRadius: 2,
+    background: "#e5e7eb",
+    transition: "all 0.25s ease",
+    transformOrigin: "center",
+  };
+  if (open) {
+    if (index === 0) return { ...base, transform: "translateY(7px) rotate(45deg)" };
+    if (index === 1) return { ...base, opacity: 0, transform: "scaleX(0)" };
+    if (index === 2) return { ...base, transform: "translateY(-7px) rotate(-45deg)" };
+  }
+  return base;
+};
+
+// Dim overlay behind sidebar
+const sidebarOverlay = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.55)",
+  zIndex: 299,
+  backdropFilter: "blur(2px)",
+};
+
+// Sliding sidebar
+const sidebar = (open) => ({
+  position: "fixed",
+  top: 0,
+  right: 0,
+  height: "100vh",
+  width: 280,
+  background: "rgba(10,15,30,0.98)",
+  backdropFilter: "blur(24px)",
+  WebkitBackdropFilter: "blur(24px)",
+  borderLeft: "1px solid rgba(56,189,248,0.12)",
+  boxShadow: open ? "-8px 0 40px rgba(0,0,0,0.6)" : "none",
+  zIndex: 300,
+  transform: open ? "translateX(0)" : "translateX(100%)",
+  transition: "transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+  display: "flex",
+  flexDirection: "column",
+  overflowY: "auto",
+});
+
+const sidebarHeader = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  padding: "16px 16px 12px",
+  borderBottom: "1px solid rgba(255,255,255,0.06)",
+  flexShrink: 0,
+};
+
+const sidebarBrand = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+};
+
+const sidebarCloseBtn = {
+  width: 32,
+  height: 32,
+  borderRadius: 8,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.05)",
+  color: "#94a3b8",
+  fontSize: 13,
+  cursor: "pointer",
+  fontWeight: 800,
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  borderRadius: 8,
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.08)",
-  fontWeight: 700,
 };
 
-const dropdownStyle = {
+const sidebarUserBadge = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  margin: "12px 16px 0",
+  padding: "10px 12px",
+  borderRadius: 12,
+  background: "rgba(56,189,248,0.06)",
+  border: "1px solid rgba(56,189,248,0.12)",
+};
+
+const sidebarAvatar = {
+  width: 36,
+  height: 36,
+  borderRadius: "50%",
+  background: "linear-gradient(135deg, #38bdf8, #6366f1)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontWeight: 900,
+  fontSize: 15,
+  color: "white",
+  flexShrink: 0,
+};
+
+const sidebarDivider = {
+  height: 1,
+  background: "rgba(255,255,255,0.05)",
+  margin: "10px 16px",
+  flexShrink: 0,
+};
+
+const sidebarSection = {
+  padding: "0 10px",
   display: "flex",
   flexDirection: "column",
-  gap: 8,
-  padding: 16,
-  margin: "0 10px 10px",
-  borderRadius: 16,
-  background: "rgba(15,23,42,0.95)",
-  backdropFilter: "blur(20px)",
-  WebkitBackdropFilter: "blur(20px)",
-  border: "1px solid rgba(56,189,248,0.12)",
-  boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+  gap: 2,
 };
 
-const menuBtn = {
-  padding: "11px 14px",
-  borderRadius: 10,
-  border: "1px solid rgba(255,255,255,0.06)",
-  background: "rgba(255,255,255,0.04)",
-  color: "#e5e7eb",
-  textAlign: "left",
-  fontSize: 14,
-  fontWeight: 600,
-  cursor: "pointer",
-};
-
-const primaryBtn = {
-  padding: "11px 14px",
-  background: "linear-gradient(135deg, #38bdf8, #0ea5e9)",
-  border: "none",
-  borderRadius: 10,
-  color: "#000",
+const sidebarSectionLabel = {
+  fontSize: 10,
   fontWeight: 800,
-  fontSize: 14,
-  cursor: "pointer",
+  color: "#334155",
+  textTransform: "uppercase",
+  letterSpacing: "1px",
+  padding: "6px 6px 4px",
 };
 
-const agentBtn = {
-  padding: "11px 14px",
-  background: "linear-gradient(135deg, #22c55e, #16a34a)",
-  border: "none",
+const sidebarBtn = (active) => ({
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "10px 12px",
   borderRadius: 10,
-  color: "white",
-  fontWeight: 700,
+  border: active ? "1px solid rgba(56,189,248,0.25)" : "1px solid transparent",
+  background: active ? "rgba(56,189,248,0.1)" : "transparent",
+  color: active ? "#38bdf8" : "#94a3b8",
   fontSize: 14,
+  fontWeight: active ? 800 : 600,
   cursor: "pointer",
   textAlign: "left",
+  width: "100%",
+  transition: "all 0.15s",
+});
+
+const sidebarBtnIcon = {
+  fontSize: 16,
+  flexShrink: 0,
+  width: 20,
+  textAlign: "center",
 };
 
-const dangerBtn = {
+const sidebarLogoutBtn = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  width: "100%",
   padding: "11px 14px",
-  background: "rgba(239,68,68,0.15)",
-  border: "1px solid rgba(239,68,68,0.3)",
   borderRadius: 10,
+  border: "1px solid rgba(239,68,68,0.25)",
+  background: "rgba(239,68,68,0.08)",
   color: "#f87171",
   fontWeight: 700,
   fontSize: 14,
@@ -381,14 +605,20 @@ const dangerBtn = {
   textAlign: "left",
 };
 
-const menuDivider = {
-  height: 1,
-  background: "rgba(255,255,255,0.06)",
-  margin: "2px 0",
+const sidebarPrimaryBtn = {
+  width: "100%",
+  padding: "11px 14px",
+  borderRadius: 10,
+  border: "none",
+  background: "linear-gradient(135deg, #38bdf8, #0ea5e9)",
+  color: "#000",
+  fontWeight: 800,
+  fontSize: 14,
+  cursor: "pointer",
 };
 
 const contentStyle = {
-  padding: 20,
+  padding: 0,
   maxWidth: 1200,
   margin: "0 auto",
 };
