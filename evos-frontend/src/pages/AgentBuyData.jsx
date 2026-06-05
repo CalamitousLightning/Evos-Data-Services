@@ -31,7 +31,8 @@ const bundleAccents = [
   { border: "rgba(20,184,166,0.3)", price: "#14b8a6" },
   { border: "rgba(239,68,68,0.3)", price: "#ef4444" },
 ];
-
+const data = await res.json();
+console.log("buy-data response:", res.status, data);  // ← add this
 // =========================
 // CONFIRM MODAL
 // =========================
