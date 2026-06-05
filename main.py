@@ -2146,7 +2146,6 @@ async def verify_deposit(payload: dict):
 # POST /agent/buy-data
 # Agent buys at base/cost price, deducted from wallet balance.
 # No Paystack — instant wallet deduction then provider dispatch.
-
 @app.post("/agent/buy-data")
 async def agent_buy_data(payload: dict):
     try:
@@ -2212,17 +2211,19 @@ async def agent_buy_data(payload: dict):
             .eq("agent_id", agent_id) \
             .execute()
 
-        # ── Create order record ──
+        # ── Generate reference ──
         reference = f"EVOS-AGT-{agent_id}-{uuid.uuid4().hex[:10].upper()}"
 
+        # ── Create order record ──
         order_res = supabase.table("orders").insert({
             "agent_id":     agent_id,
             "network":      network,
             "bundle":       bundle,
             "phone_number": phone_number,
-            "price":        cost_price,   # ← was "amount", change to "price"
-            "paystack_ref": paystack_ref,
-            "status":       "processing",            
+            "price":        cost_price,
+            "evosdata_ref": reference,   # our agent ref
+            "paystack_ref": reference,   # same ref — needed for retry job
+            "status":       "processing",
         }).execute()
 
         if not order_res.data:
@@ -2246,7 +2247,7 @@ async def agent_buy_data(payload: dict):
 
         # ── Dispatch to provider ──
         try:
-            provider = get_provider(network)  # sync call — no await
+            provider = get_provider(network)
 
             if provider == "DATAMART":
                 dm_response = requests.post(
@@ -2264,17 +2265,17 @@ async def agent_buy_data(payload: dict):
                 dm_data = dm.get("data", {})
                 supabase.table("orders") \
                     .update({
-                        "datamart_ref": dm_data.get("orderReference"),
+                        "datamart_ref":      dm_data.get("orderReference"),
                         "datamart_order_id": dm_data.get("orderId"),
-                        "status": "processing"
+                        "status":            "processing"
                     }) \
                     .eq("id", order_id) \
                     .execute()
 
             elif provider == "BUNDLES_GHANA":
                 BG_NETWORK_MAP = {
-                    "MTN": "MTN",
-                    "TELECEL": "Telecel",
+                    "MTN":       "MTN",
+                    "TELECEL":   "Telecel",
                     "AIRTELTIGO": "AirtelTigo",
                 }
                 network_name = BG_NETWORK_MAP.get(network.upper(), network)
@@ -2291,15 +2292,15 @@ async def agent_buy_data(payload: dict):
                     if matched:
                         bg_order = call_bundles_ghana("/order", method="POST", body={
                             "bundle_id": matched["id"],
-                            "phone": phone_number,
+                            "phone":     phone_number,
                             "webhook_url": "https://api.evosdata.xyz/webhook/bundlesghana"
                         })
                         if bg_order.get("success"):
                             supabase.table("orders") \
                                 .update({
-                                    "datamart_ref": bg_order["order"]["reference"],
+                                    "datamart_ref":      bg_order["order"]["reference"],
                                     "datamart_order_id": str(bg_order["order"]["id"]),
-                                    "status": "processing"
+                                    "status":            "processing"
                                 }) \
                                 .eq("id", order_id) \
                                 .execute()
@@ -2314,11 +2315,11 @@ async def agent_buy_data(payload: dict):
                 db_response = requests.post(
                     f"{DATABOSS_BASE}/{endpoint}",
                     json={
-                        "api_key": DATABOSS_API_KEY,
-                        "api_secret": DATABOSS_API_SECRET,
-                        "network": network.upper(),
-                        "package_gb": extract_capacity(bundle),
-                        "phone_number": phone_number
+                        "api_key":        DATABOSS_API_KEY,
+                        "api_secret":     DATABOSS_API_SECRET,
+                        "network":        network.upper(),
+                        "package_gb":     extract_capacity(bundle),
+                        "phone_number":   phone_number
                     },
                     timeout=REQUEST_TIMEOUT
                 )
@@ -2346,7 +2347,9 @@ async def agent_buy_data(payload: dict):
 
     except Exception as e:
         print("AGENT BUY DATA ERROR:", str(e))
-        return {"status": "error", "message": "Something went wrong. Please try again."}        
+        return {"status": "error", "message": "Something went wrong. Please try again."}
+
+        
 # =========================
 # AGENT STORE (FULL CORRECTED + PRODUCTION READY)
 # =========================
