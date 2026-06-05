@@ -2222,8 +2222,7 @@ async def agent_buy_data(payload: dict):
             "phone_number": phone_number,
             "price":        cost_price,   # ← was "amount", change to "price"
             "reference":    reference,
-            "status":       "processing",
-            "order_type":   "agent_self",
+            "status":       "processing",            
         }).execute()
 
         if not order_res.data:
