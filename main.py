@@ -2221,7 +2221,7 @@ async def agent_buy_data(payload: dict):
             "bundle":       bundle,
             "phone_number": phone_number,
             "price":        cost_price,   # ← was "amount", change to "price"
-            "paystack_ref": paystack_ref
+            "paystack_ref": paystack_ref,
             "status":       "processing",            
         }).execute()
 
