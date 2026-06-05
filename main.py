@@ -2220,7 +2220,7 @@ async def agent_buy_data(payload: dict):
             "network":      network,
             "bundle":       bundle,
             "phone_number": phone_number,
-            "amount":       cost_price,
+            "price":        cost_price,   # ← was "amount", change to "price"
             "reference":    reference,
             "status":       "processing",
             "order_type":   "agent_self",
