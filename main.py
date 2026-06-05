@@ -2149,7 +2149,6 @@ async def agent_buy_data(payload: dict):
         bundle       = str(payload.get("bundle", "")).strip()
         phone_number = str(payload.get("phone_number", "")).strip()
 
-        # ── Validate inputs ──
         if not all([agent_id, network, bundle, phone_number]):
             return {"status": "error", "message": "agent_id, network, bundle and phone_number are required"}
 
@@ -2172,9 +2171,9 @@ async def agent_buy_data(payload: dict):
         if cost_price <= 0:
             return {"status": "error", "message": "Invalid bundle price"}
 
-        # ── Fetch agent wallet ──
+        # ── Verify agent from users table ──
         agent_res = supabase.table("users") \
-            .select("wallet_balance, username") \
+            .select("username") \
             .eq("id", agent_id) \
             .eq("role", "agent") \
             .eq("agent_status", "approved") \
@@ -2184,7 +2183,14 @@ async def agent_buy_data(payload: dict):
         if not agent_res.data:
             return {"status": "error", "message": "Agent not found or not approved"}
 
-        wallet_balance = float(agent_res.data[0].get("wallet_balance", 0) or 0)
+        # ── Fetch wallet from agent_wallets ──
+        wallet_res = supabase.table("agent_wallets") \
+            .select("balance") \
+            .eq("agent_id", agent_id) \
+            .limit(1) \
+            .execute()
+
+        wallet_balance = float(wallet_res.data[0]["balance"]) if wallet_res.data else 0.0
 
         # ── Insufficient funds check ──
         if wallet_balance < cost_price:
@@ -2195,9 +2201,9 @@ async def agent_buy_data(payload: dict):
 
         # ── Deduct wallet immediately (reserve funds) ──
         new_balance = round(wallet_balance - cost_price, 2)
-        supabase.table("users") \
-            .update({"wallet_balance": new_balance}) \
-            .eq("id", agent_id) \
+        supabase.table("agent_wallets") \
+            .update({"balance": new_balance}) \
+            .eq("agent_id", agent_id) \
             .execute()
 
         # ── Create order record ──
@@ -2211,14 +2217,14 @@ async def agent_buy_data(payload: dict):
             "amount":       cost_price,
             "reference":    reference,
             "status":       "processing",
-            "order_type":   "agent_self",   # distinguish from customer store orders
+            "order_type":   "agent_self",
         }).execute()
 
         if not order_res.data:
             # Rollback wallet deduction if order insert failed
-            supabase.table("users") \
-                .update({"wallet_balance": wallet_balance}) \
-                .eq("id", agent_id) \
+            supabase.table("agent_wallets") \
+                .update({"balance": wallet_balance}) \
+                .eq("agent_id", agent_id) \
                 .execute()
             return {"status": "error", "message": "Failed to create order"}
 
@@ -2234,66 +2240,108 @@ async def agent_buy_data(payload: dict):
         }).execute()
 
         # ── Dispatch to provider ──
-        # Uses same get_provider() + provider dispatch logic as store orders
         try:
-            provider = await get_provider(network)
+            provider = get_provider(network)  # sync call — no await
 
-            if provider == "datamart":
-                datamart_ref = await send_datamart_order(
-                    network=network,
-                    bundle=bundle,
-                    phone=phone_number,
-                    reference=reference,
+            if provider == "DATAMART":
+                dm_response = requests.post(
+                    f"{DATAMART_BASE}/purchase",
+                    headers={"X-API-Key": DATAMART_API_KEY},
+                    json={
+                        "phoneNumber": phone_number,
+                        "network": NETWORK_MAP.get(network.upper()),
+                        "capacity": extract_capacity(bundle),
+                        "gateway": "wallet"
+                    },
+                    timeout=REQUEST_TIMEOUT
                 )
+                dm = dm_response.json()
+                dm_data = dm.get("data", {})
                 supabase.table("orders") \
-                    .update({"datamart_ref": datamart_ref, "status": "processing"}) \
+                    .update({
+                        "datamart_ref": dm_data.get("orderReference"),
+                        "datamart_order_id": dm_data.get("orderId"),
+                        "status": "processing"
+                    }) \
                     .eq("id", order_id) \
                     .execute()
 
-            elif provider == "databoss":
-                await send_databoss_order(
-                    network=network,
-                    bundle=bundle,
-                    phone=phone_number,
-                    reference=reference,
-                )
-                supabase.table("orders") \
-                    .update({"status": "processing"}) \
-                    .eq("id", order_id) \
-                    .execute()
+            elif provider == "BUNDLES_GHANA":
+                BG_NETWORK_MAP = {
+                    "MTN": "MTN",
+                    "TELECEL": "Telecel",
+                    "AIRTELTIGO": "AirtelTigo",
+                }
+                network_name = BG_NETWORK_MAP.get(network.upper(), network)
+                bg_bundles = call_bundles_ghana(f"/bundles?network={network_name}")
 
-            elif provider == "bundles_ghana":
-                await send_bundles_ghana_order(
-                    network=network,
-                    bundle=bundle,
-                    phone=phone_number,
-                    reference=reference,
+                if bg_bundles.get("success"):
+                    bundle_volume = bundle.upper().replace(" ", "")
+                    matched = next(
+                        (b for b in bg_bundles.get("bundles", [])
+                         if b.get("volume", "").upper().replace(" ", "") == bundle_volume
+                         and b.get("status") == "active"),
+                        None
+                    )
+                    if matched:
+                        bg_order = call_bundles_ghana("/order", method="POST", body={
+                            "bundle_id": matched["id"],
+                            "phone": phone_number,
+                            "webhook_url": "https://api.evosdata.xyz/webhook/bundlesghana"
+                        })
+                        if bg_order.get("success"):
+                            supabase.table("orders") \
+                                .update({
+                                    "datamart_ref": bg_order["order"]["reference"],
+                                    "datamart_order_id": str(bg_order["order"]["id"]),
+                                    "status": "processing"
+                                }) \
+                                .eq("id", order_id) \
+                                .execute()
+
+            elif provider == "DATABOSS":
+                endpoint = "telecel.php"
+                if network.upper() in ["AIRTELTIGO", "AT"]:
+                    endpoint = "at.php"
+                elif network.upper() == "MTN":
+                    endpoint = "mtn.php"
+
+                db_response = requests.post(
+                    f"{DATABOSS_BASE}/{endpoint}",
+                    json={
+                        "api_key": DATABOSS_API_KEY,
+                        "api_secret": DATABOSS_API_SECRET,
+                        "network": network.upper(),
+                        "package_gb": extract_capacity(bundle),
+                        "phone_number": phone_number
+                    },
+                    timeout=REQUEST_TIMEOUT
                 )
-                supabase.table("orders") \
-                    .update({"status": "processing"}) \
-                    .eq("id", order_id) \
-                    .execute()
+                db = db_response.json()
+                if db.get("success"):
+                    supabase.table("orders") \
+                        .update({"status": "successful"}) \
+                        .eq("id", order_id) \
+                        .execute()
 
             else:
                 print(f"AGENT BUY DATA: Unknown provider '{provider}' for {network}")
 
         except Exception as dispatch_err:
-            # Provider dispatch failed — order stays in processing for retry system to pick up
             print(f"AGENT BUY DATA DISPATCH ERROR: {str(dispatch_err)}")
-            # Do NOT refund here — retry system will reattempt within 10 min
+            # Do NOT refund — retry system picks it up within 10 min
 
         return {
-            "status":    "success",
-            "message":   f"{bundle} queued for {phone_number}",
-            "reference": reference,
-            "order_id":  order_id,
+            "status":             "success",
+            "message":            f"{bundle} queued for {phone_number}",
+            "reference":          reference,
+            "order_id":           order_id,
             "new_wallet_balance": new_balance,
         }
 
     except Exception as e:
         print("AGENT BUY DATA ERROR:", str(e))
-        return {"status": "error", "message": "Something went wrong. Please try again."}
-        
+        return {"status": "error", "message": "Something went wrong. Please try again."}        
 # =========================
 # AGENT STORE (FULL CORRECTED + PRODUCTION READY)
 # =========================
