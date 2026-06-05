@@ -374,7 +374,7 @@ const styles = {
   sideRole: { fontSize: 12, color: "#64748b", marginTop: 3 },
   navWrap: { display: "flex", flexDirection: "column", gap: 8, flex: 1 },
   navBtn: {
-    padding: "13px 14px", border: "none", borderRadius: 14,
+    padding: "13px 14px", borderRadius: 14,
     background: "rgba(255,255,255,0.04)", color: "#e5e7eb",
     fontWeight: 700, textAlign: "left", cursor: "pointer",
     fontSize: 14, display: "flex", alignItems: "center", gap: 10,
@@ -382,7 +382,7 @@ const styles = {
   },
   navIcon: { fontSize: 18 },
   agentBtn: {
-    padding: "13px 14px", border: "none", borderRadius: 14,
+    padding: "13px 14px", borderRadius: 14,
     background: "linear-gradient(135deg, rgba(56,189,248,0.2), rgba(167,139,250,0.15))",
     border: "1px solid rgba(56,189,248,0.3)",
     color: "#38bdf8", fontWeight: 900, textAlign: "left",
@@ -391,7 +391,7 @@ const styles = {
   },
   sideDiv: { height: 1, background: "rgba(255,255,255,0.06)", margin: "8px 0" },
   logoutBtn: {
-    padding: "13px 14px", border: "none", borderRadius: 14,
+    padding: "13px 14px", borderRadius: 14,
     background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)",
     color: "#ef4444", fontWeight: 800, textAlign: "left",
     cursor: "pointer", fontSize: 14,
