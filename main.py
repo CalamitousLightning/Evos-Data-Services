@@ -2237,7 +2237,7 @@ async def agent_buy_data(payload: dict):
         order_id = order_res.data[0].get("id")
 
         # ── Log wallet debit transaction ──
-        supabase.table("wallet_transactions").insert({
+        supabase.table("agent_transactions").insert({
             "agent_id":  agent_id,
             "type":      "debit",
             "amount":    cost_price,
