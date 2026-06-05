@@ -2,18 +2,15 @@ import { useEffect, useState } from "react";
 
 const API_BASE = "https://api.evosdata.xyz";
 
-// Converts store name → URL slug
-// "Besah Andy Store" → "besah-andy-store"
 const slugify = (name) =>
   name
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, "")   // strip special chars
-    .replace(/\s+/g, "-")            // spaces → hyphens
-    .replace(/-+/g, "-")             // collapse double hyphens
-    .replace(/^-|-$/g, "");          // trim leading/trailing hyphens
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
 
-// Builds the full store link given agent id + store name
 const buildStoreLink = (agentId, storeName) => {
   const base = `${window.location.origin}/store/${agentId}`;
   const slug = storeName ? slugify(storeName) : "";
@@ -33,7 +30,6 @@ export default function AgentDashboard({ user, setPage }) {
     transactions: [],
   });
 
-  // Store name state
   const [storeName, setStoreName] = useState("");
   const [storeNameInput, setStoreNameInput] = useState("");
   const [storeNameSaving, setStoreNameSaving] = useState(false);
@@ -69,7 +65,6 @@ export default function AgentDashboard({ user, setPage }) {
           total_sales: Number(data.total_sales || 0),
           total_profit: Number(data.total_profit || 0),
           total_orders: Number(data.total_orders || 0),
-          // Use slugified link if agent has a store name, fallback to plain /store/{id}
           store_link: buildStoreLink(user.id, currentName),
           transactions: txData.transactions || [],
         });
@@ -110,7 +105,6 @@ export default function AgentDashboard({ user, setPage }) {
       if (data.status === "success") {
         const newName = storeNameInput.trim();
         setStoreName(newName);
-        // Immediately update the displayed store link with the new slug
         setStats((prev) => ({
           ...prev,
           store_link: buildStoreLink(user.id, newName),
@@ -271,6 +265,7 @@ export default function AgentDashboard({ user, setPage }) {
               <h3 style={styles.sectionTitle}>Quick Actions</h3>
               <div style={styles.actionsGrid}>
                 {[
+                  { icon: "📡", label: "Buy Data", desc: "Purchase at base price", page: "agent-buy-data", color: "#a78bfa", bg: "rgba(167,139,250,0.1)", border: "rgba(167,139,250,0.25)" },
                   { icon: "💰", label: "Manage Pricing", desc: "Set your bundle markups", page: "agent-pricing", color: "#f59e0b", bg: "rgba(245,158,11,0.1)", border: "rgba(245,158,11,0.25)" },
                   { icon: "💳", label: "Withdraw", desc: "Send to your MoMo", page: "agent-withdraw", color: "#22c55e", bg: "rgba(34,197,94,0.1)", border: "rgba(34,197,94,0.25)" },
                   { icon: "🏠", label: "Dashboard", desc: "Main account page", page: "dashboard", color: "#38bdf8", bg: "rgba(56,189,248,0.1)", border: "rgba(56,189,248,0.25)" },
@@ -372,8 +367,6 @@ const styles = {
   storeLinkBtns: { display: "flex", gap: 10 },
   copyBtn: { flex: 1, padding: "11px", borderRadius: 12, border: "none", background: "linear-gradient(135deg, #38bdf8, #0ea5e9)", color: "#000", fontWeight: 900, fontSize: 13, cursor: "pointer" },
   visitBtn: { flex: 1, padding: "11px", borderRadius: 12, border: "1px solid rgba(56,189,248,0.3)", background: "rgba(56,189,248,0.08)", color: "#38bdf8", fontWeight: 800, fontSize: 13, cursor: "pointer" },
-
-  // STORE NAME
   storeNameCard: { background: "rgba(15,23,42,0.9)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 18, padding: "18px 16px", marginBottom: 16, backdropFilter: "blur(20px)" },
   storeNameHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 },
   storeNameTitle: { fontWeight: 800, fontSize: 14, color: "#f1f5f9" },
@@ -381,17 +374,13 @@ const styles = {
   storeNameHint: { fontSize: 12, color: "#475569", margin: "0 0 12px", lineHeight: 1.6 },
   storeNameInput: { width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(2,6,23,0.75)", color: "#e5e7eb", fontSize: 14, marginBottom: 8, boxSizing: "border-box", outline: "none" },
   storeNameBtn: { marginTop: 10, width: "100%", padding: "12px", borderRadius: 12, border: "none", background: "linear-gradient(135deg, #38bdf8, #0ea5e9)", color: "#000", fontWeight: 900, fontSize: 14 },
-
-  // ACTIONS
   actionsSection: { marginBottom: 24 },
   sectionTitle: { fontSize: 16, fontWeight: 900, color: "#f1f5f9", margin: "0 0 14px" },
-  actionsGrid: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 },
+  actionsGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
   actionCard: { padding: "16px 12px", borderRadius: 16, cursor: "pointer", textAlign: "center", transition: "transform 0.15s" },
   actionIcon: { fontSize: 26, marginBottom: 8 },
   actionLabel: { fontWeight: 800, fontSize: 13, marginBottom: 4 },
   actionDesc: { fontSize: 11, color: "#64748b" },
-
-  // TRANSACTIONS
   txSection: { marginBottom: 20 },
   txHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
   txCount: { fontSize: 12, color: "#64748b", fontWeight: 700 },
