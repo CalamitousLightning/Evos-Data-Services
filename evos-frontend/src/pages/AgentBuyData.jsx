@@ -170,7 +170,7 @@ function LowBalanceBanner({ balance, onDeposit }) {
 // =========================
 // MAIN PAGE
 // =========================
-export default function AgentBuyData({ user, setPage }) {
+export default function AgentBuyData({ user, setPage, authLoading }) {
   const [step, setStep] = useState(1); // 1=network, 2=bundles
   const [network, setNetwork] = useState("");
   const [bundles, setBundles] = useState([]);
@@ -181,17 +181,18 @@ export default function AgentBuyData({ user, setPage }) {
   const [processing, setProcessing] = useState(false);
   const [successMsg, setSuccessMsg] = useState("");
 
-  // Redirect if not agent
+  // Redirect guard — wait for auth hydration before checking
   useEffect(() => {
+    if (authLoading) return;                          // wait for hydration
     if (!user) { setPage("login"); return; }
-    if (user.role !== "agent" || user.agent_status !== "approved") { setPage("dashboard"); }
-  }, [user, setPage]);
+    if (user.role !== "agent" || user.agent_status !== "approved") {
+      setPage("dashboard");
+    }
+  }, [user, authLoading, setPage]);
 
   // Load base prices + wallet
-  // Reuses /agent/pricing/{id} — same endpoint as AgentPricing,
-  // which returns { prices: [{ network, bundle, base_price, markup }] }
   useEffect(() => {
-    if (!user?.id) return;
+    if (authLoading || !user?.id) return;            // also gate data fetch
     const load = async () => {
       try {
         setLoading(true);
@@ -203,7 +204,6 @@ export default function AgentBuyData({ user, setPage }) {
         const pricingData = await pricingRes.json();
         const dashData = await dashRes.json();
 
-        // Normalise to { network, bundle, cost_price } for use in this page
         const normalized = (pricingData.prices || []).map((item) => ({
           network: item.network,
           bundle: item.bundle,
@@ -220,7 +220,10 @@ export default function AgentBuyData({ user, setPage }) {
       }
     };
     load();
-  }, [user]);
+  }, [user, authLoading]);
+
+  // Don't render until auth is confirmed — prevents redirect flash
+  if (authLoading) return null;
 
   const availableNetworks = [...new Set(bundles.map((b) => b.network))];
 
@@ -342,7 +345,6 @@ export default function AgentBuyData({ user, setPage }) {
                       bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.1)",
                       tag: "", tagColor: "#64748b",
                     };
-                    // Count bundles + cheapest price for this network
                     const netBundles = bundles.filter((b) => b.network === netKey);
                     const cheapest = Math.min(...netBundles.map((b) => Number(b.cost_price)));
                     return (
