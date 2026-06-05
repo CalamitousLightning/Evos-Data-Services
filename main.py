@@ -1958,7 +1958,7 @@ import httpx
 import os
 import uuid
 
-PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET_KEY")  # same key you use elsewhere
+PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET_KEY")
 
 
 # =========================
@@ -1967,9 +1967,9 @@ PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET_KEY")  # same key you use elsewhere
 @app.post("/agent/deposit/initiate")
 async def initiate_deposit(payload: dict):
     try:
-        agent_id    = payload.get("agent_id")
-        amount      = float(payload.get("amount", 0))       # wallet credit amount
-        total_charge = float(payload.get("total_charge", 0)) # what agent actually pays
+        agent_id     = payload.get("agent_id")
+        amount       = float(payload.get("amount", 0))        # wallet credit amount
+        total_charge = float(payload.get("total_charge", 0))  # what agent actually pays
 
         if not agent_id or amount < 1:
             return {"error": "agent_id and amount (min GH₵ 1) are required"}
@@ -1987,17 +1987,7 @@ async def initiate_deposit(payload: dict):
         agent_email = user_res.data[0].get("email", "")
         reference   = f"EVOS-DEP-{agent_id}-{uuid.uuid4().hex[:10].upper()}"
 
-        # Save pending deposit record so we can credit wallet on verify
-        supabase.table("wallet_deposits").insert({
-            "agent_id":     agent_id,
-            "reference":    reference,
-            "amount":       amount,         # wallet credit amount
-            "total_charge": total_charge,   # what Paystack charged
-            "status":       "pending",
-        }).execute()
-
-        # Initiate Paystack transaction
-        # amount in pesewas (GH₵ × 100)
+        # Initiate Paystack first so we get the real Paystack reference
         async with httpx.AsyncClient() as client:
             res = await client.post(
                 "https://api.paystack.co/transaction/initialize",
@@ -2011,8 +2001,8 @@ async def initiate_deposit(payload: dict):
                     "reference": reference,
                     "currency":  "GHS",
                     "metadata": {
-                        "agent_id":  agent_id,
-                        "type":      "wallet_deposit",
+                        "agent_id":     agent_id,
+                        "type":         "wallet_deposit",
                         "credit_amount": amount,
                     },
                     "callback_url": f"{os.getenv('FRONTEND_URL', 'https://evosdata.xyz')}/success?type=deposit",
@@ -2022,6 +2012,18 @@ async def initiate_deposit(payload: dict):
 
         if not data.get("status"):
             return {"error": data.get("message", "Paystack init failed")}
+
+        paystack_ref = data["data"].get("reference", reference)
+
+        # Save pending deposit record — includes both our ref and Paystack's ref
+        supabase.table("wallet_deposits").insert({
+            "agent_id":     agent_id,
+            "reference":    reference,       # our EVOS-DEP- reference
+            "paystack_ref": paystack_ref,    # Paystack's own reference
+            "amount":       amount,          # wallet credit amount
+            "total_charge": total_charge,    # what Paystack charged
+            "status":       "pending",
+        }).execute()
 
         return {
             "status":      "created",
@@ -2045,14 +2047,13 @@ async def verify_deposit(payload: dict):
         if not reference:
             return {"error": "reference required"}
 
-        # Only process EVOS-DEP- references
-        if not reference.startswith("EVOS-DEP-"):
-            return {"error": "Invalid deposit reference"}
+        # Accept both EVOS-DEP- refs and raw Paystack refs
+        # Paystack callback can send either "reference" or "trxref"
+        lookup_col = "reference" if reference.startswith("EVOS-DEP-") else "paystack_ref"
 
-        # Check if already processed (idempotency guard)
         existing = supabase.table("wallet_deposits") \
             .select("*") \
-            .eq("reference", reference) \
+            .eq(lookup_col, reference) \
             .limit(1) \
             .execute()
 
@@ -2061,70 +2062,76 @@ async def verify_deposit(payload: dict):
 
         deposit = existing.data[0]
 
+        # ── Already credited — idempotency guard ──
         if deposit.get("status") == "credited":
-            # Already credited — return current balance safely
-            user_res = supabase.table("users") \
-                .select("wallet_balance") \
-                .eq("id", deposit["agent_id"]) \
+            wallet_res = supabase.table("agent_wallets") \
+                .select("balance") \
+                .eq("agent_id", deposit["agent_id"]) \
                 .limit(1) \
                 .execute()
-            balance = float(user_res.data[0].get("wallet_balance", 0)) if user_res.data else 0
+            balance = float(wallet_res.data[0]["balance"]) if wallet_res.data else 0
             return {"status": "already_credited", "wallet_balance": balance}
 
-        # Verify with Paystack
+        # ── Verify with Paystack ──
+        verify_ref = deposit.get("paystack_ref") or deposit.get("reference")
         async with httpx.AsyncClient() as client:
             res = await client.get(
-                f"https://api.paystack.co/transaction/verify/{reference}",
+                f"https://api.paystack.co/transaction/verify/{verify_ref}",
                 headers={"Authorization": f"Bearer {PAYSTACK_SECRET}"},
             )
             data = res.json()
 
         if not data.get("status") or data["data"].get("status") != "success":
-            # Mark failed
             supabase.table("wallet_deposits") \
                 .update({"status": "failed"}) \
-                .eq("reference", reference) \
+                .eq("id", deposit["id"]) \
                 .execute()
-            return {"error": "Payment not successful", "paystack_status": data["data"].get("status")}
+            return {
+                "error": "Payment not successful",
+                "paystack_status": data["data"].get("status"),
+            }
 
         agent_id      = deposit["agent_id"]
         credit_amount = float(deposit["amount"])
 
-        # Credit wallet — fetch current balance then add
-        user_res = supabase.table("users") \
-            .select("wallet_balance") \
-            .eq("id", agent_id) \
+        # ── Credit agent_wallets (not users) ──
+        wallet_res = supabase.table("agent_wallets") \
+            .select("balance") \
+            .eq("agent_id", agent_id) \
             .limit(1) \
             .execute()
 
-        if not user_res.data:
-            return {"error": "Agent not found"}
+        if wallet_res.data:
+            current_balance = float(wallet_res.data[0]["balance"] or 0)
+            new_balance = round(current_balance + credit_amount, 2)
+            supabase.table("agent_wallets") \
+                .update({"balance": new_balance}) \
+                .eq("agent_id", agent_id) \
+                .execute()
+        else:
+            # No wallet row yet — create it
+            new_balance = round(credit_amount, 2)
+            supabase.table("agent_wallets") \
+                .insert({"agent_id": agent_id, "balance": new_balance}) \
+                .execute()
 
-        current_balance = float(user_res.data[0].get("wallet_balance", 0) or 0)
-        new_balance     = round(current_balance + credit_amount, 2)
-
-        # Update wallet + mark deposit credited in one go
-        supabase.table("users") \
-            .update({"wallet_balance": new_balance}) \
-            .eq("id", agent_id) \
-            .execute()
-
+        # ── Mark deposit credited ──
         supabase.table("wallet_deposits") \
             .update({"status": "credited"}) \
-            .eq("reference", reference) \
+            .eq("id", deposit["id"]) \
             .execute()
 
-        # Log wallet transaction
+        # ── Log wallet transaction ──
         supabase.table("wallet_transactions").insert({
             "agent_id":  agent_id,
             "type":      "credit",
             "amount":    credit_amount,
-            "reference": reference,
+            "reference": deposit.get("reference"),
             "note":      "Wallet top-up via Paystack",
         }).execute()
 
         return {
-            "status":         "credited",
+            "status":          "credited",
             "credited_amount": credit_amount,
             "wallet_balance":  new_balance,
         }
@@ -2132,7 +2139,6 @@ async def verify_deposit(payload: dict):
     except Exception as e:
         print("DEPOSIT VERIFY ERROR:", str(e))
         return {"error": "Verification failed"}
-
 
 # =========================
 # AGENT BUY DATA (WALLET DEDUCTION)
