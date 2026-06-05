@@ -13,7 +13,7 @@ const calcFee = (amount) => {
 
 const QUICK_AMOUNTS = [10, 20, 50, 100, 200, 500];
 
-export default function AgentDeposit({ user, setPage }) {
+export default function AgentDeposit({ user, setPage, authLoading }) {
   const [amount, setAmount] = useState("");
   const [walletBalance, setWalletBalance] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -26,6 +26,7 @@ export default function AgentDeposit({ user, setPage }) {
   const isValid = numAmount >= 1;
 
   useEffect(() => {
+    if (authLoading) return;                          // wait for auth hydration
     if (!user) { setPage("login"); return; }
     if (user.role !== "agent" || user.agent_status !== "approved") {
       setPage("dashboard");
@@ -43,7 +44,10 @@ export default function AgentDeposit({ user, setPage }) {
       }
     };
     loadBalance();
-  }, [user, setPage]);
+  }, [user, authLoading, setPage]);
+
+  // Don't render until auth is confirmed — prevents redirect flash
+  if (authLoading) return null;
 
   const handleDeposit = async () => {
     if (!isValid || submitting) return;
