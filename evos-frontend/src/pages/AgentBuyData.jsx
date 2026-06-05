@@ -188,20 +188,29 @@ export default function AgentBuyData({ user, setPage }) {
   }, [user, setPage]);
 
   // Load base prices + wallet
+  // Reuses /agent/pricing/{id} — same endpoint as AgentPricing,
+  // which returns { prices: [{ network, bundle, base_price, markup }] }
   useEffect(() => {
     if (!user?.id) return;
     const load = async () => {
       try {
         setLoading(true);
         setError("");
-        const [pricesRes, dashRes] = await Promise.all([
-          fetch(`${API}/agent/base-prices`),
+        const [pricingRes, dashRes] = await Promise.all([
+          fetch(`${API}/agent/pricing/${user.id}`),
           fetch(`${API}/agent/dashboard/${user.id}`),
         ]);
-        const pricesData = await pricesRes.json();
+        const pricingData = await pricingRes.json();
         const dashData = await dashRes.json();
 
-        setBundles(pricesData.prices || pricesData || []);
+        // Normalise to { network, bundle, cost_price } for use in this page
+        const normalized = (pricingData.prices || []).map((item) => ({
+          network: item.network,
+          bundle: item.bundle,
+          cost_price: Number(item.base_price || 0),
+        }));
+
+        setBundles(normalized);
         setWalletBalance(Number(dashData.wallet_balance || 0));
       } catch (err) {
         console.error(err);
