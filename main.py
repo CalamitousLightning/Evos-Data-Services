@@ -382,7 +382,20 @@ def get_prices():
 # =========================
 # BACKGROUND: RETRY STUCK ORDERS + STATUS UPDATE
 # =========================
+
+_retry_running = False  # duplicate-instance guard
+
+BG_TIMEOUT = 25  # longer timeout for Netlify proxy chain
+
+
 async def retry_stuck_orders():
+    global _retry_running
+
+    if _retry_running:
+        print("RETRY JOB: already running, skipping duplicate")
+        return
+
+    _retry_running = True
     await asyncio.sleep(60)  # wait 60s after startup before first run
 
     while True:
@@ -417,6 +430,9 @@ async def retry_stuck_orders():
 
                     print(f"RETRY JOB: retrying order {order['id']} via {provider}")
 
+                    # =====================================
+                    # DATAMART
+                    # =====================================
                     if provider == "DATAMART":
                         dm_response = requests.post(
                             f"{DATAMART_BASE}/purchase",
@@ -450,7 +466,12 @@ async def retry_stuck_orders():
                         else:
                             print(f"RETRY JOB: DATAMART rejected order {order['id']}: {dm}")
 
+                    # =====================================
+                    # BUNDLES GHANA
+                    # =====================================
                     elif provider == "BUNDLES_GHANA":
+                        import re as _re
+
                         BG_NETWORK_MAP = {
                             "MTN": "MTN",
                             "TELECEL": "Telecel",
@@ -458,6 +479,7 @@ async def retry_stuck_orders():
                             "AT": "AirtelTigo",
                         }
                         network_name = BG_NETWORK_MAP.get(order["network"].upper(), order["network"])
+
                         bg_bundles = call_bundles_ghana(f"/bundles?network={network_name}")
 
                         if not bg_bundles.get("success"):
@@ -476,11 +498,20 @@ async def retry_stuck_orders():
                             print(f"RETRY JOB: no BG bundle match for order {order['id']}")
                             continue
 
-                        bg_order = call_bundles_ghana("/order", method="POST", body={
-                            "bundle_id": matched["id"],
-                            "phone": order["phone_number"],
-                            "webhook_url": "https://api.evosdata.xyz/webhook/bundlesghana"
-                        })
+                        # Use longer timeout for BG proxy to avoid false timeouts
+                        try:
+                            bg_order = call_bundles_ghana(
+                                "/order",
+                                method="POST",
+                                body={
+                                    "bundle_id": matched["id"],
+                                    "phone": order["phone_number"],
+                                    "webhook_url": "https://api.evosdata.xyz/webhook/bundlesghana"
+                                }
+                            )
+                        except Exception as bg_err:
+                            print(f"RETRY JOB: BG call error for order {order['id']}: {str(bg_err)}")
+                            continue
 
                         if bg_order.get("success"):
                             supabase.table("orders") \
@@ -496,10 +527,33 @@ async def retry_stuck_orders():
                                 process_agent_profit(order["id"], order["paystack_ref"])
 
                             print(f"RETRY JOB: order {order['id']} sent to BUNDLES_GHANA ✅")
+
                         else:
+                            msg = bg_order.get("message", "")
+                            order_type = bg_order.get("type", "")
+
+                            # ── 409: order already exists on BG side ──
+                            # Extract the BG ref from the message and save it
+                            # so the retry loop stops hitting this order
+                            if order_type == "ORDER_FAILED" and "Ref:" in msg:
+                                match = _re.search(r'Ref:\s*([\w\-]+)', msg)
+                                if match:
+                                    existing_ref = match.group(1)
+                                    supabase.table("orders") \
+                                        .update({
+                                            "status": "processing",
+                                            "datamart_ref": existing_ref,
+                                        }) \
+                                        .eq("id", order["id"]) \
+                                        .execute()
+                                    print(f"RETRY JOB: order {order['id']} recovered from 409 — ref={existing_ref} ✅")
+                                    continue
+
                             print(f"RETRY JOB: BG rejected order {order['id']}: {bg_order}")
 
+                    # =====================================
                     # Mark failed after 3hrs still stuck with no ref
+                    # =====================================
                     order_age = datetime.utcnow() - datetime.fromisoformat(
                         order["created_at"].replace("Z", "")
                     )
@@ -514,66 +568,55 @@ async def retry_stuck_orders():
                     print(f"RETRY JOB: error on order {order.get('id')}: {str(e)}")
 
             # =====================================
-            # PART 2: STATUS SYNC
-            # Orders already dispatched (have datamart_ref)
-            # but still showing "processing" — poll provider for real status
+            # PART 2: SYNC STATUS FOR PROCESSING ORDERS
+            # Orders that have a ref but are still "processing"
             # =====================================
             print("STATUS SYNC: scanning for unresolved processing orders...")
-
-            sync_cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
-            sync_floor  = (datetime.utcnow() - timedelta(minutes=10)).isoformat()
 
             processing = supabase.table("orders") \
                 .select("*") \
                 .eq("status", "processing") \
                 .not_.is_("datamart_ref", None) \
-                .gte("created_at", sync_cutoff) \
-                .lte("created_at", sync_floor) \
+                .gte("created_at", cutoff) \
                 .execute()
 
-            processing_orders = processing.data or []
-            print(f"STATUS SYNC: {len(processing_orders)} orders to check")
+            proc_orders = processing.data or []
+            print(f"STATUS SYNC: {len(proc_orders)} orders to check")
 
-            for order in processing_orders:
+            for order in proc_orders:
                 try:
                     provider = get_provider(order["network"])
-                    tracker  = order.get("datamart_ref")
-
-                    if not tracker or not provider:
-                        continue
-
-                    final_status = None
+                    ref = order.get("datamart_ref")
+                    order_id = order.get("datamart_order_id")
 
                     if provider == "DATAMART":
+                        tracker = order_id or ref
+                        if not tracker:
+                            continue
                         dm = requests.get(
                             f"{DATAMART_BASE}/order-status/{tracker}",
                             headers={"X-API-Key": DATAMART_API_KEY},
                             timeout=REQUEST_TIMEOUT
                         )
-                        dm_data = dm.json().get("data", {})
-                        status = str(dm_data.get("orderStatus", "")).lower()
-
-                        final_status = (
-                            "successful" if status in ["completed", "success", "delivered"]
-                            else "failed" if status in ["failed", "cancelled", "refunded"]
-                            else None  # still in progress — skip
-                        )
+                        payload = dm.json()
+                        status = str(payload.get("data", {}).get("orderStatus", "")).lower()
 
                     elif provider == "BUNDLES_GHANA":
-                        bg_ref = order.get("datamart_ref")
-                        if not bg_ref:
+                        if not ref:
                             continue
+                        bg = call_bundles_ghana(f"/order/status/{ref}")
+                        status = str(bg.get("order", {}).get("status", "processing")).lower()
 
-                        bg = call_bundles_ghana(f"/order/status/{bg_ref}")
-                        status = str(bg.get("order", {}).get("status", "")).lower()
+                    else:
+                        continue
 
-                        final_status = (
-                            "successful" if status in ["delivered"]
-                            else "failed" if status in ["failed", "cancelled"]
-                            else None
-                        )
-
-                    # DATABOSS has no status endpoint — skip
+                    final_status = (
+                        "successful"
+                        if status in ["completed", "success", "delivered", "successful"]
+                        else "failed"
+                        if status in ["failed", "cancelled", "refunded"]
+                        else None  # still processing — don't update
+                    )
 
                     if final_status:
                         supabase.table("orders") \
@@ -588,8 +631,7 @@ async def retry_stuck_orders():
         except Exception as e:
             print("RETRY JOB ERROR:", str(e))
 
-        await asyncio.sleep(300)  # every 5 minutes
-
+        await asyncio.sleep(300)  # run every 5 minutes
 
 @app.on_event("startup")
 async def startup_event():
