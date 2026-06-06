@@ -2299,7 +2299,7 @@ async def agent_buy_data(payload: dict):
             "type":      "debit",
             "amount":    cost_price,
             "reference": reference,
-            "note":      f"Data purchase: {network} {bundle} → {phone_number}",
+            "order_id":  order_id,           
         }).execute()
 
         # ── Dispatch to provider ──
