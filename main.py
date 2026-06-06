@@ -526,7 +526,7 @@ async def retry_stuck_orders():
             processing = supabase.table("orders") \
                 .select("*") \
                 .eq("status", "processing") \
-                .not_.is_("datamart_order_id", None) \
+                .not_.is_("datamart_ref", None) \
                 .gte("created_at", sync_cutoff) \
                 .lte("created_at", sync_floor) \
                 .execute()
@@ -537,7 +537,7 @@ async def retry_stuck_orders():
             for order in processing_orders:
                 try:
                     provider = get_provider(order["network"])
-                    tracker  = order.get("datamart_order_id")
+                    tracker  = order.get("datamart_ref")
 
                     if not tracker or not provider:
                         continue
@@ -1178,19 +1178,21 @@ async def datamart_webhook(request: Request):
             else "processing"
         )
 
-        # ── FIX: execute in one chain, no variable splitting ──
-        if order_id:
-            supabase.table("orders") \
-                .update({"status": final_status}) \
-                .eq("datamart_order_id", str(order_id)) \
-                .execute()
-        else:
+        # ── Always use datamart_ref as primary — it's always stored ──
+        if order_ref:
             supabase.table("orders") \
                 .update({"status": final_status}) \
                 .eq("datamart_ref", order_ref) \
                 .execute()
+            print(f"DATAMART WEBHOOK: updated by datamart_ref={order_ref} → {final_status}")
 
-        print(f"DATAMART WEBHOOK: updated order to {final_status}")
+        elif order_id:
+            supabase.table("orders") \
+                .update({"status": final_status}) \
+                .eq("datamart_order_id", str(order_id)) \
+                .execute()
+            print(f"DATAMART WEBHOOK: updated by order_id={order_id} → {final_status}")
+
         return {"received": True}
 
     except HTTPException as e:
@@ -1200,7 +1202,6 @@ async def datamart_webhook(request: Request):
     except Exception as e:
         print("DATAMART WEBHOOK ERROR:", str(e))
         return {"received": False}
-
 # =========================
 # BUNDLES GHANA WEBHOOK
 # =========================
