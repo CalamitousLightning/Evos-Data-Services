@@ -379,21 +379,20 @@ def get_prices():
         raise HTTPException(status_code=500, detail="Failed to load prices")
 
 
-
-
-
 # =========================
-# BACKGROUND: RETRY STUCK ORDERS
+# BACKGROUND: RETRY STUCK ORDERS + STATUS UPDATE
 # =========================
 async def retry_stuck_orders():
     await asyncio.sleep(60)  # wait 60s after startup before first run
 
     while True:
         try:
+            # =====================================
+            # PART 1: RETRY ORDERS WITH NO PROVIDER REF
+            # Orders stuck with no datamart_ref yet
+            # =====================================
             print("RETRY JOB: scanning for stuck orders...")
 
-            # Orders older than 10 mins but within 3 hours
-            # with no provider ref — catches both "paid" and "processing" stuck orders
             cutoff = (datetime.utcnow() - timedelta(hours=3)).isoformat()
             floor  = (datetime.utcnow() - timedelta(minutes=10)).isoformat()
 
@@ -418,9 +417,6 @@ async def retry_stuck_orders():
 
                     print(f"RETRY JOB: retrying order {order['id']} via {provider}")
 
-                    # =====================================
-                    # DATAMART
-                    # =====================================
                     if provider == "DATAMART":
                         dm_response = requests.post(
                             f"{DATAMART_BASE}/purchase",
@@ -433,7 +429,6 @@ async def retry_stuck_orders():
                             },
                             timeout=REQUEST_TIMEOUT
                         )
-
                         dm = dm_response.json()
                         dm_data = dm.get("data", {})
 
@@ -447,14 +442,14 @@ async def retry_stuck_orders():
                                 .eq("id", order["id"]) \
                                 .execute()
 
-                            process_agent_profit(order["id"], order["paystack_ref"])
+                            # Only process profit for Paystack orders, not agent self-orders
+                            if order.get("paystack_ref") and not str(order["paystack_ref"]).startswith("EVOS-AGT-"):
+                                process_agent_profit(order["id"], order["paystack_ref"])
+
                             print(f"RETRY JOB: order {order['id']} sent to DATAMART ✅")
                         else:
                             print(f"RETRY JOB: DATAMART rejected order {order['id']}: {dm}")
 
-                    # =====================================
-                    # BUNDLES GHANA
-                    # =====================================
                     elif provider == "BUNDLES_GHANA":
                         BG_NETWORK_MAP = {
                             "MTN": "MTN",
@@ -484,7 +479,7 @@ async def retry_stuck_orders():
                         bg_order = call_bundles_ghana("/order", method="POST", body={
                             "bundle_id": matched["id"],
                             "phone": order["phone_number"],
-                            "webhook_url": "https://evos-business-hub.onrender.com/webhook/bundlesghana"
+                            "webhook_url": "https://api.evosdata.xyz/webhook/bundlesghana"
                         })
 
                         if bg_order.get("success"):
@@ -497,14 +492,14 @@ async def retry_stuck_orders():
                                 .eq("id", order["id"]) \
                                 .execute()
 
-                            process_agent_profit(order["id"], order["paystack_ref"])
+                            if order.get("paystack_ref") and not str(order["paystack_ref"]).startswith("EVOS-AGT-"):
+                                process_agent_profit(order["id"], order["paystack_ref"])
+
                             print(f"RETRY JOB: order {order['id']} sent to BUNDLES_GHANA ✅")
                         else:
                             print(f"RETRY JOB: BG rejected order {order['id']}: {bg_order}")
 
-                    # =====================================
-                    # Mark failed after 3hrs still stuck
-                    # =====================================
+                    # Mark failed after 3hrs still stuck with no ref
                     order_age = datetime.utcnow() - datetime.fromisoformat(
                         order["created_at"].replace("Z", "")
                     )
@@ -518,6 +513,78 @@ async def retry_stuck_orders():
                 except Exception as e:
                     print(f"RETRY JOB: error on order {order.get('id')}: {str(e)}")
 
+            # =====================================
+            # PART 2: STATUS SYNC
+            # Orders already dispatched (have datamart_ref)
+            # but still showing "processing" — poll provider for real status
+            # =====================================
+            print("STATUS SYNC: scanning for unresolved processing orders...")
+
+            sync_cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+            sync_floor  = (datetime.utcnow() - timedelta(minutes=10)).isoformat()
+
+            processing = supabase.table("orders") \
+                .select("*") \
+                .eq("status", "processing") \
+                .not_.is_("datamart_order_id", None) \
+                .gte("created_at", sync_cutoff) \
+                .lte("created_at", sync_floor) \
+                .execute()
+
+            processing_orders = processing.data or []
+            print(f"STATUS SYNC: {len(processing_orders)} orders to check")
+
+            for order in processing_orders:
+                try:
+                    provider = get_provider(order["network"])
+                    tracker  = order.get("datamart_order_id")
+
+                    if not tracker or not provider:
+                        continue
+
+                    final_status = None
+
+                    if provider == "DATAMART":
+                        dm = requests.get(
+                            f"{DATAMART_BASE}/order-status/{tracker}",
+                            headers={"X-API-Key": DATAMART_API_KEY},
+                            timeout=REQUEST_TIMEOUT
+                        )
+                        dm_data = dm.json().get("data", {})
+                        status = str(dm_data.get("orderStatus", "")).lower()
+
+                        final_status = (
+                            "successful" if status in ["completed", "success", "delivered"]
+                            else "failed" if status in ["failed", "cancelled", "refunded"]
+                            else None  # still in progress — skip
+                        )
+
+                    elif provider == "BUNDLES_GHANA":
+                        bg_ref = order.get("datamart_ref")
+                        if not bg_ref:
+                            continue
+
+                        bg = call_bundles_ghana(f"/order/status/{bg_ref}")
+                        status = str(bg.get("order", {}).get("status", "")).lower()
+
+                        final_status = (
+                            "successful" if status in ["delivered"]
+                            else "failed" if status in ["failed", "cancelled"]
+                            else None
+                        )
+
+                    # DATABOSS has no status endpoint — skip
+
+                    if final_status:
+                        supabase.table("orders") \
+                            .update({"status": final_status}) \
+                            .eq("id", order["id"]) \
+                            .execute()
+                        print(f"STATUS SYNC: order {order['id']} → {final_status} ✅")
+
+                except Exception as e:
+                    print(f"STATUS SYNC: error on order {order.get('id')}: {str(e)}")
+
         except Exception as e:
             print("RETRY JOB ERROR:", str(e))
 
@@ -527,7 +594,6 @@ async def retry_stuck_orders():
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(retry_stuck_orders())
-
 
 
 # =========================
@@ -1093,27 +1159,20 @@ async def paystack_webhook(request: Request):
 # =========================
 @app.post("/webhook/datamart")
 async def datamart_webhook(request: Request):
-
     try:
         body = await request.body()
         signature = request.headers.get("X-DataMart-Signature")
         event = request.headers.get("X-DataMart-Event", "")
 
-        # IMPORTANT:
-        # Use your DATAMART_WEBHOOK_SECRET here
-        if not signature or not verify_datamart_signature(
-            body,
-            signature,
-            DATAMART_WEBHOOK_SECRET
-        ):
+        if not signature or not verify_datamart_signature(body, signature, DATAMART_WEBHOOK_SECRET):
             raise HTTPException(401, "Invalid signature")
 
         payload = await request.json()
 
         data = payload.get("data", {})
         order_ref = data.get("orderReference") or data.get("reference")
-        order_id = data.get("orderId")
-        status = str(data.get("status", "")).lower()
+        order_id  = data.get("orderId")
+        status    = str(data.get("status", "")).lower()
 
         print("DATAMART EVENT:", event)
         print("DATAMART REF:", order_ref)
@@ -1124,26 +1183,24 @@ async def datamart_webhook(request: Request):
             return {"received": True}
 
         final_status = (
-            "successful"
-            if status in ["completed", "success", "delivered"]
-            else "processing"
-            if status in ["created", "processing", "pending", "waiting"]
-            else "failed"
-            if status in ["failed", "cancelled", "refunded"]
+            "successful" if status in ["completed", "success", "delivered"]
+            else "failed" if status in ["failed", "cancelled", "refunded"]
             else "processing"
         )
 
-        query = supabase.table("orders").update({
-            "status": final_status
-        })
-
+        # ── FIX: execute in one chain, no variable splitting ──
         if order_id:
-            query = query.eq("datamart_order_id", order_id)
+            supabase.table("orders") \
+                .update({"status": final_status}) \
+                .eq("datamart_order_id", str(order_id)) \
+                .execute()
         else:
-            query = query.eq("datamart_ref", order_ref)
+            supabase.table("orders") \
+                .update({"status": final_status}) \
+                .eq("datamart_ref", order_ref) \
+                .execute()
 
-        query.execute()
-
+        print(f"DATAMART WEBHOOK: updated order to {final_status}")
         return {"received": True}
 
     except HTTPException as e:
