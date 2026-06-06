@@ -647,9 +647,6 @@ def track_orders(phone: str = Query(...)):
 # =========================
 # CREATE ORDER (PRODUCTION SAFE)
 # =========================
-# =========================
-# CREATE ORDER (GUEST + USER SAFE)
-# =========================
 @app.post("/orders/create")
 def create_order(data: CreateOrderRequest):
 
@@ -664,7 +661,7 @@ def create_order(data: CreateOrderRequest):
 
         if buyer_key:
             query = supabase.table("orders") \
-                .select("id, created_at")
+                .select("id, created_at, paystack_ref, network, bundle")
 
             if data.user_id:
                 query = query.eq("user_id", data.user_id)
@@ -687,10 +684,18 @@ def create_order(data: CreateOrderRequest):
                 )
 
                 if datetime.utcnow() - created_at < timedelta(minutes=10):
-                    raise HTTPException(
-                        400,
-                        "Pending order already exists"
-                    )
+                    # ── Return existing payment URL instead of erroring ──
+                    existing_ref    = order["paystack_ref"]
+                    existing_network = order["network"]
+                    existing_bundle  = order["bundle"]
+
+                    return {
+                        "status":      True,
+                        "pending":     True,
+                        "message":     f"Pending {existing_bundle} {existing_network} order found. Redirecting to payment...",
+                        "reference":   existing_ref,
+                        "payment_url": f"https://checkout.paystack.com/{existing_ref}",
+                    }
 
         # =========================
         # GET PRICE
@@ -712,7 +717,6 @@ def create_order(data: CreateOrderRequest):
         # =========================
         customer_email = None
 
-        # Logged in user
         if data.user_id:
             user_res = supabase.table("users") \
                 .select("email") \
@@ -724,8 +728,6 @@ def create_order(data: CreateOrderRequest):
                 raise HTTPException(404, "User not found")
 
             customer_email = user_res.data[0]["email"]
-
-        # Guest user
         else:
             customer_email = data.email
 
@@ -735,8 +737,6 @@ def create_order(data: CreateOrderRequest):
         # =========================
         # PAYSTACK INIT
         # =========================
-
-        # 🔥 ONLY CHANGE MADE HERE (CALLBACK FIX)
         callback_url = "https://evosdata.xyz/success"
 
         if hasattr(data, "agent_id") and data.agent_id:
@@ -758,16 +758,10 @@ def create_order(data: CreateOrderRequest):
             ).json()
 
         except requests.exceptions.RequestException:
-            raise HTTPException(
-                500,
-                "Payment service error"
-            )
+            raise HTTPException(500, "Payment service error")
 
         if not paystack.get("status"):
-            raise HTTPException(
-                400,
-                "Payment init failed"
-            )
+            raise HTTPException(400, "Payment init failed")
 
         ref = paystack["data"]["reference"]
 
@@ -780,15 +774,15 @@ def create_order(data: CreateOrderRequest):
         # SAVE ORDER
         # =========================
         payload = {
-            "user_id": data.user_id,
+            "user_id":     data.user_id,
             "guest_email": None if data.user_id else customer_email,
-            "network": data.network,
-            "bundle": data.bundle,
-            "price": price,
+            "network":     data.network,
+            "bundle":      data.bundle,
+            "price":       price,
             "phone_number": data.phone,
             "paystack_ref": ref,
             "evosdata_ref": evos_ref,
-            "status": "pending_payment"
+            "status":      "pending_payment"
         }
 
         supabase.table("orders").insert(payload).execute()
@@ -797,9 +791,9 @@ def create_order(data: CreateOrderRequest):
         # RESPONSE
         # =========================
         return {
-            "status": True,
+            "status":      True,
             "payment_url": paystack["data"]["authorization_url"],
-            "reference": ref
+            "reference":   ref
         }
 
     except HTTPException:
@@ -807,11 +801,7 @@ def create_order(data: CreateOrderRequest):
 
     except Exception as e:
         print("CREATE ORDER ERROR:", str(e))
-        raise HTTPException(
-            status_code=500,
-            detail="Server error"
-        )
-
+        raise HTTPException(status_code=500, detail="Server error")
 
 from decimal import Decimal
 
