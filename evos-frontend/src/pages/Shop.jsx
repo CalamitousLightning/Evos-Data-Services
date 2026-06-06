@@ -11,6 +11,7 @@ export default function Shop() {
   const [prices, setPrices] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [pendingMsg, setPendingMsg] = useState(""); // ← new
   const [agree, setAgree] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
 
@@ -18,7 +19,6 @@ export default function Shop() {
   const user_id = user?.id || null;
 
   useEffect(() => {
-    // Auto-select network if coming from Home page quick-buy
     const saved = localStorage.getItem("selectedNetwork");
     if (saved) {
       setNetwork(saved);
@@ -50,6 +50,7 @@ export default function Shop() {
   const handleBuy = async () => {
     try {
       setError("");
+      setPendingMsg("");
       if (!network || !bundle) { setError("Select network and bundle"); return; }
       if (!phone) { setError("Enter phone number"); return; }
       if (!validPhone(phone)) { setError("Phone must be 10 digits and start with 0"); return; }
@@ -61,10 +62,12 @@ export default function Shop() {
         email: email || "guest@evoshub.com",
       });
 
+      const data = res.data;
+
       const paymentUrl =
-        res.data?.payment_url ||
-        res.data?.authorization_url ||
-        res.data?.data?.authorization_url;
+        data?.payment_url ||
+        data?.authorization_url ||
+        data?.data?.authorization_url;
 
       if (!paymentUrl) {
         setLoading(false);
@@ -73,7 +76,18 @@ export default function Shop() {
       }
 
       localStorage.setItem("email", email);
+
+      // ── Pending order found — show message then redirect ──
+      if (data?.pending) {
+        setPendingMsg(data.message);
+        setTimeout(() => {
+          window.location.href = paymentUrl;
+        }, 2500);
+        return;
+      }
+
       window.location.href = paymentUrl;
+
     } catch (err) {
       setLoading(false);
       setError(
@@ -86,31 +100,19 @@ export default function Shop() {
 
   const networks = [
     {
-      name: "MTN",
-      label: "MTN",
-      emoji: "🟡",
-      color: "#FFC107",
+      name: "MTN", label: "MTN", emoji: "🟡", color: "#FFC107",
       bg: "linear-gradient(135deg, rgba(255,193,7,0.18), rgba(255,193,7,0.06))",
-      border: "rgba(255,193,7,0.4)",
-      desc: "Ghana's largest network",
+      border: "rgba(255,193,7,0.4)", desc: "Ghana's largest network",
     },
     {
-      name: "TELECEL",
-      label: "Telecel",
-      emoji: "🔴",
-      color: "#ef4444",
+      name: "TELECEL", label: "Telecel", emoji: "🔴", color: "#ef4444",
       bg: "linear-gradient(135deg, rgba(239,68,68,0.18), rgba(239,68,68,0.06))",
-      border: "rgba(239,68,68,0.4)",
-      desc: "Formerly Vodafone Ghana",
+      border: "rgba(239,68,68,0.4)", desc: "Formerly Vodafone Ghana",
     },
     {
-      name: "AIRTELTIGO",
-      label: "AirtelTigo",
-      emoji: "🔵",
-      color: "#6366f1",
+      name: "AIRTELTIGO", label: "AirtelTigo", emoji: "🔵", color: "#6366f1",
       bg: "linear-gradient(135deg, rgba(99,102,241,0.18), rgba(99,102,241,0.06))",
-      border: "rgba(99,102,241,0.4)",
-      desc: "Nationwide coverage",
+      border: "rgba(99,102,241,0.4)", desc: "Nationwide coverage",
     },
   ];
 
@@ -150,6 +152,13 @@ export default function Shop() {
         <div style={styles.progressLine} />
       </div>
 
+      {/* PENDING ORDER NOTICE */}
+      {pendingMsg && (
+        <div style={styles.pendingNotice}>
+          ⏳ {pendingMsg}
+        </div>
+      )}
+
       {/* ERROR */}
       {error && (
         <div style={styles.error}>
@@ -163,7 +172,6 @@ export default function Shop() {
         {step === 1 && (
           <div style={styles.box}>
             <p style={styles.stepLabel}>Step 1 of 3 · Select Network</p>
-
             <div style={styles.networkGrid}>
               {networks.map((n) => {
                 const disabled = isOutOfStock(n.name);
@@ -183,22 +191,15 @@ export default function Shop() {
                       setStep(2);
                     }}
                   >
-                    <div style={{ ...styles.networkEmoji, color: n.color }}>
-                      {n.emoji}
-                    </div>
-                    <div style={{ ...styles.networkName, color: n.color }}>
-                      {n.label}
-                    </div>
+                    <div style={{ ...styles.networkEmoji, color: n.color }}>{n.emoji}</div>
+                    <div style={{ ...styles.networkName, color: n.color }}>{n.label}</div>
                     <div style={styles.networkDesc}>{n.desc}</div>
-                    {disabled && (
-                      <div style={styles.stockBadge}>Out of Stock</div>
-                    )}
+                    {disabled && <div style={styles.stockBadge}>Out of Stock</div>}
                     <div style={{ ...styles.networkArrow, color: n.color }}>→</div>
                   </div>
                 );
               })}
             </div>
-
             <div style={styles.infoRow}>
               <span style={styles.infoText}>🔒 Secured by Paystack</span>
               <span style={styles.infoText}>⚡ Instant delivery</span>
@@ -209,12 +210,8 @@ export default function Shop() {
         {/* ============ STEP 2 — BUNDLE ============ */}
         {step === 2 && (
           <div style={styles.box}>
-            <button style={styles.backBtn} onClick={() => setStep(1)}>
-              ← Back
-            </button>
-
+            <button style={styles.backBtn} onClick={() => setStep(1)}>← Back</button>
             <p style={styles.stepLabel}>Step 2 of 3 · Select Bundle</p>
-
             <div style={{
               ...styles.networkPill,
               background: selectedNetwork?.bg,
@@ -223,11 +220,9 @@ export default function Shop() {
             }}>
               {selectedNetwork?.emoji} {selectedNetwork?.label}
             </div>
-
             {bundles.length === 0 && (
               <p style={styles.emptyText}>No bundles available for this network.</p>
             )}
-
             <div style={styles.bundleGrid}>
               {bundles.map((b, i) => (
                 <div
@@ -240,9 +235,7 @@ export default function Shop() {
                   }}
                 >
                   <div style={styles.bundleSize}>{b.bundle}</div>
-                  <div style={styles.bundlePrice}>
-                    GH₵ {Number(b.price).toFixed(2)}
-                  </div>
+                  <div style={styles.bundlePrice}>GH₵ {Number(b.price).toFixed(2)}</div>
                   <div style={styles.bundleTap}>Tap to select →</div>
                 </div>
               ))}
@@ -253,21 +246,13 @@ export default function Shop() {
         {/* ============ STEP 3 — CHECKOUT ============ */}
         {step === 3 && (
           <div style={styles.box}>
-            <button style={styles.backBtn} onClick={() => setStep(2)}>
-              ← Back
-            </button>
-
+            <button style={styles.backBtn} onClick={() => setStep(2)}>← Back</button>
             <p style={styles.stepLabel}>Step 3 of 3 · Complete Order</p>
 
-            {/* ORDER SUMMARY */}
             <div style={styles.summaryCard}>
               <div style={styles.summaryRow}>
                 <span style={styles.summaryLabel}>Network</span>
-                <span style={{
-                  ...styles.summaryVal,
-                  color: selectedNetwork?.color,
-                  fontWeight: 800,
-                }}>
+                <span style={{ ...styles.summaryVal, color: selectedNetwork?.color, fontWeight: 800 }}>
                   {selectedNetwork?.emoji} {selectedNetwork?.label}
                 </span>
               </div>
@@ -283,7 +268,6 @@ export default function Shop() {
               </div>
             </div>
 
-            {/* SINGLE PHONE FIELD */}
             <label style={styles.inputLabel}>📱 Recipient Phone Number</label>
             <input
               style={{
@@ -307,7 +291,6 @@ export default function Shop() {
               <p style={styles.phoneHintGood}>✅ Looks good!</p>
             )}
 
-            {/* EMAIL FIELD */}
             <label style={styles.inputLabel}>📧 Email (for receipt)</label>
             <input
               style={styles.input}
@@ -317,7 +300,6 @@ export default function Shop() {
               onChange={(e) => setEmail(e.target.value)}
             />
 
-            {/* POLICY CHECKBOX */}
             <label style={styles.checkWrap}>
               <input
                 type="checkbox"
@@ -332,14 +314,13 @@ export default function Shop() {
               </span>
             </label>
 
-            {/* PAY BUTTON */}
             <button
               onClick={handleBuy}
               disabled={loading}
               style={{ ...styles.buyBtn, opacity: loading ? 0.6 : 1 }}
             >
               {loading
-                ? "⏳ Processing..."
+                ? pendingMsg ? "⏳ Redirecting to payment..." : "⏳ Processing..."
                 : `💳 Pay GH₵ ${Number(bundlePrice).toFixed(2)} via Paystack`}
             </button>
 
@@ -384,10 +365,8 @@ export default function Shop() {
 
 const styles = {
   container: {
-    padding: "24px 18px 60px",
-    color: "#e5e7eb",
-    fontFamily: "ui-sans-serif, system-ui, Arial",
-    minHeight: "100vh",
+    padding: "24px 18px 60px", color: "#e5e7eb",
+    fontFamily: "ui-sans-serif, system-ui, Arial", minHeight: "100vh",
   },
   header: { textAlign: "center", marginBottom: 28 },
   headerBadge: {
@@ -418,6 +397,12 @@ const styles = {
     height: 2, background: "rgba(255,255,255,0.08)", zIndex: 0,
   },
 
+  pendingNotice: {
+    background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.3)",
+    color: "#38bdf8", padding: "12px 16px", borderRadius: 12,
+    marginBottom: 16, fontSize: 14, maxWidth: 480,
+    margin: "0 auto 16px", textAlign: "center", fontWeight: 700,
+  },
   error: {
     background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)",
     color: "#f87171", padding: "12px 16px", borderRadius: 12,
@@ -434,11 +419,9 @@ const styles = {
   },
   stepLabel: {
     fontSize: 12, color: "#38bdf8", fontWeight: 700,
-    textTransform: "uppercase", letterSpacing: "0.8px",
-    margin: "0 0 18px",
+    textTransform: "uppercase", letterSpacing: "0.8px", margin: "0 0 18px",
   },
 
-  // NETWORK STEP
   networkGrid: { display: "flex", flexDirection: "column", gap: 12, marginBottom: 20 },
   networkCard: {
     padding: "16px 18px", borderRadius: 16, cursor: "pointer",
@@ -457,7 +440,6 @@ const styles = {
   infoRow: { display: "flex", justifyContent: "center", gap: 20 },
   infoText: { fontSize: 12, color: "#475569", fontWeight: 600 },
 
-  // BUNDLE STEP
   backBtn: {
     background: "none", border: "none", color: "#38bdf8",
     fontSize: 14, fontWeight: 700, cursor: "pointer",
@@ -478,7 +460,6 @@ const styles = {
   bundlePrice: { fontWeight: 800, fontSize: 16, color: "#38bdf8", marginBottom: 8 },
   bundleTap: { fontSize: 11, color: "#38bdf8", opacity: 0.6 },
 
-  // CHECKOUT STEP
   summaryCard: {
     background: "rgba(2,6,23,0.7)", border: "1px solid rgba(255,255,255,0.06)",
     borderRadius: 16, padding: "6px 16px", marginBottom: 22,
@@ -490,28 +471,20 @@ const styles = {
   summaryLabel: { fontSize: 13, color: "#64748b" },
   summaryVal: { fontSize: 15, fontWeight: 700, color: "#e5e7eb" },
 
-  inputLabel: {
-    display: "block", fontSize: 12, color: "#64748b",
-    fontWeight: 700, marginBottom: 6,
-  },
+  inputLabel: { display: "block", fontSize: 12, color: "#64748b", fontWeight: 700, marginBottom: 6 },
   input: {
     width: "100%", padding: "13px 14px", marginBottom: 6, borderRadius: 12,
     border: "1.5px solid", background: "rgba(2,6,23,0.75)",
     color: "#fff", outline: "none", fontSize: 14, boxSizing: "border-box",
     transition: "border-color 0.2s",
   },
-  phoneHint: {
-    fontSize: 12, color: "#f87171", margin: "0 0 14px", paddingLeft: 2,
-  },
-  phoneHintGood: {
-    fontSize: 12, color: "#22c55e", margin: "0 0 14px", paddingLeft: 2,
-  },
+  phoneHint: { fontSize: 12, color: "#f87171", margin: "0 0 14px", paddingLeft: 2 },
+  phoneHintGood: { fontSize: 12, color: "#22c55e", margin: "0 0 14px", paddingLeft: 2 },
 
   checkWrap: {
     display: "flex", gap: 10, alignItems: "flex-start",
     background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)",
-    padding: "12px 14px", borderRadius: 12, marginBottom: 16, cursor: "pointer",
-    marginTop: 8,
+    padding: "12px 14px", borderRadius: 12, marginBottom: 16, cursor: "pointer", marginTop: 8,
   },
   checkText: { fontSize: 13, color: "#94a3b8", lineHeight: 1.55 },
   buyBtn: {
@@ -522,7 +495,6 @@ const styles = {
   },
   secureNote: { textAlign: "center", fontSize: 12, color: "#475569", margin: 0 },
 
-  // FLOATING SUPPORT
   floatWrap: {
     position: "fixed", bottom: 24, right: 20, zIndex: 9999,
     display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10,
@@ -531,10 +503,7 @@ const styles = {
     background: "#0f172a", border: "1px solid rgba(255,255,255,0.1)",
     borderRadius: 18, padding: 18, width: 270, boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
   },
-  chatHeader: {
-    display: "flex", justifyContent: "space-between",
-    alignItems: "center", marginBottom: 10,
-  },
+  chatHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
   chatClose: { background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 14 },
   chatMsg: { fontSize: 13, color: "#94a3b8", lineHeight: 1.55, margin: "0 0 12px" },
   chatOptions: { display: "flex", flexDirection: "column", gap: 8 },
