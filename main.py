@@ -633,10 +633,149 @@ async def retry_stuck_orders():
 
         await asyncio.sleep(300)  # run every 5 minutes
 
+
+# =========================
+# BACKGROUND: RETRY STUCK WALLET DEPOSITS
+# =========================
+# Paste this function ABOVE your startup_event.
+# Then add this line inside startup_event:
+#   asyncio.create_task(retry_stuck_deposits())
+# =========================
+
+_deposit_retry_running = False  # duplicate-instance guard
+
+async def retry_stuck_deposits():
+    global _deposit_retry_running
+
+    if _deposit_retry_running:
+        print("DEPOSIT RETRY: already running, skipping duplicate")
+        return
+
+    _deposit_retry_running = True
+    await asyncio.sleep(90)  # stagger — starts 30s after retry_stuck_orders
+
+    while True:
+        try:
+            print("DEPOSIT RETRY: scanning for stuck deposits...")
+
+            floor  = (datetime.utcnow() - timedelta(minutes=5)).isoformat()   # at least 5 min old
+            cutoff = (datetime.utcnow() - timedelta(hours=1)).isoformat()     # no older than 1 hr
+
+            stuck = supabase.table("wallet_deposits") \
+                .select("*") \
+                .eq("status", "pending") \
+                .lte("created_at", floor) \
+                .gte("created_at", cutoff) \
+                .execute()
+
+            deposits = stuck.data or []
+            print(f"DEPOSIT RETRY: {len(deposits)} stuck deposits found")
+
+            for deposit in deposits:
+                dep_id        = deposit.get("id")
+                agent_id      = deposit.get("agent_id")
+                credit_amount = float(deposit.get("amount", 0))
+
+                # Use paystack_ref if available, fall back to our EVOS-DEP- reference
+                verify_ref = deposit.get("paystack_ref") or deposit.get("reference")
+
+                if not verify_ref or not agent_id:
+                    print(f"DEPOSIT RETRY: skipping deposit {dep_id} — missing ref or agent_id")
+                    continue
+
+                if credit_amount <= 0:
+                    print(f"DEPOSIT RETRY: skipping deposit {dep_id} — invalid amount {credit_amount}")
+                    continue
+
+                try:
+                    # ── Verify with Paystack ──
+                    async with httpx.AsyncClient() as client:
+                        res = await client.get(
+                            f"https://api.paystack.co/transaction/verify/{verify_ref}",
+                            headers={"Authorization": f"Bearer {PAYSTACK_SECRET}"},
+                            timeout=15,
+                        )
+                        data = res.json()
+
+                    paystack_status = data.get("data", {}).get("status", "")
+
+                    print(f"DEPOSIT RETRY: deposit {dep_id} — Paystack status: {paystack_status}")
+
+                    # ── Payment not confirmed yet ──
+                    if paystack_status != "success":
+                        # Mark failed if older than 30 minutes and still not paid
+                        age = datetime.utcnow() - datetime.fromisoformat(
+                            deposit["created_at"].replace("Z", "")
+                        )
+                        if age > timedelta(minutes=30):
+                            supabase.table("wallet_deposits") \
+                                .update({"status": "failed"}) \
+                                .eq("id", dep_id) \
+                                .execute()
+                            print(f"DEPOSIT RETRY: deposit {dep_id} marked failed — unpaid after 30min")
+                        else:
+                            print(f"DEPOSIT RETRY: deposit {dep_id} still pending on Paystack, will retry")
+                        continue
+
+                    # ── Payment confirmed — credit agent_wallets ──
+                    wallet_res = supabase.table("agent_wallets") \
+                        .select("balance") \
+                        .eq("agent_id", agent_id) \
+                        .limit(1) \
+                        .execute()
+
+                    if wallet_res.data:
+                        current = float(wallet_res.data[0]["balance"] or 0)
+                        new_balance = round(current + credit_amount, 2)
+                        supabase.table("agent_wallets") \
+                            .update({"balance": new_balance}) \
+                            .eq("agent_id", agent_id) \
+                            .execute()
+                    else:
+                        # No wallet row yet — create it
+                        new_balance = round(credit_amount, 2)
+                        supabase.table("agent_wallets") \
+                            .insert({"agent_id": agent_id, "balance": new_balance}) \
+                            .execute()
+
+                    # ── Mark deposit credited ──
+                    supabase.table("wallet_deposits") \
+                        .update({"status": "credited"}) \
+                        .eq("id", dep_id) \
+                        .execute()
+
+                    # ── Log to wallet_transactions (same table verify_deposit uses) ──
+                    supabase.table("wallet_transactions").insert({
+                        "agent_id":  agent_id,
+                        "type":      "credit",
+                        "amount":    credit_amount,
+                        "reference": deposit.get("reference"),
+                        "note":      "Wallet top-up via Paystack (auto-recovered)",
+                    }).execute()
+
+                    print(f"DEPOSIT RETRY: deposit {dep_id} credited GH₵{credit_amount} to agent {agent_id} ✅ — new balance: GH₵{new_balance}")
+
+                except Exception as e:
+                    print(f"DEPOSIT RETRY: error on deposit {dep_id}: {str(e)}")
+
+        except Exception as e:
+            print("DEPOSIT RETRY ERROR:", str(e))
+
+        await asyncio.sleep(300)  # run every 5 minutes
+
+
+# =========================
+# YOUR STARTUP EVENT — update it to look like this:
+# =========================
+# @app.on_event("startup")
+# async def startup_event():
+#     asyncio.create_task(retry_stuck_orders())
+#     asyncio.create_task(retry_stuck_deposits())   ← add this line
+
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(retry_stuck_orders())
-
+    asyncio.create_task(retry_stuck_deposits())  # ← add this
 
 # =========================
 # ORDERS
