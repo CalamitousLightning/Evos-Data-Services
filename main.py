@@ -641,7 +641,6 @@ async def startup_event():
 # =========================
 # ORDERS
 # =========================
-
 @app.get("/orders/me")
 def get_user_orders(user_id: int = Query(...)):
     try:
@@ -703,7 +702,7 @@ def create_order(data: CreateOrderRequest):
 
         if buyer_key:
             query = supabase.table("orders") \
-                .select("id, created_at, paystack_ref, network, bundle")
+                .select("id, created_at, paystack_ref, network, bundle, price, phone_number")
 
             if data.user_id:
                 query = query.eq("user_id", data.user_id)
@@ -720,23 +719,59 @@ def create_order(data: CreateOrderRequest):
 
             if existing.data:
                 order = existing.data[0]
-
                 created_at = datetime.fromisoformat(
                     order["created_at"].replace("Z", "")
                 )
 
                 if datetime.utcnow() - created_at < timedelta(minutes=10):
-                    # ── Return existing payment URL instead of erroring ──
-                    existing_ref    = order["paystack_ref"]
-                    existing_network = order["network"]
-                    existing_bundle  = order["bundle"]
+                    # ── Get customer email for Paystack reinit ──
+                    if data.user_id:
+                        user_res = supabase.table("users") \
+                            .select("email") \
+                            .eq("id", data.user_id) \
+                            .limit(1) \
+                            .execute()
+                        customer_email = user_res.data[0]["email"] if user_res.data else "guest@evoshub.com"
+                    else:
+                        customer_email = data.email or "guest@evoshub.com"
+
+                    # ── Reinitialize Paystack with a fresh URL ──
+                    # Old authorization_url is expired/used — generate a new one
+                    new_ref = f"{order['paystack_ref']}-R{uuid.uuid4().hex[:4].upper()}"
+
+                    try:
+                        paystack = requests.post(
+                            "https://api.paystack.co/transaction/initialize",
+                            headers={
+                                "Authorization": f"Bearer {PAYSTACK_SECRET}",
+                                "Content-Type": "application/json"
+                            },
+                            json={
+                                "email":        customer_email,
+                                "amount":       int(float(order["price"]) * 100),
+                                "reference":    new_ref,
+                                "callback_url": "https://evosdata.xyz/success",
+                            },
+                            timeout=REQUEST_TIMEOUT
+                        ).json()
+                    except requests.exceptions.RequestException:
+                        raise HTTPException(500, "Payment service error")
+
+                    if not paystack.get("status"):
+                        raise HTTPException(400, "Payment reinit failed")
+
+                    # Update the order with the new Paystack reference
+                    supabase.table("orders") \
+                        .update({"paystack_ref": new_ref}) \
+                        .eq("id", order["id"]) \
+                        .execute()
 
                     return {
                         "status":      True,
                         "pending":     True,
-                        "message":     f"Pending {existing_bundle} {existing_network} order found. Redirecting to payment...",
-                        "reference":   existing_ref,
-                        "payment_url": f"https://checkout.paystack.com/{existing_ref}",
+                        "message":     f"Pending {order['bundle']} {order['network']} order found. Redirecting to payment...",
+                        "reference":   new_ref,
+                        "payment_url": paystack["data"]["authorization_url"],
                     }
 
         # =========================
@@ -792,8 +827,8 @@ def create_order(data: CreateOrderRequest):
                     "Content-Type": "application/json"
                 },
                 json={
-                    "email": customer_email,
-                    "amount": int(price * 100),
+                    "email":        customer_email,
+                    "amount":       int(price * 100),
                     "callback_url": callback_url
                 },
                 timeout=REQUEST_TIMEOUT
@@ -816,15 +851,15 @@ def create_order(data: CreateOrderRequest):
         # SAVE ORDER
         # =========================
         payload = {
-            "user_id":     data.user_id,
-            "guest_email": None if data.user_id else customer_email,
-            "network":     data.network,
-            "bundle":      data.bundle,
-            "price":       price,
+            "user_id":      data.user_id,
+            "guest_email":  None if data.user_id else customer_email,
+            "network":      data.network,
+            "bundle":       data.bundle,
+            "price":        price,
             "phone_number": data.phone,
             "paystack_ref": ref,
             "evosdata_ref": evos_ref,
-            "status":      "pending_payment"
+            "status":       "pending_payment"
         }
 
         supabase.table("orders").insert(payload).execute()
