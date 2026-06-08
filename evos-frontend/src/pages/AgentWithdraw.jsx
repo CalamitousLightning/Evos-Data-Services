@@ -157,6 +157,9 @@ export default function AgentWithdraw({ user, setPage }) {
 
       {/* NOTICE */}
       <div style={styles.notice}>
+         <p style={styles.noticeText}>
+          <h1>THE WITHDRAWAL SYSTEM IS UNDER REPAIRS. PLEASE TRY AGAIN LATER</h1>
+        </p>
         <p style={styles.noticeText}>
           Funds are sent automatically via Moolre. Ensure your mobile money number and network are correct — wrong details cannot be reversed.
         </p>
