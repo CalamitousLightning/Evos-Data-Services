@@ -2580,7 +2580,7 @@ async def verify_deposit(payload: dict):
             .execute()
 
         # ── Log wallet transaction ──
-        supabase.table("wallet_transactions").insert({
+        supabase.table("agent_transactions").insert({
             "agent_id":  agent_id,
             "type":      "credit",
             "amount":    credit_amount,
