@@ -62,10 +62,17 @@ BUNDLES_GHANA_API_KEY = os.getenv("BUNDLES_GHANA_API_KEY")
 BUNDLES_GHANA_API_SECRET = os.getenv("BUNDLES_GHANA_API_SECRET")
 BUNDLES_GHANA_BASE = "https://evosdata.xyz/.netlify/functions/bundlesProxy"
 
-MOOLRE_BASE = os.getenv("MOOLRE_BASE", "https://api.moolre.com/open/transact")  # confirm exact base URL
+MOOLRE_BASE = os.getenv("MOOLRE_BASE", "https://api.moolre.com/open/transact")
 MOOLRE_USERNAME = os.getenv("MOOLRE_USERNAME")
 MOOLRE_API_KEY = os.getenv("MOOLRE_API_KEY")
 MOOLRE_ACCOUNT_NUMBER = os.getenv("MOOLRE_ACCOUNT_NUMBER")
+
+# =========================
+# SWIFT DATA LINK ENV
+# =========================
+SWIFT_DATA_LINK_API_KEY = os.getenv("SWIFT_DATA_LINK_API_KEY")
+SWIFT_DATA_LINK_BASE    = os.getenv("SWIFT_DATA_LINK_BASE", "https://swiftdata-link.com/api/v1")
+SWIFT_DATA_LINK_WEBHOOK = os.getenv("SWIFT_DATA_LINK_WEBHOOK_URL", "https://api.evosdata.xyz/webhook/swiftdatalink")
 
 # =========================
 # SAFETY CHECK (PRODUCTION SAFE)
@@ -78,9 +85,11 @@ required_envs = {
     "DATAMART_WEBHOOK_SECRET": DATAMART_WEBHOOK_SECRET,
     "BUNDLES_GHANA_API_KEY": BUNDLES_GHANA_API_KEY,
     "BUNDLES_GHANA_API_SECRET": BUNDLES_GHANA_API_SECRET,
-    "MOOLRE_USERNAME": MOOLRE_USERNAME,       # add these
+    "MOOLRE_USERNAME": MOOLRE_USERNAME,
     "MOOLRE_API_KEY": MOOLRE_API_KEY,
     "MOOLRE_ACCOUNT_NUMBER": MOOLRE_ACCOUNT_NUMBER,
+    "SWIFT_DATA_LINK_API_KEY": SWIFT_DATA_LINK_API_KEY,
+    "SWIFT_DATA_LINK_WEBHOOK": SWIFT_DATA_LINK_WEBHOOK,
 }
 
 missing = [k for k, v in required_envs.items() if not v]
@@ -96,7 +105,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # GLOBAL TIMEOUT CONFIG
 # =========================
 REQUEST_TIMEOUT = 10
-
+BG_TIMEOUT = 25  # longer timeout for Netlify proxy chain
 
 
 # =========================
@@ -125,7 +134,7 @@ class CreateOrderRequest(BaseModel):
     bundle: str
     phone: str
     email: Optional[EmailStr] = None
-    
+
 # =========================
 # HELPERS
 # =========================
@@ -136,11 +145,27 @@ NETWORK_MAP = {
     "AIRTELTIGO": "AT_PREMIUM"
 }
 
-
 MOOLRE_CHANNEL_MAP = {
     "MTN": 1,
     "TELECEL": 6,
     "AIRTELTIGO": 7,
+}
+
+# SDL network slug map — matches SDL's URL param
+SDL_NETWORK_MAP = {
+    "MTN":        "mtn",
+    "TELECEL":    "telecel",
+    "AIRTELTIGO": "at",
+    "AT":         "at",
+}
+
+# SDL offerSlug map — from GET /offers
+# Update these if SDL gives you different slugs
+SDL_OFFER_SLUG = {
+    "MTN":        "mtn_data_bundle",
+    "TELECEL":    "telecel_data_bundle",
+    "AIRTELTIGO": "airteltigo_data_bundle",
+    "AT":         "airteltigo_data_bundle",
 }
 
 # =========================
@@ -158,13 +183,58 @@ def call_bundles_ghana(endpoint: str, method: str = "GET", body: dict = None):
                 "method": method,
                 "body": body
             },
-            timeout=REQUEST_TIMEOUT
+            timeout=BG_TIMEOUT
         )
         print("BG PROXY STATUS:", res.status_code)
         print("BG PROXY BODY:", res.text[:300])
         return res.json()
     except Exception as e:
         print("BUNDLES GHANA PROXY ERROR:", str(e))
+        return {"success": False, "error": str(e)}
+
+# =========================
+# SWIFT DATA LINK HELPER
+# =========================
+def call_swift_data_link(network: str, volume: float, phone: str) -> dict:
+    """
+    Place a single data order via Swift Data Link.
+    phone must be in 233XXXXXXXXX format.
+    volume is in GB (int).
+    """
+    network_slug = SDL_NETWORK_MAP.get(network.upper())
+    offer_slug   = SDL_OFFER_SLUG.get(network.upper())
+
+    if not network_slug or not offer_slug:
+        return {"success": False, "error": f"Unsupported network: {network}"}
+
+    # Normalise phone — SDL expects 233XXXXXXXXX
+    phone = phone.strip()
+    if phone.startswith("0"):
+        phone = "233" + phone[1:]
+    elif not phone.startswith("233"):
+        phone = "233" + phone
+
+    try:
+        res = requests.post(
+            f"{SWIFT_DATA_LINK_BASE}/order/{network_slug}",
+            headers={
+                "x-api-key":    SWIFT_DATA_LINK_API_KEY,
+                "Content-Type": "application/json",
+            },
+            json={
+                "type":       "single",
+                "volume":     int(volume),
+                "phone":      phone,
+                "offerSlug":  offer_slug,
+                "webhookUrl": SWIFT_DATA_LINK_WEBHOOK,
+            },
+            timeout=REQUEST_TIMEOUT
+        )
+        print("SDL ORDER STATUS:", res.status_code)
+        print("SDL ORDER BODY:", res.text[:300])
+        return res.json()
+    except Exception as e:
+        print("SDL ORDER ERROR:", str(e))
         return {"success": False, "error": str(e)}
 
 # =========================
@@ -188,7 +258,7 @@ def call_moolre(endpoint: str, body: dict):
     except Exception as e:
         print("MOOLRE ERROR:", str(e))
         return {"status": 0, "message": str(e)}
-        
+
 # =========================
 # PASSWORD SECURITY
 # =========================
@@ -366,6 +436,7 @@ def update_wallet(agent_id, amount):
     else:
         wallet.balance += amount
         save(wallet)
+
 # =========================
 # PRICES
 # =========================
@@ -384,8 +455,6 @@ def get_prices():
 # =========================
 
 _retry_running = False  # duplicate-instance guard
-
-BG_TIMEOUT = 25  # longer timeout for Netlify proxy chain
 
 
 async def retry_stuck_orders():
@@ -498,7 +567,6 @@ async def retry_stuck_orders():
                             print(f"RETRY JOB: no BG bundle match for order {order['id']}")
                             continue
 
-                        # Use longer timeout for BG proxy to avoid false timeouts
                         try:
                             bg_order = call_bundles_ghana(
                                 "/order",
@@ -552,6 +620,33 @@ async def retry_stuck_orders():
                             print(f"RETRY JOB: BG rejected order {order['id']}: {bg_order}")
 
                     # =====================================
+                    # SWIFT DATA LINK
+                    # =====================================
+                    elif provider == "SWIFT_DATA_LINK":
+                        volume = float(extract_capacity(order["bundle"]) or 0)
+                        sdl = call_swift_data_link(
+                            network=order["network"],
+                            volume=volume,
+                            phone=order["phone_number"],
+                        )
+                        if sdl.get("success"):
+                            supabase.table("orders") \
+                                .update({
+                                    "status":            "processing",
+                                    "datamart_ref":      sdl.get("reference"),
+                                    "datamart_order_id": sdl.get("orderId"),
+                                }) \
+                                .eq("id", order["id"]) \
+                                .execute()
+
+                            if order.get("paystack_ref") and not str(order["paystack_ref"]).startswith("EVOS-AGT-"):
+                                process_agent_profit(order["id"], order["paystack_ref"])
+
+                            print(f"RETRY JOB: order {order['id']} sent to SWIFT_DATA_LINK ✅")
+                        else:
+                            print(f"RETRY JOB: SDL rejected order {order['id']}: {sdl}")
+
+                    # =====================================
                     # Mark failed after 3hrs still stuck with no ref
                     # =====================================
                     order_age = datetime.utcnow() - datetime.fromisoformat(
@@ -586,7 +681,7 @@ async def retry_stuck_orders():
             for order in proc_orders:
                 try:
                     provider = get_provider(order["network"])
-                    ref = order.get("datamart_ref")
+                    ref      = order.get("datamart_ref")
                     order_id = order.get("datamart_order_id")
 
                     if provider == "DATAMART":
@@ -607,12 +702,23 @@ async def retry_stuck_orders():
                         bg = call_bundles_ghana(f"/order/status/{ref}")
                         status = str(bg.get("order", {}).get("status", "processing")).lower()
 
+                    elif provider == "SWIFT_DATA_LINK":
+                        tracker = ref or order_id
+                        if not tracker:
+                            continue
+                        sdl_res = requests.get(
+                            f"{SWIFT_DATA_LINK_BASE}/order/status/{tracker}",
+                            headers={"x-api-key": SWIFT_DATA_LINK_API_KEY},
+                            timeout=REQUEST_TIMEOUT
+                        ).json()
+                        status = str(sdl_res.get("order", {}).get("status", "")).lower()
+
                     else:
                         continue
 
                     final_status = (
                         "successful"
-                        if status in ["completed", "success", "delivered", "successful"]
+                        if status in ["completed", "success", "delivered", "successful", "resolved"]
                         else "failed"
                         if status in ["failed", "cancelled", "refunded"]
                         else None  # still processing — don't update
@@ -636,10 +742,6 @@ async def retry_stuck_orders():
 
 # =========================
 # BACKGROUND: RETRY STUCK WALLET DEPOSITS
-# =========================
-# Paste this function ABOVE your startup_event.
-# Then add this line inside startup_event:
-#   asyncio.create_task(retry_stuck_deposits())
 # =========================
 
 _deposit_retry_running = False  # duplicate-instance guard
@@ -725,7 +827,7 @@ async def retry_stuck_deposits():
                         .execute()
 
                     if wallet_res.data:
-                        current = float(wallet_res.data[0]["balance"] or 0)
+                        current     = float(wallet_res.data[0]["balance"] or 0)
                         new_balance = round(current + credit_amount, 2)
                         supabase.table("agent_wallets") \
                             .update({"balance": new_balance}) \
@@ -753,7 +855,7 @@ async def retry_stuck_deposits():
                         "note":      "Wallet top-up via Paystack (auto-recovered)",
                     }).execute()
 
-                    print(f"DEPOSIT RETRY: deposit {dep_id} credited GH₵{credit_amount} to agent {agent_id} ✅ — new balance: GH₵{new_balance}")
+                    print(f"DEPOSIT RETRY: deposit {dep_id} credited GH\u20b5{credit_amount} to agent {agent_id} \u2705 \u2014 new balance: GH\u20b5{new_balance}")
 
                 except Exception as e:
                     print(f"DEPOSIT RETRY: error on deposit {dep_id}: {str(e)}")
@@ -764,18 +866,11 @@ async def retry_stuck_deposits():
         await asyncio.sleep(300)  # run every 5 minutes
 
 
-# =========================
-# YOUR STARTUP EVENT — update it to look like this:
-# =========================
-# @app.on_event("startup")
-# async def startup_event():
-#     asyncio.create_task(retry_stuck_orders())
-#     asyncio.create_task(retry_stuck_deposits())   ← add this line
-
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(retry_stuck_orders())
-    asyncio.create_task(retry_stuck_deposits())  # ← add this
+    asyncio.create_task(retry_stuck_deposits())
+
 
 # =========================
 # ORDERS
@@ -796,8 +891,8 @@ def get_user_orders(user_id: int = Query(...)):
     except Exception as e:
         print("GET ORDERS ERROR:", str(e))
         raise HTTPException(status_code=500, detail="Failed to fetch orders")
- 
- 
+
+
 # =========================
 # ORDER TRACKING BY PHONE
 # =========================
@@ -807,22 +902,22 @@ def track_orders(phone: str = Query(...)):
         cleaned = phone.strip()
         if not cleaned:
             raise HTTPException(400, "Phone number required")
- 
+
         orders = supabase.table("orders") \
             .select("network, bundle, price, phone_number, status, created_at, evosdata_ref, paystack_ref") \
             .eq("phone_number", cleaned) \
             .order("created_at", desc=True) \
             .limit(10) \
             .execute()
- 
+
         return {"orders": orders.data or []}
- 
+
     except HTTPException:
         raise
     except Exception as e:
         print("TRACK ERROR:", str(e))
         raise HTTPException(500, "Failed to fetch orders")
- 
+
 
 # =========================
 # CREATE ORDER (PRODUCTION SAFE)
@@ -1053,8 +1148,8 @@ def process_agent_profit(order_id, reference):
 
     order = order_res.data[0]
 
-    agent_id = order.get("agent_id")
-    base_price = order.get("base_price")
+    agent_id    = order.get("agent_id")
+    base_price  = order.get("base_price")
     agent_price = order.get("agent_price")
 
     if not agent_id:
@@ -1133,7 +1228,7 @@ def increment_user_orders(user_id: int):
         if not user.data:
             return
 
-        current = user.data[0].get("order_count") or 0
+        current   = user.data[0].get("order_count") or 0
         new_count = current + 1
 
         supabase.table("users") \
@@ -1148,8 +1243,6 @@ def increment_user_orders(user_id: int):
         print("INCREMENT USER ERROR:", str(e))
 
 
-
-
 # =========================
 # PAYSTACK WEBHOOK
 # =========================
@@ -1157,7 +1250,7 @@ def increment_user_orders(user_id: int):
 async def paystack_webhook(request: Request):
 
     try:
-        body = await request.body()
+        body      = await request.body()
         signature = request.headers.get("x-paystack-signature")
 
         if not signature or not verify_signature(body, signature, PAYSTACK_SECRET):
@@ -1228,7 +1321,7 @@ async def paystack_webhook(request: Request):
                     timeout=REQUEST_TIMEOUT
                 )
 
-                dm = dm_response.json()
+                dm      = dm_response.json()
                 dm_data = dm.get("data", {})
 
                 supabase.table("orders") \
@@ -1240,7 +1333,6 @@ async def paystack_webhook(request: Request):
                     .eq("paystack_ref", reference) \
                     .execute()
 
-                # ✅ FIXED: OUTSIDE CHAIN
                 process_agent_profit(order["id"], reference)
 
             # =====================================
@@ -1261,10 +1353,10 @@ async def paystack_webhook(request: Request):
                 db_response = requests.post(
                     f"{DATABOSS_BASE}/{endpoint}",
                     json={
-                        "api_key": DATABOSS_API_KEY,
-                        "api_secret": DATABOSS_API_SECRET,
-                        "network": network_name,
-                        "package_gb": extract_capacity(order["bundle"]),
+                        "api_key":      DATABOSS_API_KEY,
+                        "api_secret":   DATABOSS_API_SECRET,
+                        "network":      network_name,
+                        "package_gb":   extract_capacity(order["bundle"]),
                         "phone_number": order["phone_number"]
                     },
                     timeout=REQUEST_TIMEOUT
@@ -1283,7 +1375,6 @@ async def paystack_webhook(request: Request):
                     .eq("paystack_ref", reference) \
                     .execute()
 
-                # ✅ FIXED: OUTSIDE CHAIN
                 process_agent_profit(order["id"], reference)
 
             # =====================================
@@ -1291,21 +1382,18 @@ async def paystack_webhook(request: Request):
             # =====================================
             elif provider == "BUNDLES_GHANA":
 
-                # 1. Find the matching bundle_id from Bundles Ghana
-                # Bundles Ghana expects exact casing: MTN, Telecel, AirtelTigo
                 BG_NETWORK_MAP = {
-                    "MTN": "MTN",
-                    "TELECEL": "Telecel",
+                    "MTN":        "MTN",
+                    "TELECEL":    "Telecel",
                     "AIRTELTIGO": "AirtelTigo",
-                    "AT": "AirtelTigo",
+                    "AT":         "AirtelTigo",
                 }
                 network_name = BG_NETWORK_MAP.get(order["network"].upper(), order["network"])
-                bg_bundles = call_bundles_ghana(f"/bundles?network={network_name}")
+                bg_bundles   = call_bundles_ghana(f"/bundles?network={network_name}")
 
                 if not bg_bundles.get("success"):
                     raise Exception(f"Bundles Ghana fetch failed: {bg_bundles.get('error')}")
 
-                # Match by volume (bundle field e.g. "1GB", "2GB")
                 bundle_volume = order["bundle"].upper().replace(" ", "")
                 matched = next(
                     (b for b in bg_bundles.get("bundles", [])
@@ -1317,24 +1405,49 @@ async def paystack_webhook(request: Request):
                 if not matched:
                     raise Exception(f"No active Bundles Ghana bundle for {network_name} {bundle_volume}")
 
-                # 2. Place the order
                 bg_order = call_bundles_ghana("/order", method="POST", body={
-                    "bundle_id": matched["id"],
-                    "phone": order["phone_number"],
-                    "webhook_url": "https://evos-business-hub.onrender.com/webhook/bundlesghana"
+                    "bundle_id":   matched["id"],
+                    "phone":       order["phone_number"],
+                    "webhook_url": "https://api.evosdata.xyz/webhook/bundlesghana"
                 })
 
                 if not bg_order.get("success"):
                     raise Exception(f"Bundles Ghana order failed: {bg_order.get('error', bg_order.get('message'))}")
 
-                bg_ref = bg_order["order"]["reference"]
+                bg_ref      = bg_order["order"]["reference"]
                 bg_order_id = str(bg_order["order"]["id"])
 
                 supabase.table("orders") \
                     .update({
-                        "status": "processing",
-                        "datamart_ref": bg_ref,        # reuse column for BG reference
+                        "status":            "processing",
+                        "datamart_ref":      bg_ref,
                         "datamart_order_id": bg_order_id
+                    }) \
+                    .eq("paystack_ref", reference) \
+                    .execute()
+
+                process_agent_profit(order["id"], reference)
+
+            # =====================================
+            # SWIFT DATA LINK
+            # =====================================
+            elif provider == "SWIFT_DATA_LINK":
+
+                volume = float(extract_capacity(order["bundle"]) or 0)
+                sdl    = call_swift_data_link(
+                    network=order["network"],
+                    volume=volume,
+                    phone=order["phone_number"],
+                )
+
+                if not sdl.get("success"):
+                    raise Exception(f"Swift Data Link order failed: {sdl.get('error', sdl)}")
+
+                supabase.table("orders") \
+                    .update({
+                        "status":            "processing",
+                        "datamart_ref":      sdl.get("reference"),
+                        "datamart_order_id": sdl.get("orderId"),
                     }) \
                     .eq("paystack_ref", reference) \
                     .execute()
@@ -1366,16 +1479,16 @@ async def paystack_webhook(request: Request):
 @app.post("/webhook/datamart")
 async def datamart_webhook(request: Request):
     try:
-        body = await request.body()
+        body      = await request.body()
         signature = request.headers.get("X-DataMart-Signature")
-        event = request.headers.get("X-DataMart-Event", "")
+        event     = request.headers.get("X-DataMart-Event", "")
 
         if not signature or not verify_datamart_signature(body, signature, DATAMART_WEBHOOK_SECRET):
             raise HTTPException(401, "Invalid signature")
 
         payload = await request.json()
 
-        data = payload.get("data", {})
+        data      = payload.get("data", {})
         order_ref = data.get("orderReference") or data.get("reference")
         order_id  = data.get("orderId")
         status    = str(data.get("status", "")).lower()
@@ -1418,6 +1531,7 @@ async def datamart_webhook(request: Request):
     except Exception as e:
         print("DATAMART WEBHOOK ERROR:", str(e))
         return {"received": False}
+
 # =========================
 # BUNDLES GHANA WEBHOOK
 # =========================
@@ -1427,9 +1541,9 @@ async def bundlesghana_webhook(request: Request):
     try:
         payload = await request.json()
 
-        event = payload.get("event", "")
+        event     = payload.get("event", "")
         reference = payload.get("reference")
-        status = str(payload.get("status", "")).lower()
+        status    = str(payload.get("status", "")).lower()
 
         print("BUNDLES GHANA EVENT:", event)
         print("BUNDLES GHANA REF:", reference)
@@ -1459,6 +1573,75 @@ async def bundlesghana_webhook(request: Request):
 
     except Exception as e:
         print("BUNDLES GHANA WEBHOOK ERROR:", str(e))
+        return {"received": False}
+
+# =========================
+# SWIFT DATA LINK WEBHOOK
+# =========================
+# POST /webhook/swiftdatalink
+# SDL posts on every status change:
+#   pending → processing → delivered / failed / cancelled / refunded / resolved
+#
+# Payload:
+# {
+#   "event":     "order.status.updated",
+#   "orderId":   "ORD-000067",
+#   "reference": "ORD-IB22OQws",
+#   "status":    "delivered",
+#   "recipient": "233241234567",
+#   "volume":    2,
+#   "timestamp": "2025-04-05T10:35:00Z"
+# }
+# =========================
+@app.post("/webhook/swiftdatalink")
+async def swiftdatalink_webhook(request: Request):
+    try:
+        payload = await request.json()
+
+        event     = payload.get("event", "")
+        order_id  = payload.get("orderId", "")     # e.g. "ORD-000067"
+        reference = payload.get("reference", "")   # e.g. "ORD-IB22OQws"
+        status    = str(payload.get("status", "")).lower()
+
+        print("SDL WEBHOOK EVENT:", event)
+        print("SDL WEBHOOK ORDER ID:", order_id)
+        print("SDL WEBHOOK REFERENCE:", reference)
+        print("SDL WEBHOOK STATUS:", status)
+
+        if not order_id and not reference:
+            return {"received": True}
+
+        # Map SDL statuses → your internal statuses
+        final_status = (
+            "successful"
+            if status in ["delivered", "resolved"]
+            else "failed"
+            if status in ["failed", "cancelled", "refunded"]
+            else "processing"
+            if status in ["pending", "processing"]
+            else "processing"
+        )
+
+        # Match by datamart_ref — same column reused for SDL reference
+        # Try reference first, fall back to orderId
+        if reference:
+            supabase.table("orders") \
+                .update({"status": final_status}) \
+                .eq("datamart_ref", reference) \
+                .execute()
+            print(f"SDL WEBHOOK: updated by reference={reference} → {final_status}")
+
+        elif order_id:
+            supabase.table("orders") \
+                .update({"status": final_status}) \
+                .eq("datamart_order_id", order_id) \
+                .execute()
+            print(f"SDL WEBHOOK: updated by orderId={order_id} → {final_status}")
+
+        return {"received": True}
+
+    except Exception as e:
+        print("SDL WEBHOOK ERROR:", str(e))
         return {"received": False}
 
 # =========================
@@ -1524,8 +1707,20 @@ def sync_order(reference: str):
             if not bg_ref:
                 status = order["status"].lower()
             else:
-                bg = call_bundles_ghana(f"/order/status/{bg_ref}")
+                bg     = call_bundles_ghana(f"/order/status/{bg_ref}")
                 status = str(bg.get("order", {}).get("status", "processing")).lower()
+
+        # =========================
+        # SWIFT DATA LINK
+        # =========================
+        elif provider == "SWIFT_DATA_LINK":
+
+            sdl_res = requests.get(
+                f"{SWIFT_DATA_LINK_BASE}/order/status/{tracker}",
+                headers={"x-api-key": SWIFT_DATA_LINK_API_KEY},
+                timeout=REQUEST_TIMEOUT
+            ).json()
+            status = str(sdl_res.get("order", {}).get("status", "processing")).lower()
 
         else:
             status = "processing"
@@ -1535,7 +1730,7 @@ def sync_order(reference: str):
         # =========================
         final_status = (
             "successful"
-            if status in ["completed", "success", "delivered", "successful"]
+            if status in ["completed", "success", "delivered", "successful", "resolved"]
             else "failed"
             if status in ["failed", "cancelled", "refunded"]
             else "processing"
@@ -1578,16 +1773,16 @@ def get_user(user_id: int):
         # NORMALIZE FIELDS (IMPORTANT FIX)
         # =========================
         user_data = {
-            "id": user.get("id"),
-            "username": user.get("username"),
-            "email": user.get("email"),
-            "full_name": user.get("full_name"),
+            "id":           user.get("id"),
+            "username":     user.get("username"),
+            "email":        user.get("email"),
+            "full_name":    user.get("full_name"),
 
             # 🔥 CRITICAL FIX (DEFAULTS)
-            "role": user.get("role", "user"),  # default fallback
+            "role":         user.get("role", "user"),
             "agent_status": user.get("agent_status", "pending"),
 
-            "rank": user.get("rank", 1),
+            "rank":         user.get("rank", 1),
             "referral_code": user.get("referral_code", ""),
         }
 
@@ -1654,9 +1849,9 @@ async def agent_dashboard(agent_id: int):
         .execute()
 
     return {
-        "wallet_balance": balance,
-        "total_earned": total_earned,
-        "total_sales": orders.count if hasattr(orders, "count") else len(orders.data or []),
+        "wallet_balance":     balance,
+        "total_earned":       total_earned,
+        "total_sales":        orders.count if hasattr(orders, "count") else len(orders.data or []),
         "transactions_count": len(transactions.data or [])
     }
 
@@ -1716,8 +1911,8 @@ async def agent_sales(agent_id: int):
             total_profit += (o["agent_price"] - o["base_price"])
 
     return {
-        "total_orders": len(data),
-        "total_profit": total_profit
+        "total_orders":  len(data),
+        "total_profit":  total_profit
     }
 
 
@@ -1728,11 +1923,11 @@ async def agent_sales(agent_id: int):
 @app.post("/agent/withdraw")
 async def request_withdrawal(payload: dict):
 
-    agent_id = payload.get("agent_id")
-    amount = payload.get("amount")
+    agent_id      = payload.get("agent_id")
+    amount        = payload.get("amount")
     mobile_number = payload.get("mobile_number")
-    network = payload.get("network")
-    account_name = payload.get("account_name", "")
+    network       = payload.get("network")
+    account_name  = payload.get("account_name", "")
 
     if not agent_id or not amount:
         return {"error": "Missing fields"}
@@ -1758,7 +1953,7 @@ async def request_withdrawal(payload: dict):
         return {"error": "Insufficient balance"}
 
     if float(amount) < 5:
-        return {"error": "Minimum withdrawal is GH₵5"}
+        return {"error": "Minimum withdrawal is GH\u20b55"}
 
     # =========================
     # DEDUCT WALLET IMMEDIATELY
@@ -1791,13 +1986,13 @@ async def request_withdrawal(payload: dict):
     # =========================
     wd = supabase.table("agent_withdrawals") \
         .insert({
-            "agent_id": agent_id,
-            "amount": float(amount),
-            "account_name": account_name,
+            "agent_id":      agent_id,
+            "amount":        float(amount),
+            "account_name":  account_name,
             "account_number": mobile_number,
-            "bank_name": network,
-            "status": "processing",
-            "moolre_ref": external_ref,
+            "bank_name":     network,
+            "status":        "processing",
+            "moolre_ref":    external_ref,
         }) \
         .execute()
 
@@ -1815,20 +2010,20 @@ async def request_withdrawal(payload: dict):
     # =========================
     try:
         moolre_res = call_moolre("transfer", {
-            "type": 1,
-            "channel": channel,
-            "currency": "GHS",
-            "amount": str(float(amount)),
-            "receiver": mobile_number,
-            "externalref": external_ref,
-            "reference": f"EVOS Agent Withdrawal #{withdrawal_id}",
+            "type":          1,
+            "channel":       channel,
+            "currency":      "GHS",
+            "amount":        str(float(amount)),
+            "receiver":      mobile_number,
+            "externalref":   external_ref,
+            "reference":     f"EVOS Agent Withdrawal #{withdrawal_id}",
             "accountnumber": MOOLRE_ACCOUNT_NUMBER,
         })
 
         # ✅ FIX: Moolre returns status as string "1" not integer 1
         if str(moolre_res.get("status")) == "1":
-            tx_data = moolre_res.get("data", {})
-            tx_status = tx_data.get("txstatus", 0) if isinstance(tx_data, dict) else 0
+            tx_data    = moolre_res.get("data", {})
+            tx_status  = tx_data.get("txstatus", 0) if isinstance(tx_data, dict) else 0
             final_status = "paid" if tx_status == 1 else "processing"
 
             supabase.table("agent_withdrawals") \
@@ -1839,17 +2034,17 @@ async def request_withdrawal(payload: dict):
             # ✅ LOG TRANSACTION
             supabase.table("agent_transactions") \
                 .insert({
-                    "agent_id": agent_id,
-                    "amount": -float(amount),
-                    "type": "withdrawal",
+                    "agent_id":  agent_id,
+                    "amount":    -float(amount),
+                    "type":      "withdrawal",
                     "reference": external_ref
                 }) \
                 .execute()
 
             return {
-                "status": "success",
-                "message": "Transfer initiated. Funds will arrive shortly.",
-                "withdrawal_id": withdrawal_id,
+                "status":          "success",
+                "message":         "Transfer initiated. Funds will arrive shortly.",
+                "withdrawal_id":   withdrawal_id,
                 "transfer_status": final_status,
             }
         else:
@@ -1896,22 +2091,22 @@ async def check_withdrawal_status(withdrawal_id: int):
         if not wd.data:
             return {"error": "Withdrawal not found"}
 
-        row = wd.data[0]
+        row        = wd.data[0]
         moolre_ref = row.get("moolre_ref")
 
         if not moolre_ref or row.get("status") in ["paid", "failed", "rejected"]:
             return {"status": row.get("status"), "withdrawal": row}
 
         status_res = call_moolre("status", {
-            "type": 1,
-            "idtype": 1,
-            "id": moolre_ref,
+            "type":          1,
+            "idtype":        1,
+            "id":            moolre_ref,
             "accountnumber": MOOLRE_ACCOUNT_NUMBER,
         })
 
         # ✅ FIX: Moolre returns status as string "1" not integer 1
         if str(status_res.get("status")) == "1":
-            tx_status = status_res.get("data", {}).get("txstatus", 0)
+            tx_status    = status_res.get("data", {}).get("txstatus", 0)
             final_status = "paid" if tx_status == 1 else "failed" if tx_status == 2 else "processing"
 
             if final_status != row.get("status"):
@@ -1949,9 +2144,9 @@ async def moolre_webhook(request: Request):
         print("MOOLRE WEBHOOK:", payload)
 
         # ✅ FIX: externalref and txstatus are nested inside "data" for transfer webhooks
-        data = payload.get("data", {})
+        data         = payload.get("data", {})
         external_ref = data.get("externalref") or payload.get("externalref")
-        tx_status = data.get("txstatus") if isinstance(data, dict) else payload.get("txstatus")
+        tx_status    = data.get("txstatus") if isinstance(data, dict) else payload.get("txstatus")
 
         print("MOOLRE WEBHOOK EXTERNALREF:", external_ref)
         print("MOOLRE WEBHOOK TXSTATUS:", tx_status)
@@ -1978,7 +2173,7 @@ async def moolre_webhook(request: Request):
 
         # ✅ FIX: compare tx_status as integer
         final_status = (
-            "paid" if tx_status == 1
+            "paid"       if tx_status == 1
             else "failed" if tx_status == 2
             else "processing"
         )
@@ -1992,9 +2187,9 @@ async def moolre_webhook(request: Request):
         if final_status == "paid" and row.get("status") != "paid":
             supabase.table("agent_transactions") \
                 .insert({
-                    "agent_id": row["agent_id"],
-                    "amount": -float(row["amount"]),
-                    "type": "withdrawal",
+                    "agent_id":  row["agent_id"],
+                    "amount":    -float(row["amount"]),
+                    "type":      "withdrawal",
                     "reference": external_ref
                 }) \
                 .execute()
@@ -2012,7 +2207,7 @@ async def moolre_webhook(request: Request):
                     .update({"balance": current + float(row["amount"])}) \
                     .eq("agent_id", row["agent_id"]) \
                     .execute()
-                print(f"MOOLRE WEBHOOK: refunded GH₵{row['amount']} to agent {row['agent_id']}")
+                print(f"MOOLRE WEBHOOK: refunded GH\u20b5{row['amount']} to agent {row['agent_id']}")
 
         print(f"MOOLRE WEBHOOK: withdrawal {external_ref} updated to {final_status}")
         return {"received": True}
@@ -2020,7 +2215,7 @@ async def moolre_webhook(request: Request):
     except Exception as e:
         print("MOOLRE WEBHOOK ERROR:", str(e))
         return {"received": False}
-        
+
 # =========================
 # ADMIN WITHDRAWALS
 # =========================
@@ -2089,7 +2284,7 @@ def get_agent_pricing(agent_id: str):
         # =========================
         # 1. GET BASE PRICES
         # =========================
-        base_res = supabase.table("base_prices") \
+        base_res    = supabase.table("base_prices") \
             .select("*") \
             .execute()
 
@@ -2098,7 +2293,7 @@ def get_agent_pricing(agent_id: str):
         # =========================
         # 2. GET AGENT PRICES
         # =========================
-        agent_res = supabase.table("agent_prices") \
+        agent_res    = supabase.table("agent_prices") \
             .select("*") \
             .eq("agent_id", agent_id) \
             .execute()
@@ -2126,18 +2321,18 @@ def get_agent_pricing(agent_id: str):
             if not item:
                 continue
 
-            network = item.get("network", "").strip()
-            bundle = item.get("bundle", "").strip()
+            network    = item.get("network", "").strip()
+            bundle     = item.get("bundle", "").strip()
             base_price = float(item.get("cost_price", 0) or 0)
 
-            key = f"{network.lower()}-{bundle.lower()}"
+            key    = f"{network.lower()}-{bundle.lower()}"
             markup = float(agent_map.get(key, 0) or 0)
 
             result.append({
-                "network": network,
-                "bundle": bundle,
-                "base_price": base_price,
-                "markup": markup,
+                "network":     network,
+                "bundle":      bundle,
+                "base_price":  base_price,
+                "markup":      markup,
                 "final_price": base_price + markup
             })
 
@@ -2161,7 +2356,7 @@ def save_agent_pricing(payload: dict):
 
     try:
         agent_id = str(payload.get("agent_id", "")).strip()
-        prices = payload.get("prices", [])
+        prices   = payload.get("prices", [])
 
         if not agent_id:
             return {"status": "failed", "message": "agent_id required"}
@@ -2178,7 +2373,7 @@ def save_agent_pricing(payload: dict):
 
         for item in prices:
             network = str(item.get("network", "")).strip()
-            bundle = str(item.get("bundle", "")).strip()
+            bundle  = str(item.get("bundle", "")).strip()
 
             try:
                 markup = float(item.get("markup", 0) or 0)
@@ -2187,9 +2382,9 @@ def save_agent_pricing(payload: dict):
 
             rows.append({
                 "agent_id": agent_id,
-                "network": network,
-                "bundle": bundle,
-                "markup": markup
+                "network":  network,
+                "bundle":   bundle,
+                "markup":   markup
             })
 
         # =========================
@@ -2208,7 +2403,6 @@ def save_agent_pricing(payload: dict):
             "status": "failed",
             "message": "Unable to save pricing"
         }
-        
 
 
 # =========================
@@ -2236,7 +2430,7 @@ async def initiate_deposit(payload: dict):
         total_charge = float(payload.get("total_charge", 0))  # what agent actually pays
 
         if not agent_id or amount < 1:
-            return {"error": "agent_id and amount (min GH₵ 1) are required"}
+            return {"error": "agent_id and amount (min GH\u20b5 1) are required"}
 
         # Fetch agent email for Paystack
         user_res = supabase.table("users") \
@@ -2265,8 +2459,8 @@ async def initiate_deposit(payload: dict):
                     "reference": reference,
                     "currency":  "GHS",
                     "metadata": {
-                        "agent_id":     agent_id,
-                        "type":         "wallet_deposit",
+                        "agent_id":      agent_id,
+                        "type":          "wallet_deposit",
                         "credit_amount": amount,
                     },
                     "callback_url": f"{os.getenv('FRONTEND_URL', 'https://evosdata.xyz')}/success?type=deposit",
@@ -2351,7 +2545,7 @@ async def verify_deposit(payload: dict):
                 .eq("id", deposit["id"]) \
                 .execute()
             return {
-                "error": "Payment not successful",
+                "error":           "Payment not successful",
                 "paystack_status": data["data"].get("status"),
             }
 
@@ -2367,7 +2561,7 @@ async def verify_deposit(payload: dict):
 
         if wallet_res.data:
             current_balance = float(wallet_res.data[0]["balance"] or 0)
-            new_balance = round(current_balance + credit_amount, 2)
+            new_balance     = round(current_balance + credit_amount, 2)
             supabase.table("agent_wallets") \
                 .update({"balance": new_balance}) \
                 .eq("agent_id", agent_id) \
@@ -2464,8 +2658,8 @@ async def agent_buy_data(payload: dict):
         # ── Insufficient funds check ──
         if wallet_balance < cost_price:
             return {
-                "status": "error",
-                "message": f"Insufficient wallet balance. Need GH₵ {cost_price:.2f}, have GH₵ {wallet_balance:.2f}",
+                "status":  "error",
+                "message": f"Insufficient wallet balance. Need GH\u20b5 {cost_price:.2f}, have GH\u20b5 {wallet_balance:.2f}",
             }
 
         # ── Deduct wallet immediately (reserve funds) ──
@@ -2506,7 +2700,7 @@ async def agent_buy_data(payload: dict):
             "type":      "debit",
             "amount":    cost_price,
             "reference": reference,
-            "order_id":  order_id,           
+            "order_id":  order_id,
         }).execute()
 
         # ── Dispatch to provider ──
@@ -2519,13 +2713,13 @@ async def agent_buy_data(payload: dict):
                     headers={"X-API-Key": DATAMART_API_KEY},
                     json={
                         "phoneNumber": phone_number,
-                        "network": NETWORK_MAP.get(network.upper()),
-                        "capacity": extract_capacity(bundle),
-                        "gateway": "wallet"
+                        "network":     NETWORK_MAP.get(network.upper()),
+                        "capacity":    extract_capacity(bundle),
+                        "gateway":     "wallet"
                     },
                     timeout=REQUEST_TIMEOUT
                 )
-                dm = dm_response.json()
+                dm      = dm_response.json()
                 dm_data = dm.get("data", {})
                 supabase.table("orders") \
                     .update({
@@ -2538,12 +2732,12 @@ async def agent_buy_data(payload: dict):
 
             elif provider == "BUNDLES_GHANA":
                 BG_NETWORK_MAP = {
-                    "MTN":       "MTN",
-                    "TELECEL":   "Telecel",
+                    "MTN":        "MTN",
+                    "TELECEL":    "Telecel",
                     "AIRTELTIGO": "AirtelTigo",
                 }
                 network_name = BG_NETWORK_MAP.get(network.upper(), network)
-                bg_bundles = call_bundles_ghana(f"/bundles?network={network_name}")
+                bg_bundles   = call_bundles_ghana(f"/bundles?network={network_name}")
 
                 if bg_bundles.get("success"):
                     bundle_volume = bundle.upper().replace(" ", "")
@@ -2555,8 +2749,8 @@ async def agent_buy_data(payload: dict):
                     )
                     if matched:
                         bg_order = call_bundles_ghana("/order", method="POST", body={
-                            "bundle_id": matched["id"],
-                            "phone":     phone_number,
+                            "bundle_id":   matched["id"],
+                            "phone":       phone_number,
                             "webhook_url": "https://api.evosdata.xyz/webhook/bundlesghana"
                         })
                         if bg_order.get("success"):
@@ -2569,6 +2763,23 @@ async def agent_buy_data(payload: dict):
                                 .eq("id", order_id) \
                                 .execute()
 
+            elif provider == "SWIFT_DATA_LINK":
+                volume = float(extract_capacity(bundle) or 0)
+                sdl    = call_swift_data_link(
+                    network=network,
+                    volume=volume,
+                    phone=phone_number,
+                )
+                if sdl.get("success"):
+                    supabase.table("orders") \
+                        .update({
+                            "datamart_ref":      sdl.get("reference"),
+                            "datamart_order_id": sdl.get("orderId"),
+                            "status":            "processing"
+                        }) \
+                        .eq("id", order_id) \
+                        .execute()
+
             elif provider == "DATABOSS":
                 endpoint = "telecel.php"
                 if network.upper() in ["AIRTELTIGO", "AT"]:
@@ -2579,11 +2790,11 @@ async def agent_buy_data(payload: dict):
                 db_response = requests.post(
                     f"{DATABOSS_BASE}/{endpoint}",
                     json={
-                        "api_key":        DATABOSS_API_KEY,
-                        "api_secret":     DATABOSS_API_SECRET,
-                        "network":        network.upper(),
-                        "package_gb":     extract_capacity(bundle),
-                        "phone_number":   phone_number
+                        "api_key":      DATABOSS_API_KEY,
+                        "api_secret":   DATABOSS_API_SECRET,
+                        "network":      network.upper(),
+                        "package_gb":   extract_capacity(bundle),
+                        "phone_number": phone_number
                     },
                     timeout=REQUEST_TIMEOUT
                 )
@@ -2613,7 +2824,7 @@ async def agent_buy_data(payload: dict):
         print("AGENT BUY DATA ERROR:", str(e))
         return {"status": "error", "message": "Something went wrong. Please try again."}
 
-        
+
 # =========================
 # AGENT STORE (FULL CORRECTED + PRODUCTION READY)
 # =========================
@@ -2663,16 +2874,16 @@ async def public_agent_store(agent_id: int):
         # =========================
         bundles = []
         for row in (prices.data or []):
-            network = row.get("network", "").strip()
-            bundle = row.get("bundle", "").strip()
-            key = f"{network.lower()}::{bundle.lower()}"
+            network    = row.get("network", "").strip()
+            bundle     = row.get("bundle", "").strip()
+            key        = f"{network.lower()}::{bundle.lower()}"
             base_price = float(row.get("cost_price", 0) or 0)
-            markup = float(markup_map.get(key, 0))
+            markup     = float(markup_map.get(key, 0))
             bundles.append({
-                "network": network,
-                "bundle": bundle,
-                "base_price": base_price,
-                "markup": markup,
+                "network":     network,
+                "bundle":      bundle,
+                "base_price":  base_price,
+                "markup":      markup,
                 "final_price": round(base_price + markup, 2)
             })
 
@@ -2681,8 +2892,8 @@ async def public_agent_store(agent_id: int):
         # Priority: store_name > username > full_name > "Agent"
         # =========================
         return {
-            "status": "success",
-            "agent_id": agent_id,
+            "status":     "success",
+            "agent_id":   agent_id,
             "agent_name": (
                 u.get("store_name")
                 or u.get("username")
@@ -2703,7 +2914,7 @@ async def public_agent_store(agent_id: int):
 @app.post("/agent/store-name")
 async def save_store_name(payload: dict):
     try:
-        agent_id = payload.get("agent_id")
+        agent_id   = payload.get("agent_id")
         store_name = str(payload.get("store_name", "")).strip()
 
         if not agent_id:
@@ -2741,12 +2952,13 @@ async def get_store_name(agent_id: int):
 
         return {
             "store_name": res.data[0].get("store_name") or "",
-            "username": res.data[0].get("username") or ""
+            "username":   res.data[0].get("username") or ""
         }
 
     except Exception as e:
         print("GET STORE NAME ERROR:", str(e))
         return {"error": "Failed to fetch store name"}
+
 # =========================
 # STORE ORDER (PAYSTACK READY + MATCHES DB)
 # =========================
@@ -2760,10 +2972,10 @@ async def create_store_order(payload: dict):
         # =========================
         # INPUTS
         # =========================
-        agent_id = int(payload["agent_id"])
-        network = str(payload["network"]).strip()
-        bundle = str(payload["bundle"]).strip()
-        phone_number = str(payload["phone_number"]).strip()
+        agent_id       = int(payload["agent_id"])
+        network        = str(payload["network"]).strip()
+        bundle         = str(payload["bundle"]).strip()
+        phone_number   = str(payload["phone_number"]).strip()
 
         customer_email = str(
             payload.get("email", "customer@evoshub.store")
@@ -2780,7 +2992,7 @@ async def create_store_order(payload: dict):
 
         if not agent.data:
             return {
-                "status": "error",
+                "status":  "error",
                 "message": "Store not found"
             }
 
@@ -2791,7 +3003,7 @@ async def create_store_order(payload: dict):
             user.get("agent_status") != "approved"
         ):
             return {
-                "status": "error",
+                "status":  "error",
                 "message": "Store unavailable"
             }
 
@@ -2807,7 +3019,7 @@ async def create_store_order(payload: dict):
 
         if not base.data:
             return {
-                "status": "error",
+                "status":  "error",
                 "message": "Bundle not found"
             }
 
@@ -2848,23 +3060,23 @@ async def create_store_order(payload: dict):
         # =========================
         order = supabase.table("orders") \
             .insert({
-                "agent_id": agent_id,
-                "email": customer_email,
-                "network": network,
-                "bundle": bundle,
-                "price": agent_price,
+                "agent_id":     agent_id,
+                "email":        customer_email,
+                "network":      network,
+                "bundle":       bundle,
+                "price":        agent_price,
                 "phone_number": phone_number,
                 "paystack_ref": reference,
-                "status": "pending_payment",
-                "base_price": base_price,
-                "agent_price": agent_price,
-                "profit": markup_price
+                "status":       "pending_payment",
+                "base_price":   base_price,
+                "agent_price":  agent_price,
+                "profit":       markup_price
             }) \
             .execute()
 
         if not order.data:
             return {
-                "status": "error",
+                "status":  "error",
                 "message": "Failed to create order"
             }
 
@@ -2874,21 +3086,21 @@ async def create_store_order(payload: dict):
         # INITIALIZE PAYSTACK
         # =========================
         paystack_payload = {
-            "email": customer_email,
-            "amount": int(agent_price * 100),
-            "reference": reference,
+            "email":        customer_email,
+            "amount":       int(agent_price * 100),
+            "reference":    reference,
             "callback_url": f"https://evosdata.xyz/store/{agent_id}",
             "metadata": {
                 "order_id": order_id,
                 "agent_id": agent_id,
-                "network": network,
-                "bundle": bundle
+                "network":  network,
+                "bundle":   bundle
             }
         }
 
         paystack_headers = {
             "Authorization": f"Bearer {PAYSTACK_SECRET}",
-            "Content-Type": "application/json"
+            "Content-Type":  "application/json"
         }
 
         pay = requests.post(
@@ -2908,7 +3120,7 @@ async def create_store_order(payload: dict):
                 .execute()
 
             return {
-                "status": "error",
+                "status":  "error",
                 "message": "Payment initialization failed"
             }
 
@@ -2918,10 +3130,10 @@ async def create_store_order(payload: dict):
         # SUCCESS
         # =========================
         return {
-            "status": "created",
-            "order_id": order_id,
-            "reference": reference,
-            "pay_amount": agent_price,
+            "status":      "created",
+            "order_id":    order_id,
+            "reference":   reference,
+            "pay_amount":  agent_price,
             "payment_url": auth_url
         }
 
@@ -2929,10 +3141,9 @@ async def create_store_order(payload: dict):
         print("STORE ORDER ERROR:", str(e))
 
         return {
-            "status": "error",
+            "status":  "error",
             "message": "Failed to create order"
         }
-
 
 
 # =========================
@@ -2953,8 +3164,8 @@ def register(data: RegisterRequest):
         # NORMALIZE INPUT
         # =========================
         username = (data.username or "").strip().lower()
-        email = (data.email or "").strip().lower()
-        phone = re.sub(r"\D", "", data.phone or "")
+        email    = (data.email or "").strip().lower()
+        phone    = re.sub(r"\D", "", data.phone or "")
 
         if len(phone) < 10:
             raise HTTPException(status_code=400, detail="Invalid phone number")
@@ -2998,24 +3209,24 @@ def register(data: RegisterRequest):
         # INSERT USER
         # =========================
         insert = supabase.table("users").insert({
-            "username": username,
-            "full_name": data.full_name.strip(),
-            "email": email,
-            "phone": phone,
-            "password": hashed_password,
-            "referred_by": data.referred_by,
+            "username":     username,
+            "full_name":    data.full_name.strip(),
+            "email":        email,
+            "phone":        phone,
+            "password":     hashed_password,
+            "referred_by":  data.referred_by,
             "referral_code": referral_code,
-            "order_count": 0,
-            "rank": 1
+            "order_count":  0,
+            "rank":         1
         }).execute()
 
         if not insert.data:
             raise HTTPException(status_code=500, detail="User creation failed")
 
         return {
-            "status": "created",
-            "email": email,
-            "username": username,
+            "status":        "created",
+            "email":         email,
+            "username":      username,
             "referral_code": referral_code
         }
 
@@ -3027,9 +3238,6 @@ def register(data: RegisterRequest):
         raise HTTPException(status_code=500, detail="Server error")
 
 
-# =========================
-# LOGIN ROUTE
-# =========================
 # =========================
 # LOGIN ROUTE (FIXED)
 # =========================
@@ -3075,15 +3283,15 @@ def login(data: LoginRequest):
         # NORMALIZE USER (IMPORTANT FIX)
         # =========================
         user_data = {
-            "id": user.get("id"),
-            "username": user.get("username"),
-            "email": user.get("email"),
-            "full_name": user.get("full_name"),
+            "id":            user.get("id"),
+            "username":      user.get("username"),
+            "email":         user.get("email"),
+            "full_name":     user.get("full_name"),
             "referral_code": user.get("referral_code"),
-            "rank": user.get("rank", 1),
+            "rank":          user.get("rank", 1),
 
             # 🔥 CRITICAL FIX FOR AGENT SYSTEM
-            "role": user.get("role", "user"),
+            "role":         user.get("role", "user"),
             "agent_status": user.get("agent_status", "pending"),
         }
 
@@ -3092,7 +3300,7 @@ def login(data: LoginRequest):
         # =========================
         return {
             "status": "ok",
-            "user": user_data
+            "user":   user_data
         }
 
     except HTTPException:
@@ -3103,10 +3311,7 @@ def login(data: LoginRequest):
         raise HTTPException(status_code=500, detail="Server error")
 
 
-
-
 from fastapi import HTTPException
-
 
 
 @app.get("/today/{user_id}")
@@ -3145,14 +3350,14 @@ def today_dashboard(user_id: int):
         # TRANSACTIONS
         transactions = [
             {
-                "network": row["network"],
-                "amount": f'{row["bundle"]} - GHS {row["price"]}',
+                "network":      row["network"],
+                "amount":       f'{row["bundle"]} - GHS {row["price"]}',
                 "phone_number": row["phone_number"],
                 "evosdata_ref": row["evosdata_ref"],
                 "paystack_ref": row["paystack_ref"],
                 "datamart_ref": row["datamart_ref"],
-                "status": row["status"],
-                "created_at": row["created_at"]
+                "status":       row["status"],
+                "created_at":   row["created_at"]
             }
             for row in my_orders
         ]
@@ -3162,17 +3367,15 @@ def today_dashboard(user_id: int):
                 "total_orders": total_orders
             },
             "user": {
-                "my_orders": len(my_orders),
+                "my_orders":            len(my_orders),
                 "my_successful_orders": len(my_successful_orders),
-                "transactions": transactions
+                "transactions":         transactions
             }
         }
 
     except Exception as e:
         print("TODAY ERROR:", str(e))
         raise HTTPException(500, "Server error")
-
-
 
 
 from fastapi import FastAPI, Request
@@ -3184,8 +3387,8 @@ from fastapi import FastAPI, Request
 async def ussd(request: Request):
     data = await request.json()
 
-    phone = data.get("phoneNumber")
-    text = data.get("text", "")
+    phone        = data.get("phoneNumber")
+    text         = data.get("text", "")
     service_code = data.get("serviceCode", "*1590#")
 
     # split user input path
@@ -3233,9 +3436,9 @@ async def ussd(request: Request):
         if len(user_input) == 2:
             return (
                 f"CON {network} Bundles\n"
-                "1. 1GB - GH₵5\n"
-                "2. 2GB - GH₵10\n"
-                "3. 5GB - GH₵20"
+                "1. 1GB - GH\u20b55\n"
+                "2. 2GB - GH\u20b510\n"
+                "3. 5GB - GH\u20b520"
             )
 
         # STEP 4: map bundle
@@ -3263,8 +3466,8 @@ async def ussd(request: Request):
                 json={
                     "user_id": None,  # guest USSD user
                     "network": network,
-                    "bundle": bundle,
-                    "phone": phone
+                    "bundle":  bundle,
+                    "phone":   phone
                 },
                 timeout=10
             )
@@ -3306,8 +3509,6 @@ async def ussd(request: Request):
     return "END Invalid request"
 
 
-
-
 from fastapi import Request
 from fastapi.responses import Response
 import uuid
@@ -3321,10 +3522,10 @@ sessions = {}
 def get_session(phone: str):
     if phone not in sessions:
         sessions[phone] = {
-            "step": "start",
+            "step":    "start",
             "network": None,
-            "bundle": None,
-            "price": None
+            "bundle":  None,
+            "price":   None
         }
     return sessions[phone]
 
@@ -3348,11 +3549,11 @@ def init_paystack(email: str, amount: float):
         "https://api.paystack.co/transaction/initialize",
         headers={
             "Authorization": f"Bearer {PAYSTACK_SECRET}",
-            "Content-Type": "application/json"
+            "Content-Type":  "application/json"
         },
         json={
-            "email": email,
-            "amount": int(amount * 100),
+            "email":        email,
+            "amount":       int(amount * 100),
             "callback_url": "https://evosdata.netlify.app/success"
         }
     )
@@ -3371,13 +3572,12 @@ def init_paystack(email: str, amount: float):
 @app.post("/whatsapp/webhook")
 async def whatsapp_webhook(request: Request):
 
-    form = await request.form()
-
+    form    = await request.form()
     message = form.get("Body", "").strip().lower()
-    phone = form.get("From")
+    phone   = form.get("From")
 
     session = get_session(phone)
-    reply = ""
+    reply   = ""
 
     # =========================
     # MENU
@@ -3385,10 +3585,10 @@ async def whatsapp_webhook(request: Request):
     if message in ["hi", "hello", "start", "menu"]:
         session["step"] = "menu"
         reply = (
-            "👋 *EVOS DATA HUB*\n\n"
-            "1️⃣ Buy Data\n"
-            "2️⃣ Track Order\n"
-            "3️⃣ Support"
+            "\ud83d\udc4b *EVOS DATA HUB*\n\n"
+            "1\ufe0f\u20e3 Buy Data\n"
+            "2\ufe0f\u20e3 Track Order\n"
+            "3\ufe0f\u20e3 Support"
         )
 
     # =========================
@@ -3397,10 +3597,10 @@ async def whatsapp_webhook(request: Request):
     elif message == "1":
         session["step"] = "network"
         reply = (
-            "📡 Select Network:\n\n"
-            "1️⃣ MTN\n"
-            "2️⃣ Telecel\n"
-            "3️⃣ AirtelTigo"
+            "\ud83d\udce1 Select Network:\n\n"
+            "1\ufe0f\u20e3 MTN\n"
+            "2\ufe0f\u20e3 Telecel\n"
+            "3\ufe0f\u20e3 AirtelTigo"
         )
 
     # =========================
@@ -3408,18 +3608,18 @@ async def whatsapp_webhook(request: Request):
     # =========================
     elif message in ["1", "mtn"]:
         session["network"] = "MTN"
-        session["step"] = "bundle"
-        reply = "📦 Send MTN bundle (e.g. 1GB, 2GB)"
+        session["step"]    = "bundle"
+        reply = "\ud83d\udce6 Send MTN bundle (e.g. 1GB, 2GB)"
 
     elif message in ["2", "telecel"]:
         session["network"] = "TELECEL"
-        session["step"] = "bundle"
-        reply = "📦 Send Telecel bundle"
+        session["step"]    = "bundle"
+        reply = "\ud83d\udce6 Send Telecel bundle"
 
     elif message in ["3", "airteltigo"]:
         session["network"] = "AIRTELTIGO"
-        session["step"] = "bundle"
-        reply = "📦 Send AirtelTigo bundle"
+        session["step"]    = "bundle"
+        reply = "\ud83d\udce6 Send AirtelTigo bundle"
 
     # =========================
     # BUNDLE
@@ -3430,18 +3630,18 @@ async def whatsapp_webhook(request: Request):
         price = fetch_price(session["network"], session["bundle"])
 
         if not price:
-            reply = "❌ Bundle not found. Try again."
+            reply = "\u274c Bundle not found. Try again."
         else:
             session["price"] = price
-            session["step"] = "confirm"
+            session["step"]  = "confirm"
 
             reply = (
-                f"📦 *ORDER SUMMARY*\n\n"
+                f"\ud83d\udce6 *ORDER SUMMARY*\n\n"
                 f"Network: {session['network']}\n"
                 f"Bundle: {session['bundle']}\n"
                 f"Price: GHS {price}\n\n"
-                "1️⃣ Confirm & Pay\n"
-                "2️⃣ Cancel"
+                "1\ufe0f\u20e3 Confirm & Pay\n"
+                "2\ufe0f\u20e3 Cancel"
             )
 
     # =========================
@@ -3457,22 +3657,22 @@ async def whatsapp_webhook(request: Request):
         )
 
         if not paystack:
-            reply = "❌ Payment initialization failed."
+            reply = "\u274c Payment initialization failed."
         else:
             paystack_ref = paystack["reference"]
 
             supabase.table("orders").insert({
-                "network": session["network"],
-                "bundle": session["bundle"],
-                "price": session["price"],
+                "network":      session["network"],
+                "bundle":       session["bundle"],
+                "price":        session["price"],
                 "phone_number": phone,
-                "status": "pending_payment",
+                "status":       "pending_payment",
                 "evosdata_ref": evos_ref,
                 "paystack_ref": paystack_ref
             }).execute()
 
             reply = (
-                "💳 *PAYMENT READY*\n\n"
+                "\ud83d\udcb3 *PAYMENT READY*\n\n"
                 f"Amount: GHS {session['price']}\n\n"
                 f"Pay here:\n{paystack['authorization_url']}\n\n"
                 "Once payment is completed, your data will be delivered automatically."
@@ -3485,19 +3685,19 @@ async def whatsapp_webhook(request: Request):
     # =========================
     elif message == "2":
         session["step"] = "menu"
-        reply = "❌ Order cancelled. Type *menu* to restart."
+        reply = "\u274c Order cancelled. Type *menu* to restart."
 
     # =========================
     # SUPPORT
     # =========================
     elif message == "3":
-        reply = "💬 Support: https://wa.me/233208718943"
+        reply = "\ud83d\udcac Support: https://wa.me/233208718943"
 
     # =========================
     # DEFAULT
     # =========================
     else:
-        reply = "❌ Invalid input. Type *menu*."
+        reply = "\u274c Invalid input. Type *menu*."
 
     # =========================
     # TWILIO RESPONSE
