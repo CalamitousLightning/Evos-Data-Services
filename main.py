@@ -847,12 +847,12 @@ async def retry_stuck_deposits():
                         .execute()
 
                     # ── Log to wallet_transactions (same table verify_deposit uses) ──
-                    supabase.table("wallet_transactions").insert({
+                    supabase.table("agent_transactions").insert({
                         "agent_id":  agent_id,
                         "type":      "credit",
                         "amount":    credit_amount,
                         "reference": deposit.get("reference"),
-                        "note":      "Wallet top-up via Paystack (auto-recovered)",
+                        # ===== "note":      "Wallet top-up via Paystack (auto-recovered)",
                     }).execute()
 
                     print(f"DEPOSIT RETRY: deposit {dep_id} credited GH\u20b5{credit_amount} to agent {agent_id} \u2705 \u2014 new balance: GH\u20b5{new_balance}")
