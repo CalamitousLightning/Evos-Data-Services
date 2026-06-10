@@ -307,7 +307,8 @@ export default function Home({ setPage, theme }) {
           </div>
         </div>
         <div style={styles.footerCopy}>
-          © 2026 EVOS Technologies · Powered by EVOS Business HUB
+          © 2026 EVOS Data Services
+          <p>A Product of Evos Business Hub. Powered by Evoxera Technology</p>
         </div>
       </footer>
 
