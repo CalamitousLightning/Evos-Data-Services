@@ -40,7 +40,7 @@ const STATUS_CONFIG = {
     color: "#ef4444",
     bg: "rgba(239,68,68,0.1)",
     border: "rgba(239,68,68,0.3)",
-    eta: "Delivery failed. Please contact support — you will be refunded.",
+    eta: "Delivery attempt failed. The system will automatically retry delivery within 24 hours. No action needed.",
     icon: "❌",
   },
 };
