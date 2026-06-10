@@ -2498,3 +2498,8 @@ async def whatsapp_webhook(request: Request):
 
     xml = f"<Response><Message>{reply}</Message></Response>"
     return Response(content=xml, media_type="application/xml")
+
+
+@app.get("/")
+def root():
+    return {"status": "EVOS API is running"}
