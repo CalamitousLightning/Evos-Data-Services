@@ -9,3 +9,5 @@ passlib[bcrypt]
 bcrypt<4
 email-validator>=2.0.0
 python-multipart
+slowapi
+limits
