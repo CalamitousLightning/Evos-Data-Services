@@ -3,9 +3,7 @@ import { useEffect, useState } from "react";
 const API_BASE = "https://api.evosdata.xyz";
 
 const slugify = (name) =>
-  name
-    .trim()
-    .toLowerCase()
+  name.trim().toLowerCase()
     .replace(/[^a-z0-9\s-]/g, "")
     .replace(/\s+/g, "-")
     .replace(/-+/g, "-")
@@ -17,19 +15,20 @@ const buildStoreLink = (agentId, storeName) => {
   return slug ? `${base}/${slug}` : base;
 };
 
+// Helper — always reads the token fresh from sessionStorage
+const agentHeaders = () => ({
+  "Content-Type": "application/json",
+  "X-Agent-Token": sessionStorage.getItem("agentToken") || "",
+});
+
 export default function AgentDashboard({ user, setPage }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [stats, setStats] = useState({
-    wallet_balance: 0,
-    total_sales: 0,
-    total_profit: 0,
-    total_orders: 0,
-    store_link: "",
-    transactions: [],
+    wallet_balance: 0, total_sales: 0, total_profit: 0,
+    total_orders: 0, store_link: "", transactions: [],
   });
-
   const [storeName, setStoreName] = useState("");
   const [storeNameInput, setStoreNameInput] = useState("");
   const [storeNameSaving, setStoreNameSaving] = useState(false);
@@ -37,8 +36,7 @@ export default function AgentDashboard({ user, setPage }) {
 
   useEffect(() => {
     if (!user) { setPage("login"); return; }
-    const isAgent = user.role === "agent" && user.agent_status === "approved";
-    if (!isAgent) { setPage("dashboard"); }
+    if (user.role !== "agent" || user.agent_status !== "approved") setPage("dashboard");
   }, [user, setPage]);
 
   useEffect(() => {
@@ -47,19 +45,16 @@ export default function AgentDashboard({ user, setPage }) {
       try {
         setLoading(true);
         setError("");
-
+        const headers = agentHeaders();
         const [dashRes, txRes, nameRes] = await Promise.all([
-          fetch(`${API_BASE}/agent/dashboard/${user.id}`),
-          fetch(`${API_BASE}/agent/transactions/${user.id}`),
-          fetch(`${API_BASE}/agent/store-name/${user.id}`),
+          fetch(`${API_BASE}/agent/dashboard/${user.id}`, { headers }),
+          fetch(`${API_BASE}/agent/transactions/${user.id}`, { headers }),
+          fetch(`${API_BASE}/agent/store-name/${user.id}`, { headers }),
         ]);
-
         const data = await dashRes.json();
         const txData = await txRes.json();
         const nameData = await nameRes.json();
-
         const currentName = nameData.store_name || "";
-
         setStats({
           wallet_balance: Number(data.wallet_balance || 0),
           total_sales: Number(data.total_sales || 0),
@@ -68,10 +63,8 @@ export default function AgentDashboard({ user, setPage }) {
           store_link: buildStoreLink(user.id, currentName),
           transactions: txData.transactions || [],
         });
-
         setStoreName(currentName);
         setStoreNameInput(currentName);
-
       } catch (err) {
         console.log(err);
         setError("Failed to load dashboard");
@@ -87,9 +80,7 @@ export default function AgentDashboard({ user, setPage }) {
       await navigator.clipboard.writeText(stats.store_link);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      alert("Copy failed");
-    }
+    } catch { alert("Copy failed"); }
   };
 
   const saveStoreName = async () => {
@@ -98,24 +89,20 @@ export default function AgentDashboard({ user, setPage }) {
     try {
       const res = await fetch(`${API_BASE}/agent/store-name`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: agentHeaders(),
         body: JSON.stringify({ agent_id: user.id, store_name: storeNameInput.trim() }),
       });
       const data = await res.json();
       if (data.status === "success") {
         const newName = storeNameInput.trim();
         setStoreName(newName);
-        setStats((prev) => ({
-          ...prev,
-          store_link: buildStoreLink(user.id, newName),
-        }));
+        setStats((prev) => ({ ...prev, store_link: buildStoreLink(user.id, newName) }));
         setStoreNameMsg("✅ Store name saved!");
       } else {
         setStoreNameMsg(data.error || "Failed to save");
       }
-    } catch {
-      setStoreNameMsg("Network error");
-    } finally {
+    } catch { setStoreNameMsg("Network error"); }
+    finally {
       setStoreNameSaving(false);
       setTimeout(() => setStoreNameMsg(""), 3000);
     }
@@ -123,13 +110,12 @@ export default function AgentDashboard({ user, setPage }) {
 
   const logout = () => {
     localStorage.clear();
+    sessionStorage.removeItem("agentToken");
     setPage("login");
   };
 
   return (
     <div style={styles.container}>
-
-      {/* HEADER */}
       <div style={styles.header}>
         <div style={styles.headerLeft}>
           <div style={styles.brand}>🚀 Agent Hub</div>
@@ -142,16 +128,12 @@ export default function AgentDashboard({ user, setPage }) {
       </div>
 
       <div style={styles.main}>
-
-        {/* WELCOME */}
         <div style={styles.welcomeRow}>
           <div>
             <h1 style={styles.title}>Welcome back 👋</h1>
             <p style={styles.subtitle}>@{user?.username}</p>
           </div>
-          <button style={styles.refreshBtn} onClick={() => window.location.reload()}>
-            🔄 Refresh
-          </button>
+          <button style={styles.refreshBtn} onClick={() => window.location.reload()}>🔄 Refresh</button>
         </div>
 
         {error && <div style={styles.errorBox}>⚠️ {error}</div>}
@@ -163,7 +145,6 @@ export default function AgentDashboard({ user, setPage }) {
           </div>
         ) : (
           <>
-            {/* WALLET HERO CARD */}
             <div style={styles.walletCard}>
               <div style={styles.walletTop}>
                 <div>
@@ -177,7 +158,6 @@ export default function AgentDashboard({ user, setPage }) {
               </button>
             </div>
 
-            {/* STATS GRID */}
             <div style={styles.statsGrid}>
               {[
                 { icon: "📈", label: "Total Profit", val: `GH₵ ${stats.total_profit.toFixed(2)}`, color: "#22c55e", bg: "rgba(34,197,94,0.1)", border: "rgba(34,197,94,0.25)" },
@@ -193,7 +173,6 @@ export default function AgentDashboard({ user, setPage }) {
               ))}
             </div>
 
-            {/* STORE LINK */}
             <div style={styles.storeLinkCard}>
               <div style={styles.storeLinkHeader}>
                 <span style={styles.storeLinkTitle}>🏪 Your Store Link</span>
@@ -201,16 +180,11 @@ export default function AgentDashboard({ user, setPage }) {
               </div>
               <div style={styles.storeLinkText}>{stats.store_link}</div>
               <div style={styles.storeLinkBtns}>
-                <button style={styles.copyBtn} onClick={copyLink}>
-                  {copied ? "✅ Copied!" : "📋 Copy Link"}
-                </button>
-                <button style={styles.visitBtn} onClick={() => window.open(stats.store_link, "_blank")}>
-                  🔗 Visit Store
-                </button>
+                <button style={styles.copyBtn} onClick={copyLink}>{copied ? "✅ Copied!" : "📋 Copy Link"}</button>
+                <button style={styles.visitBtn} onClick={() => window.open(stats.store_link, "_blank")}>🔗 Visit Store</button>
               </div>
             </div>
 
-            {/* STORE NAME */}
             <div style={styles.storeNameCard}>
               <div style={styles.storeNameHeader}>
                 <span style={styles.storeNameTitle}>✏️ Store Display Name</span>
@@ -221,8 +195,8 @@ export default function AgentDashboard({ user, setPage }) {
                 )}
               </div>
               <p style={styles.storeNameHint}>
-                This name appears on your store page and in your store link.
-                e.g. <span style={{ color: "#38bdf8", fontFamily: "monospace", fontSize: 11 }}>
+                This name appears on your store page and in your store link. e.g.{" "}
+                <span style={{ color: "#38bdf8", fontFamily: "monospace", fontSize: 11 }}>
                   /store/{user?.id}/{storeName ? slugify(storeName) : "your-store-name"}
                 </span>
               </p>
@@ -235,14 +209,9 @@ export default function AgentDashboard({ user, setPage }) {
                 style={styles.storeNameInput}
               />
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 11, color: "#475569" }}>
-                  {storeNameInput.length}/40 characters
-                </span>
+                <span style={{ fontSize: 11, color: "#475569" }}>{storeNameInput.length}/40 characters</span>
                 {storeNameMsg && (
-                  <span style={{
-                    fontSize: 12, fontWeight: 700,
-                    color: storeNameMsg.startsWith("✅") ? "#22c55e" : "#f87171"
-                  }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: storeNameMsg.startsWith("✅") ? "#22c55e" : "#f87171" }}>
                     {storeNameMsg}
                   </span>
                 )}
@@ -250,17 +219,12 @@ export default function AgentDashboard({ user, setPage }) {
               <button
                 onClick={saveStoreName}
                 disabled={storeNameSaving || storeNameInput.trim() === storeName}
-                style={{
-                  ...styles.storeNameBtn,
-                  opacity: storeNameSaving || storeNameInput.trim() === storeName ? 0.5 : 1,
-                  cursor: storeNameSaving || storeNameInput.trim() === storeName ? "not-allowed" : "pointer",
-                }}
+                style={{ ...styles.storeNameBtn, opacity: storeNameSaving || storeNameInput.trim() === storeName ? 0.5 : 1, cursor: storeNameSaving || storeNameInput.trim() === storeName ? "not-allowed" : "pointer" }}
               >
                 {storeNameSaving ? "Saving..." : "Save Store Name"}
               </button>
             </div>
 
-            {/* QUICK ACTIONS */}
             <div style={styles.actionsSection}>
               <h3 style={styles.sectionTitle}>Quick Actions</h3>
               <div style={styles.actionsGrid}>
@@ -270,11 +234,7 @@ export default function AgentDashboard({ user, setPage }) {
                   { icon: "💳", label: "Withdraw", desc: "Send to your MoMo", page: "agent-withdraw", color: "#22c55e", bg: "rgba(34,197,94,0.1)", border: "rgba(34,197,94,0.25)" },
                   { icon: "🏠", label: "Dashboard", desc: "Main account page", page: "dashboard", color: "#38bdf8", bg: "rgba(56,189,248,0.1)", border: "rgba(56,189,248,0.25)" },
                 ].map((a, i) => (
-                  <div
-                    key={i}
-                    style={{ ...styles.actionCard, background: a.bg, border: `1px solid ${a.border}` }}
-                    onClick={() => setPage(a.page)}
-                  >
+                  <div key={i} style={{ ...styles.actionCard, background: a.bg, border: `1px solid ${a.border}` }} onClick={() => setPage(a.page)}>
                     <div style={{ ...styles.actionIcon, color: a.color }}>{a.icon}</div>
                     <div style={{ ...styles.actionLabel, color: a.color }}>{a.label}</div>
                     <div style={styles.actionDesc}>{a.desc}</div>
@@ -283,13 +243,11 @@ export default function AgentDashboard({ user, setPage }) {
               </div>
             </div>
 
-            {/* TRANSACTIONS */}
             <div style={styles.txSection}>
               <div style={styles.txHeader}>
                 <h3 style={styles.sectionTitle}>Recent Transactions</h3>
                 <span style={styles.txCount}>{stats.transactions.length} total</span>
               </div>
-
               {stats.transactions.length === 0 ? (
                 <div style={styles.emptyTx}>
                   <div style={{ fontSize: 36, marginBottom: 8 }}>📭</div>
@@ -302,18 +260,11 @@ export default function AgentDashboard({ user, setPage }) {
                   const isWithdrawal = tx.type === "withdrawal";
                   return (
                     <div key={i} style={styles.txCard}>
-                      <div style={{
-                        ...styles.txIconWrap,
-                        background: isCredit ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)",
-                      }}>
-                        <span style={{ fontSize: 18 }}>
-                          {isCredit ? "📥" : isWithdrawal ? "💸" : "📤"}
-                        </span>
+                      <div style={{ ...styles.txIconWrap, background: isCredit ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)" }}>
+                        <span style={{ fontSize: 18 }}>{isCredit ? "📥" : isWithdrawal ? "💸" : "📤"}</span>
                       </div>
                       <div style={styles.txInfo}>
-                        <div style={styles.txType}>
-                          {isCredit ? "Commission Earned" : isWithdrawal ? "Withdrawal" : "Debit"}
-                        </div>
+                        <div style={styles.txType}>{isCredit ? "Commission Earned" : isWithdrawal ? "Withdrawal" : "Debit"}</div>
                         <div style={styles.txRef}>{tx.reference || "N/A"}</div>
                       </div>
                       <div style={{ ...styles.txAmount, color: isCredit ? "#22c55e" : "#ef4444" }}>
