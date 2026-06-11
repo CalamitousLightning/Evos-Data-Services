@@ -16,6 +16,7 @@ import OrderTracking from "./pages/OrderTracking";
 import ETATrack from "./pages/ETATrack";
 import AgentBuyData from "./pages/AgentBuyData";
 import AgentDeposit from "./pages/AgentDeposit";
+import ForgotPassword from "./pages/ForgotPassword";
 
 export default function App() {
   const [page, setPage] = useState("home");
@@ -76,6 +77,7 @@ export default function App() {
       "/admin-withdrawals": "admin-withdrawals",
       "/track": "track-order",
       "/eta-track": "eta-track",
+      "/forgot-password": "forgot-password",   // ← added
     };
 
     setPage(routeMap[path] || "home");
@@ -119,6 +121,7 @@ export default function App() {
       "track-order": "/track",
       "eta-track": "/eta-track",
       "order-tracking": "/eta-track",
+      "forgot-password": "/forgot-password",   // ← added
     };
 
     window.history.pushState({}, "", routes[target] || "/");
@@ -164,6 +167,8 @@ export default function App() {
       case "eta-track":
       case "order-tracking":
         return <ETATrack setPage={navigate} />;
+      case "forgot-password":                                     // ← added
+        return <ForgotPassword setPage={navigate} />;
       default:
         return <Home setPage={navigate} theme={theme} />;
     }
@@ -429,7 +434,6 @@ const brandSub = {
   textTransform: "uppercase",
 };
 
-// Animated hamburger button
 const menuIconStyle = {
   width: 38,
   height: 38,
@@ -463,7 +467,6 @@ const burgerLine = (open, index) => {
   return base;
 };
 
-// Dim overlay behind sidebar
 const sidebarOverlay = {
   position: "fixed",
   inset: 0,
@@ -472,7 +475,6 @@ const sidebarOverlay = {
   backdropFilter: "blur(2px)",
 };
 
-// Sliding sidebar
 const sidebar = (open) => ({
   position: "fixed",
   top: 0,
