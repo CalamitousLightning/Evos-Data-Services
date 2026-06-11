@@ -329,10 +329,10 @@ SDL_NETWORK_MAP = {
 }
 
 SDL_OFFER_SLUG = {
-    "MTN":        "mtn_data_bundle",
-    "TELECEL":    "telecel_data_bundle",
-    "AIRTELTIGO": "airteltigo_data_bundle",
-    "AT":         "airteltigo_data_bundle",
+    "MTN":        "mtn_data_normal_delivery",
+    "TELECEL":    "telecel_expiry_bundle",
+    "AIRTELTIGO": "ishare_data_bundle",
+    "AT":         "ishare_data_bundle",
 }
 
 # =========================
