@@ -23,6 +23,10 @@ from decimal import Decimal
 
 from passlib.context import CryptContext
 
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
 import uuid
 import asyncio
 import httpx
@@ -61,6 +65,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # =========================
 # ENV
 # =========================
@@ -85,6 +90,12 @@ MOOLRE_ACCOUNT_NUMBER = os.getenv("MOOLRE_ACCOUNT_NUMBER")
 SWIFT_DATA_LINK_API_KEY = os.getenv("SWIFT_DATA_LINK_API_KEY")
 SWIFT_DATA_LINK_BASE    = os.getenv("SWIFT_DATA_LINK_BASE", "https://swiftdata-link.com/api/v1")
 SWIFT_DATA_LINK_WEBHOOK = os.getenv("SWIFT_DATA_LINK_WEBHOOK_URL", "https://api.evosdata.xyz/webhook/swiftdatalink")
+
+
+SMTP_HOST     = os.getenv("SMTP_HOST", "mail.spacemail.com")
+SMTP_PORT     = int(os.getenv("SMTP_PORT", "465"))
+SMTP_USER     = os.getenv("SMTP_USER", "support@evoshub.xyz")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
 # ── Admin secret for protected endpoints ──
 ADMIN_SECRET = os.getenv("ADMIN_SECRET")  # set a strong random string in your env
@@ -916,15 +927,6 @@ async def startup_event():
 # =========================
 # SPACEMAIL SMTP
 # =========================
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-
-SMTP_HOST     = os.getenv("SMTP_HOST", "mail.spacemail.com")
-SMTP_PORT     = int(os.getenv("SMTP_PORT", "465"))
-SMTP_USER     = os.getenv("SMTP_USER", "support@evoshub.xyz")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-
 
 def send_otp_email(to_email: str, otp: str, full_name: str) -> bool:
     """Send OTP email via Spacemail SMTP. Returns True on success."""
