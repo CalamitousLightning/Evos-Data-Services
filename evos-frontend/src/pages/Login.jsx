@@ -35,11 +35,15 @@ export default function Login({ setUser, setPage }) {
         full_name: user.full_name || "",
         referral_code: user.referral_code || "",
         rank: user.rank || 1,
+        agent_token: user.agent_token || null,
       };
       localStorage.setItem("user", JSON.stringify(normalizedUser));
       localStorage.setItem("email", normalizedUser.email);
       localStorage.setItem("username", normalizedUser.username);
       localStorage.setItem("user_id", normalizedUser.id);
+      if (normalizedUser.agent_token) {
+        sessionStorage.setItem("agentToken", normalizedUser.agent_token);
+      }
       setUser(normalizedUser);
       if (normalizedUser.role === "agent" && normalizedUser.agent_status === "approved") {
         setPage("agent-dashboard");
@@ -55,19 +59,13 @@ export default function Login({ setUser, setPage }) {
 
   return (
     <div style={s.page}>
-      {/* Card */}
       <div style={s.card}>
-
-        {/* Logo / Brand */}
         <div style={s.brand}>
           <div style={s.brandDot} />
           <span style={s.brandName}>EVOS</span>
         </div>
-
         <h2 style={s.title}>Welcome back</h2>
         <p style={s.sub}>Sign in to your account</p>
-
-        {/* Inputs */}
         <div style={s.field}>
           <label style={s.label}>Username or Email</label>
           <input
@@ -79,7 +77,6 @@ export default function Login({ setUser, setPage }) {
             autoComplete="username"
           />
         </div>
-
         <div style={s.field}>
           <label style={s.label}>Password</label>
           <div style={s.passWrap}>
@@ -92,32 +89,15 @@ export default function Login({ setUser, setPage }) {
               onKeyDown={(e) => e.key === "Enter" && handleLogin()}
               autoComplete="current-password"
             />
-            <button
-              style={s.eyeBtn}
-              onClick={() => setShowPass(!showPass)}
-              tabIndex={-1}
-            >
+            <button style={s.eyeBtn} onClick={() => setShowPass(!showPass)} tabIndex={-1}>
               {showPass ? "🙈" : "👁"}
             </button>
           </div>
         </div>
-
-        {/* Forgot Password */}
-        <p
-          style={s.forgotLink}
-          onClick={() => setPage("forgot-password")}
-        >
+        <p style={s.forgotLink} onClick={() => setPage("forgot-password")}>
           Forgot password?
         </p>
-
-        {/* Error */}
-        {error && (
-          <div style={s.errorBox}>
-            {error}
-          </div>
-        )}
-
-        {/* Login Button */}
+        {error && <div style={s.errorBox}>{error}</div>}
         <button
           onClick={handleLogin}
           disabled={loading}
@@ -125,19 +105,14 @@ export default function Login({ setUser, setPage }) {
         >
           {loading ? "Signing in..." : "Sign In"}
         </button>
-
-        {/* Divider */}
         <div style={s.divider}>
           <div style={s.dividerLine} />
           <span style={s.dividerText}>or</span>
           <div style={s.dividerLine} />
         </div>
-
-        {/* Register */}
         <button style={s.registerBtn} onClick={() => setPage("register")}>
           Create an account
         </button>
-
         <p style={s.footer}>
           By signing in you agree to our{" "}
           <span style={s.footerLink}>Terms of Service</span>
@@ -148,164 +123,25 @@ export default function Login({ setUser, setPage }) {
 }
 
 const s = {
-  page: {
-    minHeight: "100vh",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "20px 16px",
-  },
-  card: {
-    width: "100%",
-    maxWidth: 400,
-    background: "rgba(15,23,42,0.92)",
-    backdropFilter: "blur(20px)",
-    WebkitBackdropFilter: "blur(20px)",
-    borderRadius: 24,
-    padding: "36px 28px",
-    border: "1px solid rgba(255,255,255,0.08)",
-    boxShadow: "0 32px 64px rgba(0,0,0,0.5)",
-    display: "flex",
-    flexDirection: "column",
-    gap: 0,
-  },
-  brand: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 24,
-    justifyContent: "center",
-  },
-  brandDot: {
-    width: 10,
-    height: 10,
-    borderRadius: "50%",
-    background: "#38bdf8",
-    boxShadow: "0 0 10px #38bdf8",
-  },
-  brandName: {
-    fontSize: 18,
-    fontWeight: 900,
-    color: "#38bdf8",
-    letterSpacing: "0.15em",
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 900,
-    color: "#e5e7eb",
-    margin: "0 0 6px",
-    textAlign: "center",
-  },
-  sub: {
-    fontSize: 13,
-    color: "#64748b",
-    textAlign: "center",
-    margin: "0 0 28px",
-  },
-  field: {
-    marginBottom: 16,
-  },
-  label: {
-    display: "block",
-    fontSize: 12,
-    color: "#94a3b8",
-    marginBottom: 6,
-    letterSpacing: "0.04em",
-    textTransform: "uppercase",
-  },
-  input: {
-    width: "100%",
-    padding: "13px 14px",
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.08)",
-    background: "rgba(2,6,23,0.7)",
-    color: "#e5e7eb",
-    fontSize: 14,
-    outline: "none",
-    boxSizing: "border-box",
-    marginBottom: 0,
-    transition: "border-color 0.15s",
-  },
-  passWrap: {
-    position: "relative",
-  },
-  eyeBtn: {
-    position: "absolute",
-    right: 12,
-    top: "50%",
-    transform: "translateY(-50%)",
-    background: "none",
-    border: "none",
-    cursor: "pointer",
-    fontSize: 16,
-    padding: 2,
-    lineHeight: 1,
-  },
-  forgotLink: {
-    textAlign: "right",
-    fontSize: 12,
-    color: "#38bdf8",
-    cursor: "pointer",
-    margin: "-8px 0 16px",
-    fontWeight: 600,
-  },
-  errorBox: {
-    background: "rgba(239,68,68,0.12)",
-    border: "1px solid rgba(239,68,68,0.35)",
-    color: "#f87171",
-    padding: "10px 14px",
-    borderRadius: 10,
-    fontSize: 13,
-    marginBottom: 16,
-    textAlign: "center",
-  },
-  btn: {
-    width: "100%",
-    padding: "14px",
-    borderRadius: 14,
-    border: "none",
-    background: "linear-gradient(135deg,#38bdf8,#0ea5e9)",
-    color: "#000",
-    fontWeight: 900,
-    fontSize: 15,
-    marginBottom: 16,
-    letterSpacing: "0.02em",
-  },
-  divider: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    marginBottom: 16,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    background: "rgba(255,255,255,0.07)",
-  },
-  dividerText: {
-    fontSize: 12,
-    color: "#475569",
-  },
-  registerBtn: {
-    width: "100%",
-    padding: "13px",
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.1)",
-    background: "transparent",
-    color: "#e5e7eb",
-    fontWeight: 700,
-    fontSize: 14,
-    cursor: "pointer",
-    marginBottom: 20,
-  },
-  footer: {
-    textAlign: "center",
-    fontSize: 11,
-    color: "#475569",
-    margin: 0,
-  },
-  footerLink: {
-    color: "#38bdf8",
-    cursor: "pointer",
-  },
+  page: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px 16px" },
+  card: { width: "100%", maxWidth: 400, background: "rgba(15,23,42,0.92)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderRadius: 24, padding: "36px 28px", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 32px 64px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column", gap: 0 },
+  brand: { display: "flex", alignItems: "center", gap: 8, marginBottom: 24, justifyContent: "center" },
+  brandDot: { width: 10, height: 10, borderRadius: "50%", background: "#38bdf8", boxShadow: "0 0 10px #38bdf8" },
+  brandName: { fontSize: 18, fontWeight: 900, color: "#38bdf8", letterSpacing: "0.15em" },
+  title: { fontSize: 24, fontWeight: 900, color: "#e5e7eb", margin: "0 0 6px", textAlign: "center" },
+  sub: { fontSize: 13, color: "#64748b", textAlign: "center", margin: "0 0 28px" },
+  field: { marginBottom: 16 },
+  label: { display: "block", fontSize: 12, color: "#94a3b8", marginBottom: 6, letterSpacing: "0.04em", textTransform: "uppercase" },
+  input: { width: "100%", padding: "13px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(2,6,23,0.7)", color: "#e5e7eb", fontSize: 14, outline: "none", boxSizing: "border-box", marginBottom: 0, transition: "border-color 0.15s" },
+  passWrap: { position: "relative" },
+  eyeBtn: { position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: 2, lineHeight: 1 },
+  forgotLink: { textAlign: "right", fontSize: 12, color: "#38bdf8", cursor: "pointer", margin: "-8px 0 16px", fontWeight: 600 },
+  errorBox: { background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.35)", color: "#f87171", padding: "10px 14px", borderRadius: 10, fontSize: 13, marginBottom: 16, textAlign: "center" },
+  btn: { width: "100%", padding: "14px", borderRadius: 14, border: "none", background: "linear-gradient(135deg,#38bdf8,#0ea5e9)", color: "#000", fontWeight: 900, fontSize: 15, marginBottom: 16, letterSpacing: "0.02em" },
+  divider: { display: "flex", alignItems: "center", gap: 10, marginBottom: 16 },
+  dividerLine: { flex: 1, height: 1, background: "rgba(255,255,255,0.07)" },
+  dividerText: { fontSize: 12, color: "#475569" },
+  registerBtn: { width: "100%", padding: "13px", borderRadius: 14, border: "1px solid rgba(255,255,255,0.1)", background: "transparent", color: "#e5e7eb", fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 20 },
+  footer: { textAlign: "center", fontSize: 11, color: "#475569", margin: 0 },
+  footerLink: { color: "#38bdf8", cursor: "pointer" },
 };
