@@ -14,37 +14,49 @@ const calcFee = (amount) => {
 const QUICK_AMOUNTS = [10, 20, 50, 100, 200, 500];
 
 export default function AgentDeposit({ user, setPage, authLoading }) {
-  const [amount, setAmount] = useState("");
+  const [amount, setAmount]             = useState("");
   const [walletBalance, setWalletBalance] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
+  const [loading, setLoading]           = useState(true);
+  const [submitting, setSubmitting]     = useState(false);
+  const [error, setError]               = useState("");
 
-  const numAmount = parseFloat(amount) || 0;
-  const fee = numAmount >= 1 ? calcFee(numAmount) : 0;
+  const numAmount  = parseFloat(amount) || 0;
+  const fee        = numAmount >= 1 ? calcFee(numAmount) : 0;
   const totalCharge = parseFloat((numAmount + fee).toFixed(2));
-  const isValid = numAmount >= 1;
+  const isValid    = numAmount >= 1;
+
+  // ── Retrieve the agent token saved at login ──
+  const agentToken = sessionStorage.getItem("agentToken") || localStorage.getItem("agentToken") || "";
 
   useEffect(() => {
-    if (authLoading) return;                          // wait for auth hydration
+    if (authLoading) return;
     if (!user) { setPage("login"); return; }
     if (user.role !== "agent" || user.agent_status !== "approved") {
       setPage("dashboard");
       return;
     }
+
     const loadBalance = async () => {
       try {
-        const res = await fetch(`${API}/agent/dashboard/${user.id}`);
+        const res = await fetch(`${API}/agent/dashboard/${user.id}`, {
+          headers: { "X-Agent-Token": agentToken },
+        });
         const data = await res.json();
+        if (res.status === 403) {
+          setError("Session expired. Please log in again.");
+          setPage("login");
+          return;
+        }
         setWalletBalance(Number(data.wallet_balance || 0));
       } catch {
-        // non-fatal
+        // non-fatal — balance stays 0
       } finally {
         setLoading(false);
       }
     };
+
     loadBalance();
-  }, [user, authLoading, setPage]);
+  }, [user, authLoading, setPage, agentToken]);
 
   // Don't render until auth is confirmed — prevents redirect flash
   if (authLoading) return null;
@@ -56,14 +68,24 @@ export default function AgentDeposit({ user, setPage, authLoading }) {
     try {
       const res = await fetch(`${API}/agent/deposit/initiate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Agent-Token": agentToken,
+        },
         body: JSON.stringify({
-          agent_id: user.id,
-          amount: numAmount,           // wallet credit amount
+          agent_id:     user.id,
+          amount:       numAmount,     // wallet credit amount
           total_charge: totalCharge,   // what Paystack charges
           fee,
         }),
       });
+
+      if (res.status === 403) {
+        setError("Session expired. Please log in again.");
+        setPage("login");
+        return;
+      }
+
       const data = await res.json();
       if (data.payment_url) {
         window.location.href = data.payment_url;
@@ -123,7 +145,7 @@ export default function AgentDeposit({ user, setPage, authLoading }) {
                   border: numAmount === q
                     ? "1px solid #38bdf8"
                     : "1px solid rgba(255,255,255,0.08)",
-                  color: numAmount === q ? "#000" : "#94a3b8",
+                  color:      numAmount === q ? "#000" : "#94a3b8",
                   fontWeight: numAmount === q ? 900 : 600,
                 }}
                 onClick={() => setAmount(String(q))}
@@ -181,7 +203,7 @@ export default function AgentDeposit({ user, setPage, authLoading }) {
             style={{
               ...s.payBtn,
               opacity: isValid && !submitting ? 1 : 0.4,
-              cursor: isValid && !submitting ? "pointer" : "not-allowed",
+              cursor:  isValid && !submitting ? "pointer" : "not-allowed",
             }}
           >
             {submitting
@@ -241,16 +263,16 @@ const s = {
     fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center",
     flexShrink: 0,
   },
-  headerMid: { flex: 1 },
+  headerMid:   { flex: 1 },
   headerTitle: { fontSize: 16, fontWeight: 900, color: "#f1f5f9" },
-  headerSub: { fontSize: 11, color: "#475569", fontWeight: 600, marginTop: 1 },
+  headerSub:   { fontSize: 11, color: "#475569", fontWeight: 600, marginTop: 1 },
   walletPill: {
     display: "flex", flexDirection: "column", alignItems: "flex-end",
     background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)",
     borderRadius: 12, padding: "6px 12px", flexShrink: 0,
   },
   walletPillLabel: { fontSize: 10, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px" },
-  walletPillVal: { fontSize: 14, fontWeight: 900, color: "#22c55e" },
+  walletPillVal:   { fontSize: 14, fontWeight: 900, color: "#22c55e" },
 
   main: { maxWidth: 480, margin: "0 auto", padding: "20px 16px 80px" },
 
@@ -260,10 +282,10 @@ const s = {
     border: "1px solid rgba(56,189,248,0.2)",
     borderRadius: 20, padding: "18px 20px", marginBottom: 18,
   },
-  heroIcon: { fontSize: 36, flexShrink: 0 },
-  heroText: { flex: 1 },
+  heroIcon:  { fontSize: 36, flexShrink: 0 },
+  heroText:  { flex: 1 },
   heroTitle: { fontSize: 16, fontWeight: 900, color: "#f1f5f9", marginBottom: 4 },
-  heroSub: { fontSize: 12, color: "#64748b", fontWeight: 600 },
+  heroSub:   { fontSize: 12, color: "#64748b", fontWeight: 600 },
 
   card: {
     background: "rgba(15,23,42,0.9)",
@@ -319,7 +341,7 @@ const s = {
     alignItems: "center", padding: "5px 0",
   },
   breakdownLabel: { fontSize: 13, color: "#64748b", fontWeight: 600 },
-  breakdownVal: { fontSize: 14, fontWeight: 800, color: "#e5e7eb" },
+  breakdownVal:   { fontSize: 14, fontWeight: 800, color: "#e5e7eb" },
   breakdownDivider: {
     height: 1, background: "rgba(255,255,255,0.07)", margin: "8px 0",
   },
