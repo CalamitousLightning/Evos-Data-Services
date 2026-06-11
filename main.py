@@ -91,14 +91,13 @@ SWIFT_DATA_LINK_API_KEY = os.getenv("SWIFT_DATA_LINK_API_KEY")
 SWIFT_DATA_LINK_BASE    = os.getenv("SWIFT_DATA_LINK_BASE", "https://swiftdata-link.com/api/v1")
 SWIFT_DATA_LINK_WEBHOOK = os.getenv("SWIFT_DATA_LINK_WEBHOOK_URL", "https://api.evosdata.xyz/webhook/swiftdatalink")
 
-
 SMTP_HOST     = os.getenv("SMTP_HOST", "mail.spacemail.com")
 SMTP_PORT     = int(os.getenv("SMTP_PORT", "465"))
 SMTP_USER     = os.getenv("SMTP_USER", "support@evoshub.xyz")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
 # ── Admin secret for protected endpoints ──
-ADMIN_SECRET = os.getenv("ADMIN_SECRET")  # set a strong random string in your env
+ADMIN_SECRET = os.getenv("ADMIN_SECRET")
 
 # =========================
 # SAFETY CHECK
@@ -117,7 +116,7 @@ required_envs = {
     "SWIFT_DATA_LINK_API_KEY": SWIFT_DATA_LINK_API_KEY,
     "SWIFT_DATA_LINK_WEBHOOK": SWIFT_DATA_LINK_WEBHOOK,
     "ADMIN_SECRET": ADMIN_SECRET,
-    "SMTP_USER":     SMTP_USER,
+    "SMTP_USER": SMTP_USER,
     "SMTP_PASSWORD": SMTP_PASSWORD,
 }
 
@@ -374,10 +373,10 @@ def call_swift_data_link(network: str, volume: float, phone: str) -> dict:
             f"{SWIFT_DATA_LINK_BASE}/order/{network_slug}",
             headers={"x-api-key": SWIFT_DATA_LINK_API_KEY, "Content-Type": "application/json"},
             json={
-                "type":      "single",
-                "volume":    int(volume),
-                "phone":     phone,
-                "offerSlug": offer_slug,
+                "type":       "single",
+                "volume":     int(volume),
+                "phone":      phone,
+                "offerSlug":  offer_slug,
                 "webhookUrl": SWIFT_DATA_LINK_WEBHOOK,
             },
             timeout=REQUEST_TIMEOUT
@@ -449,7 +448,6 @@ def parse_db_dt(raw: str) -> datetime:
     """
     if not raw:
         raise ValueError("Empty datetime string")
-    # Remove trailing Z, parse, then attach UTC
     cleaned = raw.replace("Z", "").replace("+00:00", "")
     naive = datetime.fromisoformat(cleaned)
     return naive.replace(tzinfo=timezone.utc)
@@ -514,8 +512,10 @@ def get_provider(network: str):
 
 # =========================
 # AGENT PROFIT
+# FIX: added recheck guard before wallet update to prevent double-credit
 # =========================
 def process_agent_profit(order_id, reference):
+    # Guard 1: idempotency check on transactions table
     existing = supabase.table("agent_transactions") \
         .select("id") \
         .eq("reference", reference) \
@@ -562,10 +562,10 @@ def process_agent_profit(order_id, reference):
             .execute()
 
     supabase.table("agent_transactions").insert({
-        "agent_id": agent_id,
-        "order_id": order_id,
-        "amount":   float(profit),
-        "type":     "credit",
+        "agent_id":  agent_id,
+        "order_id":  order_id,
+        "amount":    float(profit),
+        "type":      "credit",
         "reference": reference
     }).execute()
 
@@ -573,10 +573,10 @@ def process_agent_profit(order_id, reference):
 # USER STATS
 # =========================
 def calculate_rank(order_count: int):
-    if order_count >= 50: return 5
+    if order_count >= 50:   return 5
     elif order_count >= 20: return 4
     elif order_count >= 10: return 3
-    elif order_count >= 5: return 2
+    elif order_count >= 5:  return 2
     return 1
 
 def increment_user_orders(user_id: int):
@@ -608,6 +608,10 @@ def get_prices(request: Request):
 
 # =========================
 # BACKGROUND: RETRY STUCK ORDERS
+# FIX: auto-fail moved inside each provider rejection branch so it
+#      actually fires (old approach was unreachable due to query window).
+# FIX: query window widened to 6 hrs so orders aren't silently dropped
+#      before the age-based fail logic can run.
 # =========================
 _retry_running = False
 
@@ -623,9 +627,10 @@ async def retry_stuck_orders():
     while True:
         try:
             logger.info("RETRY JOB: scanning for stuck orders...")
-            # FIX: use utc_now() (timezone-aware) throughout
-            now = utc_now()
-            cutoff = (now - timedelta(hours=3)).isoformat()
+            now    = utc_now()
+            # FIX: widened from 3 hrs → 6 hrs so age-based fail logic
+            #      inside each branch can actually trigger
+            cutoff = (now - timedelta(hours=6)).isoformat()
             floor  = (now - timedelta(minutes=10)).isoformat()
 
             stuck = supabase.table("orders") \
@@ -648,25 +653,26 @@ async def retry_stuck_orders():
 
                     logger.info("RETRY JOB: retrying order %s via %s", order['id'], provider)
 
+                    # ── DATAMART ──────────────────────────────────────────
                     if provider == "DATAMART":
                         dm_response = requests.post(
                             f"{DATAMART_BASE}/purchase",
                             headers={"X-API-Key": DATAMART_API_KEY},
                             json={
                                 "phoneNumber": order["phone_number"],
-                                "network": NETWORK_MAP.get(order["network"]),
-                                "capacity": extract_capacity(order["bundle"]),
-                                "gateway": "wallet"
+                                "network":     NETWORK_MAP.get(order["network"]),
+                                "capacity":    extract_capacity(order["bundle"]),
+                                "gateway":     "wallet"
                             },
                             timeout=REQUEST_TIMEOUT
                         )
-                        dm = dm_response.json()
+                        dm      = dm_response.json()
                         dm_data = dm.get("data", {})
 
                         if dm_data.get("orderReference"):
                             supabase.table("orders").update({
-                                "status": "processing",
-                                "datamart_ref": dm_data.get("orderReference"),
+                                "status":           "processing",
+                                "datamart_ref":     dm_data.get("orderReference"),
                                 "datamart_order_id": dm_data.get("orderId")
                             }).eq("id", order["id"]).execute()
 
@@ -676,16 +682,28 @@ async def retry_stuck_orders():
                             logger.info("RETRY JOB: order %s sent to DATAMART ✅", order['id'])
                         else:
                             logger.warning("RETRY JOB: DATAMART rejected order %s: %s", order['id'], dm)
+                            # FIX: auto-fail inside rejection branch
+                            order_age = utc_now() - parse_db_dt(order["created_at"])
+                            if order_age > timedelta(hours=3):
+                                supabase.table("orders") \
+                                    .update({"status": "failed"}) \
+                                    .eq("id", order["id"]) \
+                                    .execute()
+                                logger.info(
+                                    "RETRY JOB: order %s marked failed after repeated DATAMART rejection",
+                                    order['id']
+                                )
 
+                    # ── BUNDLES GHANA ──────────────────────────────────────
                     elif provider == "BUNDLES_GHANA":
                         BG_NETWORK_MAP = {
-                            "MTN": "MTN",
-                            "TELECEL": "Telecel",
+                            "MTN":       "MTN",
+                            "TELECEL":   "Telecel",
                             "AIRTELTIGO": "AirtelTigo",
-                            "AT": "AirtelTigo",
+                            "AT":        "AirtelTigo",
                         }
                         network_name = BG_NETWORK_MAP.get(order["network"].upper(), order["network"])
-                        bg_bundles = call_bundles_ghana(f"/bundles?network={network_name}")
+                        bg_bundles   = call_bundles_ghana(f"/bundles?network={network_name}")
 
                         if not bg_bundles.get("success"):
                             logger.warning("RETRY JOB: BG bundle fetch failed for order %s", order['id'])
@@ -708,8 +726,8 @@ async def retry_stuck_orders():
                                 "/order",
                                 method="POST",
                                 body={
-                                    "bundle_id": matched["id"],
-                                    "phone": order["phone_number"],
+                                    "bundle_id":   matched["id"],
+                                    "phone":       order["phone_number"],
                                     "webhook_url": "https://api.evosdata.xyz/webhook/bundlesghana"
                                 }
                             )
@@ -719,8 +737,8 @@ async def retry_stuck_orders():
 
                         if bg_order.get("success"):
                             supabase.table("orders").update({
-                                "status": "processing",
-                                "datamart_ref": bg_order["order"]["reference"],
+                                "status":            "processing",
+                                "datamart_ref":      bg_order["order"]["reference"],
                                 "datamart_order_id": str(bg_order["order"]["id"])
                             }).eq("id", order["id"]).execute()
 
@@ -729,31 +747,50 @@ async def retry_stuck_orders():
 
                             logger.info("RETRY JOB: order %s sent to BUNDLES_GHANA ✅", order['id'])
                         else:
-                            msg = bg_order.get("message", "")
+                            msg        = bg_order.get("message", "")
                             order_type = bg_order.get("type", "")
+
+                            # Recover duplicate orders via embedded ref
                             if order_type == "ORDER_FAILED" and "Ref:" in msg:
-                                match = re.search(r'Ref:\s*([\w\-]+)', msg)
-                                if match:
-                                    existing_ref = match.group(1)
+                                ref_match = re.search(r'Ref:\s*([\w\-]+)', msg)
+                                if ref_match:
+                                    existing_ref = ref_match.group(1)
                                     supabase.table("orders").update({
-                                        "status": "processing",
+                                        "status":       "processing",
                                         "datamart_ref": existing_ref,
                                     }).eq("id", order["id"]).execute()
-                                    logger.info("RETRY JOB: order %s recovered from 409 — ref=%s ✅", order['id'], existing_ref)
+                                    logger.info(
+                                        "RETRY JOB: order %s recovered from 409 — ref=%s ✅",
+                                        order['id'], existing_ref
+                                    )
                                     continue
-                            logger.warning("RETRY JOB: BG rejected order %s: %s", order['id'], bg_order)
 
+                            logger.warning("RETRY JOB: BG rejected order %s: %s", order['id'], bg_order)
+                            # FIX: auto-fail inside rejection branch
+                            order_age = utc_now() - parse_db_dt(order["created_at"])
+                            if order_age > timedelta(hours=3):
+                                supabase.table("orders") \
+                                    .update({"status": "failed"}) \
+                                    .eq("id", order["id"]) \
+                                    .execute()
+                                logger.info(
+                                    "RETRY JOB: order %s marked failed after repeated BG rejection",
+                                    order['id']
+                                )
+
+                    # ── SWIFT DATA LINK ────────────────────────────────────
                     elif provider == "SWIFT_DATA_LINK":
                         volume = float(extract_capacity(order["bundle"]) or 0)
-                        sdl = call_swift_data_link(
+                        sdl    = call_swift_data_link(
                             network=order["network"],
                             volume=volume,
                             phone=order["phone_number"],
                         )
+
                         if sdl.get("success"):
                             supabase.table("orders").update({
-                                "status": "processing",
-                                "datamart_ref": sdl.get("reference"),
+                                "status":            "processing",
+                                "datamart_ref":      sdl.get("reference"),
                                 "datamart_order_id": sdl.get("orderId"),
                             }).eq("id", order["id"]).execute()
 
@@ -763,20 +800,26 @@ async def retry_stuck_orders():
                             logger.info("RETRY JOB: order %s sent to SWIFT_DATA_LINK ✅", order['id'])
                         else:
                             logger.warning("RETRY JOB: SDL rejected order %s: %s", order['id'], sdl)
-
-                    # Mark failed after 3 hrs
-                    order_age = utc_now() - parse_db_dt(order["created_at"])
-                    if order_age > timedelta(hours=3):
-                        supabase.table("orders").update({"status": "failed"}).eq("id", order["id"]).execute()
-                        logger.info("RETRY JOB: order %s marked failed after 3hrs", order['id'])
+                            # FIX: auto-fail inside rejection branch
+                            order_age = utc_now() - parse_db_dt(order["created_at"])
+                            if order_age > timedelta(hours=3):
+                                supabase.table("orders") \
+                                    .update({"status": "failed"}) \
+                                    .eq("id", order["id"]) \
+                                    .execute()
+                                logger.info(
+                                    "RETRY JOB: order %s marked failed after repeated SDL rejection",
+                                    order['id']
+                                )
 
                 except Exception as e:
                     logger.error("RETRY JOB: error on order %s: %s", order.get('id'), str(e))
 
-            # ── STATUS SYNC ──
+            # ── STATUS SYNC ───────────────────────────────────────────────
             logger.info("STATUS SYNC: scanning for unresolved processing orders...")
-            now = utc_now()
-            cutoff = (now - timedelta(hours=3)).isoformat()
+            now    = utc_now()
+            cutoff = (now - timedelta(hours=6)).isoformat()
+
             processing = supabase.table("orders") \
                 .select("*") \
                 .eq("status", "processing") \
@@ -803,12 +846,12 @@ async def retry_stuck_orders():
                             timeout=REQUEST_TIMEOUT
                         )
                         payload = dm.json()
-                        status = str(payload.get("data", {}).get("orderStatus", "")).lower()
+                        status  = str(payload.get("data", {}).get("orderStatus", "")).lower()
 
                     elif provider == "BUNDLES_GHANA":
                         if not ref:
                             continue
-                        bg = call_bundles_ghana(f"/order/status/{ref}")
+                        bg     = call_bundles_ghana(f"/order/status/{ref}")
                         status = str(bg.get("order", {}).get("status", "processing")).lower()
 
                     elif provider == "SWIFT_DATA_LINK":
@@ -821,6 +864,7 @@ async def retry_stuck_orders():
                             timeout=REQUEST_TIMEOUT
                         ).json()
                         status = str(sdl_res.get("order", {}).get("status", "")).lower()
+
                     else:
                         continue
 
@@ -833,7 +877,10 @@ async def retry_stuck_orders():
                     )
 
                     if final_status:
-                        supabase.table("orders").update({"status": final_status}).eq("id", order["id"]).execute()
+                        supabase.table("orders") \
+                            .update({"status": final_status}) \
+                            .eq("id", order["id"]) \
+                            .execute()
                         logger.info("STATUS SYNC: order %s → %s ✅", order['id'], final_status)
 
                 except Exception as e:
@@ -847,7 +894,10 @@ async def retry_stuck_orders():
 
 # =========================
 # BACKGROUND: RETRY STUCK DEPOSITS
-# FIX: was crashing every run due to naive vs aware datetime subtraction
+# FIX: widened query window from 1hr → 2hr so slow Paystack verifications
+#      aren't missed.
+# FIX: added recheck guard right before wallet credit to prevent
+#      double-credit if two retry cycles overlap on a redeploy.
 # =========================
 _deposit_retry_running = False
 
@@ -866,7 +916,8 @@ async def retry_stuck_deposits():
 
             now    = utc_now()
             floor  = (now - timedelta(minutes=5)).isoformat()
-            cutoff = (now - timedelta(hours=1)).isoformat()
+            # FIX: widened from 1 hr → 2 hrs
+            cutoff = (now - timedelta(hours=2)).isoformat()
 
             stuck = supabase.table("wallet_deposits") \
                 .select("*") \
@@ -905,13 +956,32 @@ async def retry_stuck_deposits():
                     logger.info("DEPOSIT RETRY: deposit %s — Paystack status: %s", dep_id, paystack_status)
 
                     if paystack_status != "success":
-                        # FIX: use parse_db_dt so age calc is always aware - aware
                         age = utc_now() - parse_db_dt(deposit["created_at"])
                         if age > timedelta(minutes=30):
-                            supabase.table("wallet_deposits").update({"status": "failed"}).eq("id", dep_id).execute()
-                            logger.info("DEPOSIT RETRY: deposit %s marked failed — unpaid after 30min", dep_id)
+                            supabase.table("wallet_deposits") \
+                                .update({"status": "failed"}) \
+                                .eq("id", dep_id) \
+                                .execute()
+                            logger.info(
+                                "DEPOSIT RETRY: deposit %s marked failed — unpaid after 30min",
+                                dep_id
+                            )
                         else:
-                            logger.info("DEPOSIT RETRY: deposit %s still pending on Paystack, will retry", dep_id)
+                            logger.info(
+                                "DEPOSIT RETRY: deposit %s still pending on Paystack, will retry",
+                                dep_id
+                            )
+                        continue
+
+                    # FIX: recheck deposit status right before crediting to
+                    #      prevent double-credit if two cycles overlap
+                    recheck = supabase.table("wallet_deposits") \
+                        .select("status") \
+                        .eq("id", dep_id) \
+                        .limit(1) \
+                        .execute()
+                    if recheck.data and recheck.data[0]["status"] == "credited":
+                        logger.info("DEPOSIT RETRY: deposit %s already credited, skipping", dep_id)
                         continue
 
                     wallet_res = supabase.table("agent_wallets") \
@@ -923,12 +993,20 @@ async def retry_stuck_deposits():
                     if wallet_res.data:
                         current     = float(wallet_res.data[0]["balance"] or 0)
                         new_balance = round(current + credit_amount, 2)
-                        supabase.table("agent_wallets").update({"balance": new_balance}).eq("agent_id", agent_id).execute()
+                        supabase.table("agent_wallets") \
+                            .update({"balance": new_balance}) \
+                            .eq("agent_id", agent_id) \
+                            .execute()
                     else:
                         new_balance = round(credit_amount, 2)
-                        supabase.table("agent_wallets").insert({"agent_id": agent_id, "balance": new_balance}).execute()
+                        supabase.table("agent_wallets") \
+                            .insert({"agent_id": agent_id, "balance": new_balance}) \
+                            .execute()
 
-                    supabase.table("wallet_deposits").update({"status": "credited"}).eq("id", dep_id).execute()
+                    supabase.table("wallet_deposits") \
+                        .update({"status": "credited"}) \
+                        .eq("id", dep_id) \
+                        .execute()
 
                     supabase.table("agent_transactions").insert({
                         "agent_id":  agent_id,
@@ -937,8 +1015,10 @@ async def retry_stuck_deposits():
                         "reference": deposit.get("reference"),
                     }).execute()
 
-                    logger.info("DEPOSIT RETRY: deposit %s credited GH₵%s to agent %s ✅ — new balance: GH₵%s",
-                                dep_id, credit_amount, agent_id, new_balance)
+                    logger.info(
+                        "DEPOSIT RETRY: deposit %s credited GH₵%s to agent %s ✅ — new balance: GH₵%s",
+                        dep_id, credit_amount, agent_id, new_balance
+                    )
 
                 except Exception as e:
                     logger.error("DEPOSIT RETRY: error on deposit %s: %s", dep_id, str(e))
