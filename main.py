@@ -106,6 +106,8 @@ required_envs = {
     "SWIFT_DATA_LINK_API_KEY": SWIFT_DATA_LINK_API_KEY,
     "SWIFT_DATA_LINK_WEBHOOK": SWIFT_DATA_LINK_WEBHOOK,
     "ADMIN_SECRET": ADMIN_SECRET,
+    "SMTP_USER":     SMTP_USER,
+    "SMTP_PASSWORD": SMTP_PASSWORD,
 }
 
 missing = [k for k, v in required_envs.items() if not v]
@@ -911,6 +913,60 @@ async def startup_event():
     asyncio.create_task(retry_stuck_deposits())
 
 
+# =========================
+# SPACEMAIL SMTP
+# =========================
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
+SMTP_HOST     = os.getenv("SMTP_HOST", "mail.spacemail.com")
+SMTP_PORT     = int(os.getenv("SMTP_PORT", "465"))
+SMTP_USER     = os.getenv("SMTP_USER", "support@evoshub.xyz")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+
+
+def send_otp_email(to_email: str, otp: str, full_name: str) -> bool:
+    """Send OTP email via Spacemail SMTP. Returns True on success."""
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "EVOS Data Hub — Password Reset OTP"
+        msg["From"]    = f"EVOS Data Hub <{SMTP_USER}>"
+        msg["To"]      = to_email
+
+        html = f"""
+        <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;
+                    padding:24px;border:1px solid #eee;border-radius:8px;">
+            <h2 style="color:#1a1a1a;">Password Reset</h2>
+            <p>Hi <strong>{full_name}</strong>,</p>
+            <p>Use the OTP below to reset your EVOS Data Hub password.
+               It expires in <strong>10 minutes</strong>.</p>
+            <div style="font-size:36px;font-weight:bold;letter-spacing:8px;
+                        text-align:center;padding:16px;background:#f4f4f4;
+                        border-radius:6px;margin:24px 0;">
+                {otp}
+            </div>
+            <p style="color:#888;font-size:13px;">
+                If you didn't request this, ignore this email.
+                Your password won't change.
+            </p>
+            <p style="color:#888;font-size:13px;">— EVOS Data Hub Team</p>
+        </div>
+        """
+
+        msg.attach(MIMEText(html, "html"))
+
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(SMTP_USER, to_email, msg.as_string())
+
+        logger.info("OTP EMAIL: sent to %s", to_email)
+        return True
+
+    except Exception as e:
+        logger.error("SPACEMAIL SMTP ERROR: %s", str(e))
+        return False
+        
 # =========================
 # ORDERS
 # =========================
