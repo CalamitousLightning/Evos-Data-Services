@@ -1,4 +1,3 @@
-
 import { useState } from "react";
 import { loginUser } from "../api";
 
@@ -102,6 +101,14 @@ export default function Login({ setUser, setPage }) {
             </button>
           </div>
         </div>
+
+        {/* Forgot Password */}
+        <p
+          style={s.forgotLink}
+          onClick={() => setPage("forgot-password")}
+        >
+          Forgot password?
+        </p>
 
         {/* Error */}
         {error && (
@@ -233,6 +240,14 @@ const s = {
     fontSize: 16,
     padding: 2,
     lineHeight: 1,
+  },
+  forgotLink: {
+    textAlign: "right",
+    fontSize: 12,
+    color: "#38bdf8",
+    cursor: "pointer",
+    margin: "-8px 0 16px",
+    fontWeight: 600,
   },
   errorBox: {
     background: "rgba(239,68,68,0.12)",
