@@ -1,4 +1,3 @@
-
 from fastapi import FastAPI, Request, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -8,6 +7,7 @@ from slowapi.errors import RateLimitExceeded
 
 import os
 import re
+import base64
 import requests
 import hmac
 import hashlib
@@ -156,6 +156,37 @@ def require_admin(request: Request):
     secret = request.headers.get("X-Admin-Secret", "")
     if not secret or not hmac.compare_digest(secret, ADMIN_SECRET):
         raise HTTPException(status_code=403, detail="Forbidden")
+
+# =========================
+# AGENT TOKEN AUTH
+# FIX: prevents IDOR — agents can only access their own data
+# =========================
+def make_agent_token(agent_id: int) -> str:
+    """Create a simple HMAC-signed token: base64(agent_id).signature"""
+    msg = str(agent_id).encode()
+    sig = hmac.new(ADMIN_SECRET.encode(), msg, hashlib.sha256).hexdigest()
+    payload = base64.urlsafe_b64encode(msg).decode()
+    return f"{payload}.{sig}"
+
+def verify_agent_token(token: str, agent_id: int) -> bool:
+    """Return True only if token was signed for this exact agent_id."""
+    try:
+        payload, sig = token.rsplit(".", 1)
+        msg = base64.urlsafe_b64decode(payload.encode())
+        expected_id = int(msg.decode())
+        if expected_id != agent_id:
+            return False
+        expected_sig = hmac.new(ADMIN_SECRET.encode(), msg, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(sig, expected_sig)
+    except Exception:
+        return False
+
+def require_agent(request: Request, agent_id: int) -> int:
+    """Verify caller owns this agent_id via X-Agent-Token header."""
+    token = request.headers.get("X-Agent-Token", "")
+    if not token or not verify_agent_token(token, agent_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return agent_id
 
 # =========================
 # MODELS
@@ -968,7 +999,7 @@ def send_otp_email(to_email: str, otp: str, full_name: str) -> bool:
     except Exception as e:
         logger.error("SPACEMAIL SMTP ERROR: %s", str(e))
         return False
-        
+
 # =========================
 # ORDERS
 # =========================
@@ -1448,10 +1479,11 @@ def get_user(request: Request, user_id: int):
 
 # =========================
 # AGENT DASHBOARD
+# FIX: added require_agent dependency to prevent IDOR
 # =========================
 @app.get("/agent/dashboard/{agent_id}")
 @limiter.limit("30/minute")
-async def agent_dashboard(request: Request, agent_id: int):
+async def agent_dashboard(request: Request, agent_id: int, _: int = Depends(require_agent)):
     user = supabase.table("users").select("role, agent_status").eq("id", agent_id).limit(1).execute()
     if not user.data:
         return {"error": "User not found"}
@@ -1475,18 +1507,20 @@ async def agent_dashboard(request: Request, agent_id: int):
     }
 
 
+# FIX: added require_agent dependency to prevent IDOR
 @app.get("/agent/wallet/{agent_id}")
 @limiter.limit("30/minute")
-async def get_wallet(request: Request, agent_id: int):
+async def get_wallet(request: Request, agent_id: int, _: int = Depends(require_agent)):
     wallet = supabase.table("agent_wallets").select("*").eq("agent_id", agent_id).limit(1).execute()
     if not wallet.data:
         return {"agent_id": agent_id, "balance": 0}
     return wallet.data[0]
 
 
+# FIX: added require_agent dependency to prevent IDOR
 @app.get("/agent/transactions/{agent_id}")
 @limiter.limit("30/minute")
-async def agent_transactions(request: Request, agent_id: int):
+async def agent_transactions(request: Request, agent_id: int, _: int = Depends(require_agent)):
     res = supabase.table("agent_transactions") \
         .select("*") \
         .eq("agent_id", agent_id) \
@@ -1496,9 +1530,10 @@ async def agent_transactions(request: Request, agent_id: int):
     return {"transactions": res.data or []}
 
 
+# FIX: added require_agent dependency to prevent IDOR
 @app.get("/agent/sales/{agent_id}")
 @limiter.limit("30/minute")
-async def agent_sales(request: Request, agent_id: int):
+async def agent_sales(request: Request, agent_id: int, _: int = Depends(require_agent)):
     orders = supabase.table("orders") \
         .select("id, agent_price, base_price, created_at") \
         .eq("agent_id", agent_id) \
@@ -1514,10 +1549,16 @@ async def agent_sales(request: Request, agent_id: int):
 
 # =========================
 # AGENT WITHDRAW
+# FIX: added require_agent token check on agent_id from payload
 # =========================
 @app.post("/agent/withdraw")
 @limiter.limit("5/minute")
 async def request_withdrawal(request: Request, payload: WithdrawRequest):
+    # Verify the caller owns this agent_id
+    token = request.headers.get("X-Agent-Token", "")
+    if not token or not verify_agent_token(token, payload.agent_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
     agent_id      = payload.agent_id
     amount        = payload.amount
     mobile_number = payload.mobile_number
@@ -1606,6 +1647,7 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
 
 # =========================
 # WITHDRAWAL STATUS CHECK
+# FIX: verify agent owns the withdrawal before returning data
 # =========================
 @app.get("/agent/withdrawal/status/{withdrawal_id}")
 @limiter.limit("20/minute")
@@ -1615,7 +1657,13 @@ async def check_withdrawal_status(request: Request, withdrawal_id: int):
         if not wd.data:
             return {"error": "Withdrawal not found"}
 
-        row        = wd.data[0]
+        row = wd.data[0]
+
+        # FIX: verify the caller owns this withdrawal via their agent token
+        token = request.headers.get("X-Agent-Token", "")
+        if not token or not verify_agent_token(token, row["agent_id"]):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
         moolre_ref = row.get("moolre_ref")
 
         if not moolre_ref or row.get("status") in ["paid", "failed", "rejected"]:
@@ -1642,6 +1690,8 @@ async def check_withdrawal_status(request: Request, withdrawal_id: int):
                         }).eq("agent_id", row["agent_id"]).execute()
 
         return {"status": final_status, "withdrawal": row}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("WITHDRAWAL STATUS ERROR: %s", str(e))
         return {"error": "Failed to check status"}
@@ -1704,7 +1754,7 @@ async def moolre_webhook(request: Request):
 
 
 # =========================
-# ADMIN WITHDRAWALS — NOW PROTECTED
+# ADMIN WITHDRAWALS — PROTECTED
 # FIX: these were completely open before. Now require X-Admin-Secret header.
 # =========================
 @app.post("/admin/withdrawals/{withdrawal_id}/paid")
@@ -1732,10 +1782,11 @@ async def reject_withdrawal(withdrawal_id: int, _: None = Depends(require_admin)
 
 # =========================
 # AGENT PRICING
+# FIX: added require_agent dependency to prevent IDOR
 # =========================
 @app.get("/agent/pricing/{agent_id}")
 @limiter.limit("30/minute")
-def get_agent_pricing(request: Request, agent_id: str):
+def get_agent_pricing(request: Request, agent_id: str, _: int = Depends(require_agent)):
     try:
         base_res     = supabase.table("base_prices").select("*").execute()
         base_prices  = base_res.data or []
@@ -1772,6 +1823,7 @@ def get_agent_pricing(request: Request, agent_id: str):
         return {"status": "error", "prices": []}
 
 
+# FIX: added require_agent token check on agent_id from payload
 @app.post("/agent/pricing/save")
 @limiter.limit("10/minute")
 def save_agent_pricing(request: Request, payload: dict):
@@ -1781,6 +1833,15 @@ def save_agent_pricing(request: Request, payload: dict):
 
         if not agent_id:
             return {"status": "failed", "message": "agent_id required"}
+
+        # Verify ownership
+        token = request.headers.get("X-Agent-Token", "")
+        try:
+            agent_id_int = int(agent_id)
+        except ValueError:
+            return {"status": "failed", "message": "Invalid agent_id"}
+        if not token or not verify_agent_token(token, agent_id_int):
+            raise HTTPException(status_code=403, detail="Forbidden")
 
         supabase.table("agent_prices").delete().eq("agent_id", agent_id).execute()
 
@@ -1798,6 +1859,8 @@ def save_agent_pricing(request: Request, payload: dict):
             supabase.table("agent_prices").insert(rows).execute()
 
         return {"status": "success"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("SAVE AGENT PRICING ERROR: %s", str(e))
         return {"status": "failed", "message": "Unable to save pricing"}
@@ -1805,11 +1868,17 @@ def save_agent_pricing(request: Request, payload: dict):
 
 # =========================
 # AGENT WALLET DEPOSIT
+# FIX: added require_agent token check on agent_id from payload
 # =========================
 @app.post("/agent/deposit/initiate")
 @limiter.limit("10/minute")
 async def initiate_deposit(request: Request, payload: DepositInitiateRequest):
     try:
+        # Verify ownership
+        token = request.headers.get("X-Agent-Token", "")
+        if not token or not verify_agent_token(token, payload.agent_id):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
         agent_id     = payload.agent_id
         amount       = payload.amount
         total_charge = payload.total_charge
@@ -1855,6 +1924,8 @@ async def initiate_deposit(request: Request, payload: DepositInitiateRequest):
         }).execute()
 
         return {"status": "created", "reference": reference, "payment_url": data["data"]["authorization_url"]}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("DEPOSIT INITIATE ERROR: %s", str(e))
         return {"error": "Failed to initiate deposit"}
@@ -1875,6 +1946,11 @@ async def verify_deposit(request: Request, payload: dict):
             return {"error": "Deposit record not found"}
 
         deposit = existing.data[0]
+
+        # Verify the caller owns this deposit
+        token = request.headers.get("X-Agent-Token", "")
+        if not token or not verify_agent_token(token, deposit["agent_id"]):
+            raise HTTPException(status_code=403, detail="Forbidden")
 
         if deposit.get("status") == "credited":
             wallet_res = supabase.table("agent_wallets").select("balance").eq("agent_id", deposit["agent_id"]).limit(1).execute()
@@ -1915,6 +1991,8 @@ async def verify_deposit(request: Request, payload: dict):
         }).execute()
 
         return {"status": "credited", "credited_amount": credit_amount, "wallet_balance": new_balance}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("DEPOSIT VERIFY ERROR: %s", str(e))
         return {"error": "Verification failed"}
@@ -1922,11 +2000,17 @@ async def verify_deposit(request: Request, payload: dict):
 
 # =========================
 # AGENT BUY DATA
+# FIX: added require_agent token check on agent_id from payload
 # =========================
 @app.post("/agent/buy-data")
 @limiter.limit("10/minute")
 async def agent_buy_data(request: Request, payload: AgentBuyDataRequest):
     try:
+        # Verify ownership
+        token = request.headers.get("X-Agent-Token", "")
+        if not token or not verify_agent_token(token, payload.agent_id):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
         agent_id     = payload.agent_id
         network      = payload.network
         bundle       = payload.bundle
@@ -2058,6 +2142,8 @@ async def agent_buy_data(request: Request, payload: AgentBuyDataRequest):
             "order_id":           order_id,
             "new_wallet_balance": new_balance,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("AGENT BUY DATA ERROR: %s", str(e))
         return {"status": "error", "message": "Something went wrong. Please try again."}
@@ -2113,6 +2199,7 @@ async def public_agent_store(request: Request, agent_id: int):
         return {"status": "error", "message": "Failed to load store"}
 
 
+# FIX: added require_agent token check on agent_id from payload
 @app.post("/agent/store-name")
 @limiter.limit("10/minute")
 async def save_store_name(request: Request, payload: dict):
@@ -2121,23 +2208,38 @@ async def save_store_name(request: Request, payload: dict):
         store_name = str(payload.get("store_name", "")).strip()
         if not agent_id:
             return {"error": "agent_id required"}
+
+        # Verify ownership
+        token = request.headers.get("X-Agent-Token", "")
+        try:
+            agent_id_int = int(agent_id)
+        except (ValueError, TypeError):
+            return {"error": "Invalid agent_id"}
+        if not token or not verify_agent_token(token, agent_id_int):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
         if len(store_name) > 40:
             return {"error": "Store name must be 40 characters or less"}
         supabase.table("users").update({"store_name": store_name or None}).eq("id", agent_id).execute()
         return {"status": "success", "store_name": store_name}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("SAVE STORE NAME ERROR: %s", str(e))
         return {"error": "Failed to save store name"}
 
 
+# FIX: added require_agent dependency to prevent IDOR
 @app.get("/agent/store-name/{agent_id}")
 @limiter.limit("30/minute")
-async def get_store_name(request: Request, agent_id: int):
+async def get_store_name(request: Request, agent_id: int, _: int = Depends(require_agent)):
     try:
         res = supabase.table("users").select("store_name, username").eq("id", agent_id).limit(1).execute()
         if not res.data:
             return {"error": "Agent not found"}
         return {"store_name": res.data[0].get("store_name") or "", "username": res.data[0].get("username") or ""}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("GET STORE NAME ERROR: %s", str(e))
         return {"error": "Failed to fetch store name"}
@@ -2277,6 +2379,7 @@ def register(request: Request, data: RegisterRequest):
         raise HTTPException(status_code=500, detail="Server error")
 
 
+# FIX: login now returns agent_token for approved agents, used by require_agent on all protected endpoints
 @app.post("/auth/login")
 @limiter.limit("10/minute")
 def login(request: Request, data: LoginRequest):
@@ -2315,6 +2418,10 @@ def login(request: Request, data: LoginRequest):
             "rank":          user.get("rank", 1),
             "role":          user.get("role", "user"),
             "agent_status":  user.get("agent_status", "pending"),
+            # Provide token only to approved agents; frontend stores and sends as X-Agent-Token header
+            "agent_token":   make_agent_token(user["id"]) if (
+                user.get("role") == "agent" and user.get("agent_status") == "approved"
+            ) else None,
         }
         return {"status": "ok", "user": user_data}
 
@@ -2458,8 +2565,6 @@ async def ussd(request: Request):
         return "END EVOS Support:\nWhatsApp: +233208718943"
 
     return "END Invalid request"
-
-
 
 
 # =========================
@@ -2632,7 +2737,7 @@ def reset_password(request: Request, data: ResetPasswordRequest):
     except Exception as e:
         logger.error("RESET PASSWORD ERROR: %s", str(e))
         raise HTTPException(status_code=500, detail="Server error")
-        
+
 
 # =========================
 # WHATSAPP WEBHOOK
