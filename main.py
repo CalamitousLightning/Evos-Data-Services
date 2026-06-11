@@ -2460,6 +2460,180 @@ async def ussd(request: Request):
     return "END Invalid request"
 
 
+
+
+# =========================
+# FORGOT / RESET PASSWORD
+# =========================
+import random
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class VerifyOTPRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(min_length=6, max_length=6)
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(min_length=6, max_length=6)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+@app.post("/auth/forgot-password")
+@limiter.limit("3/minute")
+def forgot_password(request: Request, data: ForgotPasswordRequest):
+    try:
+        email = str(data.email).strip().lower()
+
+        user_res = supabase.table("users") \
+            .select("id, full_name, email") \
+            .eq("email", email) \
+            .limit(1) \
+            .execute()
+
+        if not user_res.data:
+            return {"status": "sent", "message": "If that email exists, an OTP has been sent."}
+
+        user    = user_res.data[0]
+        user_id = user["id"]
+
+        # Invalidate existing unused OTPs
+        supabase.table("password_resets") \
+            .update({"used": True}) \
+            .eq("user_id", user_id) \
+            .eq("used", False) \
+            .execute()
+
+        # Generate OTP
+        otp        = str(random.randint(100000, 999999))
+        expires_at = (utc_now() + timedelta(minutes=10)).isoformat()
+
+        supabase.table("password_resets").insert({
+            "user_id":    user_id,
+            "otp":        otp,
+            "expires_at": expires_at,
+            "used":       False,
+        }).execute()
+
+        sent = send_otp_email(
+            to_email  = user["email"],
+            otp       = otp,
+            full_name = user.get("full_name", "User")
+        )
+
+        if not sent:
+            logger.error("FORGOT PASSWORD: email failed for user %s", user_id)
+
+        return {"status": "sent", "message": "If that email exists, an OTP has been sent."}
+
+    except Exception as e:
+        logger.error("FORGOT PASSWORD ERROR: %s", str(e))
+        raise HTTPException(status_code=500, detail="Server error")
+
+
+@app.post("/auth/verify-otp")
+@limiter.limit("5/minute")
+def verify_otp(request: Request, data: VerifyOTPRequest):
+    try:
+        email = str(data.email).strip().lower()
+
+        user_res = supabase.table("users") \
+            .select("id") \
+            .eq("email", email) \
+            .limit(1) \
+            .execute()
+
+        if not user_res.data:
+            raise HTTPException(status_code=400, detail="Invalid OTP")
+
+        user_id = user_res.data[0]["id"]
+
+        reset_res = supabase.table("password_resets") \
+            .select("*") \
+            .eq("user_id", user_id) \
+            .eq("otp", data.otp) \
+            .eq("used", False) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+
+        if not reset_res.data:
+            raise HTTPException(status_code=400, detail="Invalid OTP")
+
+        reset      = reset_res.data[0]
+        expires_at = parse_db_dt(reset["expires_at"])
+
+        if utc_now() > expires_at:
+            raise HTTPException(status_code=400, detail="OTP has expired")
+
+        return {"status": "valid", "message": "OTP verified. You may now reset your password."}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("VERIFY OTP ERROR: %s", str(e))
+        raise HTTPException(status_code=500, detail="Server error")
+
+
+@app.post("/auth/reset-password")
+@limiter.limit("5/minute")
+def reset_password(request: Request, data: ResetPasswordRequest):
+    try:
+        email = str(data.email).strip().lower()
+
+        user_res = supabase.table("users") \
+            .select("id") \
+            .eq("email", email) \
+            .limit(1) \
+            .execute()
+
+        if not user_res.data:
+            raise HTTPException(status_code=400, detail="Invalid request")
+
+        user_id = user_res.data[0]["id"]
+
+        reset_res = supabase.table("password_resets") \
+            .select("*") \
+            .eq("user_id", user_id) \
+            .eq("otp", data.otp) \
+            .eq("used", False) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+
+        if not reset_res.data:
+            raise HTTPException(status_code=400, detail="Invalid OTP")
+
+        reset      = reset_res.data[0]
+        expires_at = parse_db_dt(reset["expires_at"])
+
+        if utc_now() > expires_at:
+            raise HTTPException(status_code=400, detail="OTP has expired")
+
+        new_hashed = hash_password(data.new_password)
+        supabase.table("users") \
+            .update({"password": new_hashed}) \
+            .eq("id", user_id) \
+            .execute()
+
+        supabase.table("password_resets") \
+            .update({"used": True}) \
+            .eq("id", reset["id"]) \
+            .execute()
+
+        logger.info("RESET PASSWORD: user %s reset their password", user_id)
+        return {"status": "success", "message": "Password reset successfully. You can now log in."}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("RESET PASSWORD ERROR: %s", str(e))
+        raise HTTPException(status_code=500, detail="Server error")
+        
+
 # =========================
 # WHATSAPP WEBHOOK
 # NOTE: In-memory sessions reset on restart. For production persistence,
