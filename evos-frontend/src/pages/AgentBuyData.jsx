@@ -183,7 +183,7 @@ export default function AgentBuyData({ user, setPage, authLoading }) {
 
   // Redirect guard — wait for auth hydration before checking
   useEffect(() => {
-    if (authLoading) return;                          // wait for hydration
+    if (authLoading) return;
     if (!user) { setPage("login"); return; }
     if (user.role !== "agent" || user.agent_status !== "approved") {
       setPage("dashboard");
@@ -192,14 +192,19 @@ export default function AgentBuyData({ user, setPage, authLoading }) {
 
   // Load base prices + wallet
   useEffect(() => {
-    if (authLoading || !user?.id) return;            // also gate data fetch
+    if (authLoading || !user?.id) return;
     const load = async () => {
       try {
         setLoading(true);
         setError("");
+        const agentToken = sessionStorage.getItem("agentToken");
         const [pricingRes, dashRes] = await Promise.all([
-          fetch(`${API}/agent/pricing/${user.id}`),
-          fetch(`${API}/agent/dashboard/${user.id}`),
+          fetch(`${API}/agent/pricing/${user.id}`, {
+            headers: { "X-Agent-Token": agentToken },
+          }),
+          fetch(`${API}/agent/dashboard/${user.id}`, {
+            headers: { "X-Agent-Token": agentToken },
+          }),
         ]);
         const pricingData = await pricingRes.json();
         const dashData = await dashRes.json();
@@ -238,9 +243,13 @@ export default function AgentBuyData({ user, setPage, authLoading }) {
     if (!selected || !user?.id) return;
     setProcessing(true);
     try {
+      const agentToken = sessionStorage.getItem("agentToken");
       const res = await fetch(`${API}/agent/buy-data`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Agent-Token": agentToken,
+        },
         body: JSON.stringify({
           agent_id: user.id,
           network: selected.network,
@@ -253,7 +262,9 @@ export default function AgentBuyData({ user, setPage, authLoading }) {
         setSelected(null);
         setSuccessMsg(`✅ ${selected.bundle} sent to ${phone}!`);
         // Refresh wallet balance
-        const dashRes = await fetch(`${API}/agent/dashboard/${user.id}`);
+        const dashRes = await fetch(`${API}/agent/dashboard/${user.id}`, {
+          headers: { "X-Agent-Token": agentToken },
+        });
         const dashData = await dashRes.json();
         setWalletBalance(Number(dashData.wallet_balance || 0));
         setTimeout(() => setSuccessMsg(""), 5000);
