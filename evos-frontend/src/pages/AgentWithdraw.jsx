@@ -22,7 +22,10 @@ export default function AgentWithdraw({ user, setPage }) {
     if (!user?.id) return;
     const loadWallet = async () => {
       try {
-        const res = await fetch(`${API_BASE}/agent/dashboard/${user.id}`);
+        const agentToken = sessionStorage.getItem("agentToken");
+        const res = await fetch(`${API_BASE}/agent/dashboard/${user.id}`, {
+          headers: { "X-Agent-Token": agentToken },
+        });
         const data = await res.json();
         setWallet(Number(data.wallet_balance || 0));
       } catch (err) {
@@ -50,9 +53,13 @@ export default function AgentWithdraw({ user, setPage }) {
     setLoading(true);
 
     try {
+      const agentToken = sessionStorage.getItem("agentToken");
       const res = await fetch(`${API_BASE}/agent/withdraw`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Agent-Token": agentToken,
+        },
         body: JSON.stringify({
           agent_id: user.id,
           amount: amt,
@@ -157,8 +164,8 @@ export default function AgentWithdraw({ user, setPage }) {
 
       {/* NOTICE */}
       <div style={styles.notice}>
-         <p style={styles.noticeText}>
-          <h1>THE WITHDRAWAL SYSTEM IS UNDER REPAIRS. PLEASE TRY AGAIN LATER</h1>
+        <p style={{ ...styles.noticeText, color: "#f87171", fontWeight: 800, marginBottom: 6 }}>
+          ⚠️ THE WITHDRAWAL SYSTEM IS UNDER REPAIRS. PLEASE TRY AGAIN LATER
         </p>
         <p style={styles.noticeText}>
           Funds are sent automatically via Moolre. Ensure your mobile money number and network are correct — wrong details cannot be reversed.
