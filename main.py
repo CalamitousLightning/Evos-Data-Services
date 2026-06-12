@@ -158,6 +158,7 @@ def require_admin(request: Request):
 
 # =========================
 # AGENT TOKEN AUTH
+# FIX: prevents IDOR — agents can only access their own data
 # =========================
 def make_agent_token(agent_id: int) -> str:
     """Create a simple HMAC-signed token: base64(agent_id).signature"""
@@ -187,37 +188,6 @@ def require_agent(request: Request, agent_id: int) -> int:
     return agent_id
 
 # =========================
-# SUBAGENT TOKEN AUTH
-# Subagents use the same token mechanism — just a different role check
-# =========================
-def make_subagent_token(subagent_id: int) -> str:
-    """HMAC-signed token for subagents (same scheme as agent tokens)."""
-    msg = str(subagent_id).encode()
-    sig = hmac.new(ADMIN_SECRET.encode(), msg, hashlib.sha256).hexdigest()
-    payload = base64.urlsafe_b64encode(msg).decode()
-    return f"{payload}.{sig}"
-
-def verify_subagent_token(token: str, subagent_id: int) -> bool:
-    """Return True only if token was signed for this exact subagent_id."""
-    try:
-        payload, sig = token.rsplit(".", 1)
-        msg = base64.urlsafe_b64decode(payload.encode())
-        expected_id = int(msg.decode())
-        if expected_id != subagent_id:
-            return False
-        expected_sig = hmac.new(ADMIN_SECRET.encode(), msg, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(sig, expected_sig)
-    except Exception:
-        return False
-
-def require_subagent(request: Request, subagent_id: int) -> int:
-    """Verify caller owns this subagent_id via X-Subagent-Token header."""
-    token = request.headers.get("X-Subagent-Token", "")
-    if not token or not verify_subagent_token(token, subagent_id):
-        raise HTTPException(status_code=403, detail="Forbidden")
-    return subagent_id
-
-# =========================
 # MODELS
 # =========================
 
@@ -227,7 +197,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     phone: str = Field(min_length=9, max_length=15)
     password: str = Field(min_length=6, max_length=128)
-    referred_by: Optional[str] = None   # referral code string from URL
+    referred_by: Optional[str] = None
 
     @validator("username")
     def username_alphanumeric(cls, v):
@@ -291,51 +261,8 @@ class AgentBuyDataRequest(BaseModel):
         return cleaned
 
 
-class SubagentBuyDataRequest(BaseModel):
-    subagent_id: int
-    network: str = Field(min_length=2, max_length=20)
-    bundle: str = Field(min_length=2, max_length=20)
-    phone_number: str = Field(min_length=9, max_length=15)
-
-    @validator("network")
-    def network_valid(cls, v):
-        allowed = {"MTN", "TELECEL", "AIRTELTIGO", "AT"}
-        if v.upper() not in allowed:
-            raise ValueError("Invalid network")
-        return v.upper()
-
-    @validator("phone_number")
-    def phone_clean(cls, v):
-        cleaned = re.sub(r"[\s\-\(\)]", "", v)
-        if not re.match(r"^\d{9,15}$", cleaned):
-            raise ValueError("Invalid phone number")
-        return cleaned
-
-
 class StoreOrderRequest(BaseModel):
     agent_id: int
-    network: str = Field(min_length=2, max_length=20)
-    bundle: str = Field(min_length=2, max_length=20)
-    phone_number: str = Field(min_length=9, max_length=15)
-    email: Optional[EmailStr] = None
-
-    @validator("network")
-    def network_valid(cls, v):
-        allowed = {"MTN", "TELECEL", "AIRTELTIGO", "AT"}
-        if v.upper() not in allowed:
-            raise ValueError("Invalid network")
-        return v.upper()
-
-    @validator("phone_number")
-    def phone_clean(cls, v):
-        cleaned = re.sub(r"[\s\-\(\)]", "", v)
-        if not re.match(r"^\d{9,15}$", cleaned):
-            raise ValueError("Invalid phone number")
-        return cleaned
-
-
-class SubagentStoreOrderRequest(BaseModel):
-    subagent_id: int
     network: str = Field(min_length=2, max_length=20)
     bundle: str = Field(min_length=2, max_length=20)
     phone_number: str = Field(min_length=9, max_length=15)
@@ -362,29 +289,8 @@ class DepositInitiateRequest(BaseModel):
     total_charge: float = Field(gt=0, le=11000)
 
 
-class SubagentDepositInitiateRequest(BaseModel):
-    subagent_id: int
-    amount: float = Field(gt=0, le=10000)
-    total_charge: float = Field(gt=0, le=11000)
-
-
 class WithdrawRequest(BaseModel):
     agent_id: int
-    amount: float = Field(gt=0, le=10000)
-    mobile_number: str = Field(min_length=9, max_length=15)
-    network: str = Field(min_length=2, max_length=20)
-    account_name: Optional[str] = Field(default="", max_length=80)
-
-    @validator("mobile_number")
-    def phone_clean(cls, v):
-        cleaned = re.sub(r"[\s\-\(\)]", "", v)
-        if not re.match(r"^\d{9,15}$", cleaned):
-            raise ValueError("Invalid mobile number")
-        return cleaned
-
-
-class SubagentWithdrawRequest(BaseModel):
-    subagent_id: int
     amount: float = Field(gt=0, le=10000)
     mobile_number: str = Field(min_length=9, max_length=15)
     network: str = Field(min_length=2, max_length=20)
@@ -538,6 +444,7 @@ def utc_now() -> datetime:
 def parse_db_dt(raw: str) -> datetime:
     """
     Parse a datetime string from Supabase into a timezone-aware datetime.
+    FIX: was mixing naive/aware — now always returns aware UTC.
     """
     if not raw:
         raise ValueError("Empty datetime string")
@@ -605,9 +512,10 @@ def get_provider(network: str):
 
 # =========================
 # AGENT PROFIT
+# FIX: added recheck guard before wallet update to prevent double-credit
 # =========================
 def process_agent_profit(order_id, reference):
-    # Guard: idempotency check on transactions table
+    # Guard 1: idempotency check on transactions table
     existing = supabase.table("agent_transactions") \
         .select("id") \
         .eq("reference", reference) \
@@ -662,136 +570,6 @@ def process_agent_profit(order_id, reference):
     }).execute()
 
 # =========================
-# SUBAGENT MARGIN CREDIT
-# When a subagent buys data, credit the parent agent's wallet
-# with (subagent_price - cost_price) = agent's margin on the sale.
-# =========================
-def process_subagent_margin(subagent_id: int, network: str, bundle: str, cost_price: float, subagent_price: float, order_id, reference: str):
-    """
-    Credit the parent agent's wallet with their margin on a subagent sale.
-    Idempotency-guarded via reference.
-    """
-    try:
-        # Find parent agent via referred_by on the subagent's user row
-        sub_res = supabase.table("users").select("referred_by_id").eq("id", subagent_id).limit(1).execute()
-        if not sub_res.data:
-            return
-        parent_agent_id = sub_res.data[0].get("referred_by_id")
-        if not parent_agent_id:
-            return
-
-        margin_ref = f"MARGIN-{reference}"
-
-        # Idempotency check
-        existing = supabase.table("agent_transactions") \
-            .select("id") \
-            .eq("reference", margin_ref) \
-            .limit(1) \
-            .execute()
-        if existing.data:
-            return
-
-        margin = round(float(subagent_price) - float(cost_price), 2)
-        if margin <= 0:
-            return
-
-        wallet = supabase.table("agent_wallets").select("balance").eq("agent_id", parent_agent_id).limit(1).execute()
-        if wallet.data:
-            new_bal = round(float(wallet.data[0]["balance"]) + margin, 2)
-            supabase.table("agent_wallets").update({"balance": new_bal}).eq("agent_id", parent_agent_id).execute()
-        else:
-            supabase.table("agent_wallets").insert({"agent_id": parent_agent_id, "balance": margin}).execute()
-
-        supabase.table("agent_transactions").insert({
-            "agent_id":  parent_agent_id,
-            "order_id":  order_id,
-            "amount":    margin,
-            "type":      "credit",
-            "reference": margin_ref,
-            "note":      f"Margin from subagent {subagent_id} sale"
-        }).execute()
-
-        logger.info("SUBAGENT MARGIN: credited GH₵%s to agent %s from subagent %s", margin, parent_agent_id, subagent_id)
-
-    except Exception as e:
-        logger.error("SUBAGENT MARGIN ERROR: %s", str(e))
-
-# =========================
-# DISPATCH DATA ORDER (shared by agent + subagent buy-data)
-# =========================
-def dispatch_data_order(network: str, bundle: str, phone_number: str, order_id):
-    """
-    Dispatch an already-created order to the active provider.
-    Updates the order row with datamart_ref/id and status.
-    Returns the provider name used.
-    """
-    provider = get_provider(network)
-    if not provider:
-        logger.warning("DISPATCH: no provider for network %s", network)
-        return None
-
-    try:
-        if provider == "DATAMART":
-            dm_response = requests.post(
-                f"{DATAMART_BASE}/purchase",
-                headers={"X-API-Key": DATAMART_API_KEY},
-                json={
-                    "phoneNumber": phone_number,
-                    "network":     NETWORK_MAP.get(network.upper()),
-                    "capacity":    extract_capacity(bundle),
-                    "gateway":     "wallet"
-                },
-                timeout=REQUEST_TIMEOUT
-            )
-            dm = dm_response.json()
-            dm_data = dm.get("data", {})
-            supabase.table("orders").update({
-                "datamart_ref":      dm_data.get("orderReference"),
-                "datamart_order_id": dm_data.get("orderId"),
-                "status":            "processing"
-            }).eq("id", order_id).execute()
-
-        elif provider == "BUNDLES_GHANA":
-            BG_NETWORK_MAP = {"MTN": "MTN", "TELECEL": "Telecel", "AIRTELTIGO": "AirtelTigo", "AT": "AirtelTigo"}
-            network_name = BG_NETWORK_MAP.get(network.upper(), network)
-            bg_bundles = call_bundles_ghana(f"/bundles?network={network_name}")
-            if bg_bundles.get("success"):
-                bundle_volume = bundle.upper().replace(" ", "")
-                matched = next(
-                    (b for b in bg_bundles.get("bundles", [])
-                     if b.get("volume", "").upper().replace(" ", "") == bundle_volume
-                     and b.get("status") == "active"),
-                    None
-                )
-                if matched:
-                    bg_order = call_bundles_ghana("/order", method="POST", body={
-                        "bundle_id":   matched["id"],
-                        "phone":       phone_number,
-                        "webhook_url": "https://api.evosdata.xyz/webhook/bundlesghana"
-                    })
-                    if bg_order.get("success"):
-                        supabase.table("orders").update({
-                            "datamart_ref":      bg_order["order"]["reference"],
-                            "datamart_order_id": str(bg_order["order"]["id"]),
-                            "status":            "processing"
-                        }).eq("id", order_id).execute()
-
-        elif provider == "SWIFT_DATA_LINK":
-            volume = float(extract_capacity(bundle) or 0)
-            sdl = call_swift_data_link(network=network, volume=volume, phone=phone_number)
-            if sdl.get("success"):
-                supabase.table("orders").update({
-                    "datamart_ref":      sdl.get("reference"),
-                    "datamart_order_id": sdl.get("orderId"),
-                    "status":            "processing"
-                }).eq("id", order_id).execute()
-
-    except Exception as e:
-        logger.error("DISPATCH ERROR (order %s): %s", order_id, str(e))
-
-    return provider
-
-# =========================
 # USER STATS
 # =========================
 def calculate_rank(order_count: int):
@@ -830,6 +608,10 @@ def get_prices(request: Request):
 
 # =========================
 # BACKGROUND: RETRY STUCK ORDERS
+# FIX: auto-fail moved inside each provider rejection branch so it
+#      actually fires (old approach was unreachable due to query window).
+# FIX: query window widened to 6 hrs so orders aren't silently dropped
+#      before the age-based fail logic can run.
 # =========================
 _retry_running = False
 
@@ -846,6 +628,8 @@ async def retry_stuck_orders():
         try:
             logger.info("RETRY JOB: scanning for stuck orders...")
             now    = utc_now()
+            # FIX: widened from 3 hrs → 6 hrs so age-based fail logic
+            #      inside each branch can actually trigger
             cutoff = (now - timedelta(hours=6)).isoformat()
             floor  = (now - timedelta(minutes=10)).isoformat()
 
@@ -898,13 +682,17 @@ async def retry_stuck_orders():
                             logger.info("RETRY JOB: order %s sent to DATAMART ✅", order['id'])
                         else:
                             logger.warning("RETRY JOB: DATAMART rejected order %s: %s", order['id'], dm)
+                            # FIX: auto-fail inside rejection branch
                             order_age = utc_now() - parse_db_dt(order["created_at"])
                             if order_age > timedelta(hours=3):
                                 supabase.table("orders") \
                                     .update({"status": "failed"}) \
                                     .eq("id", order["id"]) \
                                     .execute()
-                                logger.info("RETRY JOB: order %s marked failed after repeated DATAMART rejection", order['id'])
+                                logger.info(
+                                    "RETRY JOB: order %s marked failed after repeated DATAMART rejection",
+                                    order['id']
+                                )
 
                     # ── BUNDLES GHANA ──────────────────────────────────────
                     elif provider == "BUNDLES_GHANA":
@@ -962,6 +750,7 @@ async def retry_stuck_orders():
                             msg        = bg_order.get("message", "")
                             order_type = bg_order.get("type", "")
 
+                            # Recover duplicate orders via embedded ref
                             if order_type == "ORDER_FAILED" and "Ref:" in msg:
                                 ref_match = re.search(r'Ref:\s*([\w\-]+)', msg)
                                 if ref_match:
@@ -970,17 +759,24 @@ async def retry_stuck_orders():
                                         "status":       "processing",
                                         "datamart_ref": existing_ref,
                                     }).eq("id", order["id"]).execute()
-                                    logger.info("RETRY JOB: order %s recovered from 409 — ref=%s ✅", order['id'], existing_ref)
+                                    logger.info(
+                                        "RETRY JOB: order %s recovered from 409 — ref=%s ✅",
+                                        order['id'], existing_ref
+                                    )
                                     continue
 
                             logger.warning("RETRY JOB: BG rejected order %s: %s", order['id'], bg_order)
+                            # FIX: auto-fail inside rejection branch
                             order_age = utc_now() - parse_db_dt(order["created_at"])
                             if order_age > timedelta(hours=3):
                                 supabase.table("orders") \
                                     .update({"status": "failed"}) \
                                     .eq("id", order["id"]) \
                                     .execute()
-                                logger.info("RETRY JOB: order %s marked failed after repeated BG rejection", order['id'])
+                                logger.info(
+                                    "RETRY JOB: order %s marked failed after repeated BG rejection",
+                                    order['id']
+                                )
 
                     # ── SWIFT DATA LINK ────────────────────────────────────
                     elif provider == "SWIFT_DATA_LINK":
@@ -1004,13 +800,17 @@ async def retry_stuck_orders():
                             logger.info("RETRY JOB: order %s sent to SWIFT_DATA_LINK ✅", order['id'])
                         else:
                             logger.warning("RETRY JOB: SDL rejected order %s: %s", order['id'], sdl)
+                            # FIX: auto-fail inside rejection branch
                             order_age = utc_now() - parse_db_dt(order["created_at"])
                             if order_age > timedelta(hours=3):
                                 supabase.table("orders") \
                                     .update({"status": "failed"}) \
                                     .eq("id", order["id"]) \
                                     .execute()
-                                logger.info("RETRY JOB: order %s marked failed after repeated SDL rejection", order['id'])
+                                logger.info(
+                                    "RETRY JOB: order %s marked failed after repeated SDL rejection",
+                                    order['id']
+                                )
 
                 except Exception as e:
                     logger.error("RETRY JOB: error on order %s: %s", order.get('id'), str(e))
@@ -1094,6 +894,10 @@ async def retry_stuck_orders():
 
 # =========================
 # BACKGROUND: RETRY STUCK DEPOSITS
+# FIX: widened query window from 1hr → 2hr so slow Paystack verifications
+#      aren't missed.
+# FIX: added recheck guard right before wallet credit to prevent
+#      double-credit if two retry cycles overlap on a redeploy.
 # =========================
 _deposit_retry_running = False
 
@@ -1112,6 +916,7 @@ async def retry_stuck_deposits():
 
             now    = utc_now()
             floor  = (now - timedelta(minutes=5)).isoformat()
+            # FIX: widened from 1 hr → 2 hrs
             cutoff = (now - timedelta(hours=2)).isoformat()
 
             stuck = supabase.table("wallet_deposits") \
@@ -1157,12 +962,19 @@ async def retry_stuck_deposits():
                                 .update({"status": "failed"}) \
                                 .eq("id", dep_id) \
                                 .execute()
-                            logger.info("DEPOSIT RETRY: deposit %s marked failed — unpaid after 30min", dep_id)
+                            logger.info(
+                                "DEPOSIT RETRY: deposit %s marked failed — unpaid after 30min",
+                                dep_id
+                            )
                         else:
-                            logger.info("DEPOSIT RETRY: deposit %s still pending on Paystack, will retry", dep_id)
+                            logger.info(
+                                "DEPOSIT RETRY: deposit %s still pending on Paystack, will retry",
+                                dep_id
+                            )
                         continue
 
-                    # Recheck before crediting to prevent double-credit
+                    # FIX: recheck deposit status right before crediting to
+                    #      prevent double-credit if two cycles overlap
                     recheck = supabase.table("wallet_deposits") \
                         .select("status") \
                         .eq("id", dep_id) \
@@ -1322,6 +1134,7 @@ def create_order(request: Request, data: CreateOrderRequest):
 
             if existing.data:
                 order = existing.data[0]
+                # FIX: use parse_db_dt for timezone-aware comparison
                 created_at = parse_db_dt(order["created_at"])
                 if utc_now() - created_at < timedelta(minutes=10):
                     if data.user_id:
@@ -1427,6 +1240,7 @@ async def paystack_webhook(request: Request):
         signature = request.headers.get("x-paystack-signature")
 
         if not signature or not verify_signature(body, signature, PAYSTACK_SECRET):
+            # Return 200 to prevent Paystack retrying (attacker gets no info)
             logger.warning("PAYSTACK WEBHOOK: invalid signature from %s", request.client.host)
             return {"status": "invalid signature"}
 
@@ -1437,65 +1251,6 @@ async def paystack_webhook(request: Request):
 
         reference = payload["data"]["reference"]
 
-        # ── Check if this is a subagent deposit ──
-        if reference.startswith("EVOS-SDEP-"):
-            dep_res = supabase.table("wallet_deposits").select("*").eq("paystack_ref", reference).limit(1).execute()
-            if dep_res.data:
-                deposit = dep_res.data[0]
-                if deposit.get("status") == "credited":
-                    return {"status": "already credited"}
-                agent_id      = deposit["agent_id"]   # subagent_id stored here
-                credit_amount = float(deposit["amount"])
-
-                wallet_res = supabase.table("agent_wallets").select("balance").eq("agent_id", agent_id).limit(1).execute()
-                if wallet_res.data:
-                    new_balance = round(float(wallet_res.data[0]["balance"] or 0) + credit_amount, 2)
-                    supabase.table("agent_wallets").update({"balance": new_balance}).eq("agent_id", agent_id).execute()
-                else:
-                    new_balance = round(credit_amount, 2)
-                    supabase.table("agent_wallets").insert({"agent_id": agent_id, "balance": new_balance}).execute()
-
-                supabase.table("wallet_deposits").update({"status": "credited"}).eq("id", deposit["id"]).execute()
-                supabase.table("agent_transactions").insert({
-                    "agent_id":  agent_id,
-                    "type":      "credit",
-                    "amount":    credit_amount,
-                    "reference": reference,
-                    "note":      "Subagent wallet top-up via Paystack",
-                }).execute()
-                logger.info("PAYSTACK WEBHOOK: subagent deposit %s credited ✅", reference)
-            return {"status": "ok"}
-
-        # ── Agent deposit ──
-        if reference.startswith("EVOS-DEP-"):
-            dep_res = supabase.table("wallet_deposits").select("*").eq("paystack_ref", reference).limit(1).execute()
-            if dep_res.data:
-                deposit = dep_res.data[0]
-                if deposit.get("status") == "credited":
-                    return {"status": "already credited"}
-                agent_id      = deposit["agent_id"]
-                credit_amount = float(deposit["amount"])
-
-                wallet_res = supabase.table("agent_wallets").select("balance").eq("agent_id", agent_id).limit(1).execute()
-                if wallet_res.data:
-                    new_balance = round(float(wallet_res.data[0]["balance"] or 0) + credit_amount, 2)
-                    supabase.table("agent_wallets").update({"balance": new_balance}).eq("agent_id", agent_id).execute()
-                else:
-                    new_balance = round(credit_amount, 2)
-                    supabase.table("agent_wallets").insert({"agent_id": agent_id, "balance": new_balance}).execute()
-
-                supabase.table("wallet_deposits").update({"status": "credited"}).eq("id", deposit["id"]).execute()
-                supabase.table("agent_transactions").insert({
-                    "agent_id":  agent_id,
-                    "type":      "credit",
-                    "amount":    credit_amount,
-                    "reference": reference,
-                    "note":      "Wallet top-up via Paystack",
-                }).execute()
-                logger.info("PAYSTACK WEBHOOK: agent deposit %s credited ✅", reference)
-            return {"status": "ok"}
-
-        # ── Regular order / store order ──
         order_res = supabase.table("orders").select("*").eq("paystack_ref", reference).limit(1).execute()
         if not order_res.data:
             return {"status": "not found"}
@@ -1579,19 +1334,6 @@ async def paystack_webhook(request: Request):
 
             else:
                 raise Exception("No provider assigned")
-
-            # ── Credit subagent margin to parent agent if applicable ──
-            subagent_id = order.get("subagent_id")
-            if subagent_id:
-                process_subagent_margin(
-                    subagent_id  = subagent_id,
-                    network      = order["network"],
-                    bundle       = order["bundle"],
-                    cost_price   = float(order.get("base_price", 0)),
-                    subagent_price = float(order.get("agent_price", 0)),
-                    order_id     = order["id"],
-                    reference    = reference
-                )
 
             return {"status": "success"}
 
@@ -1817,6 +1559,7 @@ def get_user(request: Request, user_id: int):
 
 # =========================
 # AGENT DASHBOARD
+# FIX: added require_agent dependency to prevent IDOR
 # =========================
 @app.get("/agent/dashboard/{agent_id}")
 @limiter.limit("30/minute")
@@ -1832,23 +1575,19 @@ async def agent_dashboard(request: Request, agent_id: int, _: int = Depends(requ
     balance = wallet.data[0]["balance"] if wallet.data else 0
 
     transactions = supabase.table("agent_transactions").select("*").eq("agent_id", agent_id).execute()
-    total_earned = sum(t["amount"] for t in transactions.data if t.get("type") == "credit") if transactions.data else 0
+    total_earned = sum(t["amount"] for t in transactions.data) if transactions.data else 0
 
     orders = supabase.table("orders").select("id", count="exact").eq("agent_id", agent_id).execute()
-
-    # Count subagents
-    subagents = supabase.table("users").select("id", count="exact").eq("referred_by_id", agent_id).eq("role", "subagent").execute()
-    subagent_count = subagents.count if hasattr(subagents, "count") else len(subagents.data or [])
 
     return {
         "wallet_balance":     balance,
         "total_earned":       total_earned,
         "total_sales":        orders.count if hasattr(orders, "count") else len(orders.data or []),
-        "transactions_count": len(transactions.data or []),
-        "subagent_count":     subagent_count,
+        "transactions_count": len(transactions.data or [])
     }
 
 
+# FIX: added require_agent dependency to prevent IDOR
 @app.get("/agent/wallet/{agent_id}")
 @limiter.limit("30/minute")
 async def get_wallet(request: Request, agent_id: int, _: int = Depends(require_agent)):
@@ -1858,6 +1597,7 @@ async def get_wallet(request: Request, agent_id: int, _: int = Depends(require_a
     return wallet.data[0]
 
 
+# FIX: added require_agent dependency to prevent IDOR
 @app.get("/agent/transactions/{agent_id}")
 @limiter.limit("30/minute")
 async def agent_transactions(request: Request, agent_id: int, _: int = Depends(require_agent)):
@@ -1870,6 +1610,7 @@ async def agent_transactions(request: Request, agent_id: int, _: int = Depends(r
     return {"transactions": res.data or []}
 
 
+# FIX: added require_agent dependency to prevent IDOR
 @app.get("/agent/sales/{agent_id}")
 @limiter.limit("30/minute")
 async def agent_sales(request: Request, agent_id: int, _: int = Depends(require_agent)):
@@ -1887,166 +1628,13 @@ async def agent_sales(request: Request, agent_id: int, _: int = Depends(require_
 
 
 # =========================
-# AGENT REFERRAL LINK
-# =========================
-@app.get("/agent/referral-link/{agent_id}")
-@limiter.limit("30/minute")
-async def agent_referral_link(request: Request, agent_id: int, _: int = Depends(require_agent)):
-    """Return the agent's referral code and a shareable registration URL."""
-    try:
-        res = supabase.table("users").select("referral_code, username").eq("id", agent_id).limit(1).execute()
-        if not res.data:
-            raise HTTPException(404, "Agent not found")
-        code = res.data[0].get("referral_code", "")
-        frontend_url = os.getenv("FRONTEND_URL", "https://evosdata.xyz")
-        link = f"{frontend_url}/register?ref={code}"
-        return {"referral_code": code, "referral_link": link}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("REFERRAL LINK ERROR: %s", str(e))
-        raise HTTPException(500, "Failed to get referral link")
-
-
-# =========================
-# AGENT NETWORK (subagent list + stats)
-# =========================
-@app.get("/agent/network/{agent_id}")
-@limiter.limit("30/minute")
-async def agent_network(request: Request, agent_id: int, _: int = Depends(require_agent)):
-    """List all subagents under this agent with their wallet balances and order counts."""
-    try:
-        subs = supabase.table("users") \
-            .select("id, username, full_name, email, phone, agent_status, created_at") \
-            .eq("referred_by_id", agent_id) \
-            .eq("role", "subagent") \
-            .execute()
-        subagents = subs.data or []
-
-        result = []
-        for sub in subagents:
-            sub_id = sub["id"]
-
-            wallet = supabase.table("agent_wallets").select("balance").eq("agent_id", sub_id).limit(1).execute()
-            balance = float(wallet.data[0]["balance"]) if wallet.data else 0.0
-
-            orders = supabase.table("orders").select("id", count="exact").eq("agent_id", sub_id).execute()
-            order_count = orders.count if hasattr(orders, "count") else len(orders.data or [])
-
-            result.append({
-                "id":           sub_id,
-                "username":     sub.get("username"),
-                "full_name":    sub.get("full_name"),
-                "email":        sub.get("email"),
-                "phone":        sub.get("phone"),
-                "agent_status": sub.get("agent_status"),
-                "wallet_balance": balance,
-                "order_count":  order_count,
-                "joined":       sub.get("created_at"),
-            })
-
-        return {"subagents": result, "total": len(result)}
-    except Exception as e:
-        logger.error("AGENT NETWORK ERROR: %s", str(e))
-        raise HTTPException(500, "Failed to fetch network")
-
-
-# =========================
-# AGENT SUBAGENT PRICES
-# =========================
-@app.get("/agent/subagent-prices/{agent_id}")
-@limiter.limit("30/minute")
-def get_agent_subagent_prices(request: Request, agent_id: int, _: int = Depends(require_agent)):
-    """
-    Returns all bundles with the agent's set subagent markup (what the subagent pays).
-    Uses the subagent_prices table, falling back to base_prices cost_price.
-    """
-    try:
-        base_res    = supabase.table("base_prices").select("*").execute()
-        base_prices = base_res.data or []
-
-        sp_res      = supabase.table("subagent_prices").select("*").eq("agent_id", agent_id).execute()
-        sp_rows     = sp_res.data or []
-
-        sp_map = {}
-        for row in sp_rows:
-            key = f"{row.get('network','').strip().lower()}-{row.get('bundle','').strip().lower()}"
-            sp_map[key] = float(row.get("markup", 0) or 0)
-
-        result = []
-        for item in base_prices:
-            network    = item.get("network", "").strip()
-            bundle     = item.get("bundle", "").strip()
-            cost_price = float(item.get("cost_price", 0) or 0)
-            key        = f"{network.lower()}-{bundle.lower()}"
-            markup     = float(sp_map.get(key, 0) or 0)
-            result.append({
-                "network":           network,
-                "bundle":            bundle,
-                "cost_price":        cost_price,
-                "subagent_markup":   markup,
-                "subagent_price":    round(cost_price + markup, 2),
-            })
-
-        return {"status": "success", "prices": result}
-    except Exception as e:
-        logger.error("AGENT SUBAGENT PRICES ERROR: %s", str(e))
-        return {"status": "error", "prices": []}
-
-
-@app.post("/agent/subagent-prices/save")
-@limiter.limit("10/minute")
-def save_agent_subagent_prices(request: Request, payload: dict):
-    """
-    Agent sets subagent bundle markups.
-    payload: { agent_id: int, prices: [{network, bundle, markup}] }
-    """
-    try:
-        agent_id = payload.get("agent_id")
-        prices   = payload.get("prices", [])
-
-        if not agent_id:
-            return {"status": "failed", "message": "agent_id required"}
-
-        token = request.headers.get("X-Agent-Token", "")
-        try:
-            agent_id_int = int(agent_id)
-        except (ValueError, TypeError):
-            return {"status": "failed", "message": "Invalid agent_id"}
-        if not token or not verify_agent_token(token, agent_id_int):
-            raise HTTPException(status_code=403, detail="Forbidden")
-
-        supabase.table("subagent_prices").delete().eq("agent_id", agent_id).execute()
-
-        rows = []
-        for item in prices:
-            network = str(item.get("network", "")).strip()
-            bundle  = str(item.get("bundle", "")).strip()
-            try:
-                markup = float(item.get("markup", 0) or 0)
-            except Exception:
-                markup = 0
-            if markup < 0:
-                markup = 0
-            rows.append({"agent_id": agent_id, "network": network, "bundle": bundle, "markup": markup})
-
-        if rows:
-            supabase.table("subagent_prices").insert(rows).execute()
-
-        return {"status": "success"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("SAVE SUBAGENT PRICES ERROR: %s", str(e))
-        return {"status": "failed", "message": "Unable to save subagent pricing"}
-
-
-# =========================
 # AGENT WITHDRAW
+# FIX: added require_agent token check on agent_id from payload
 # =========================
 @app.post("/agent/withdraw")
 @limiter.limit("5/minute")
 async def request_withdrawal(request: Request, payload: WithdrawRequest):
+    # Verify the caller owns this agent_id
     token = request.headers.get("X-Agent-Token", "")
     if not token or not verify_agent_token(token, payload.agent_id):
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -2106,8 +1694,8 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
         })
 
         if str(moolre_res.get("status")) == "1":
-            tx_data      = moolre_res.get("data", {})
-            tx_status    = tx_data.get("txstatus", 0) if isinstance(tx_data, dict) else 0
+            tx_data     = moolre_res.get("data", {})
+            tx_status   = tx_data.get("txstatus", 0) if isinstance(tx_data, dict) else 0
             final_status = "paid" if tx_status == 1 else "processing"
             supabase.table("agent_withdrawals").update({"status": final_status}).eq("id", withdrawal_id).execute()
             supabase.table("agent_transactions").insert({
@@ -2139,6 +1727,7 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
 
 # =========================
 # WITHDRAWAL STATUS CHECK
+# FIX: verify agent owns the withdrawal before returning data
 # =========================
 @app.get("/agent/withdrawal/status/{withdrawal_id}")
 @limiter.limit("20/minute")
@@ -2150,6 +1739,7 @@ async def check_withdrawal_status(request: Request, withdrawal_id: int):
 
         row = wd.data[0]
 
+        # FIX: verify the caller owns this withdrawal via their agent token
         token = request.headers.get("X-Agent-Token", "")
         if not token or not verify_agent_token(token, row["agent_id"]):
             raise HTTPException(status_code=403, detail="Forbidden")
@@ -2201,9 +1791,7 @@ async def moolre_webhook(request: Request):
         if not external_ref:
             return {"received": True}
 
-        # Handle both agent and subagent withdrawals
-        table_prefix = "EVOS-WD-"
-        if not str(external_ref).startswith(table_prefix):
+        if not str(external_ref).startswith("EVOS-WD-"):
             logger.info("MOOLRE WEBHOOK: ignoring non-withdrawal ref %s", external_ref)
             return {"received": True}
 
@@ -2236,7 +1824,7 @@ async def moolre_webhook(request: Request):
                 supabase.table("agent_wallets").update({
                     "balance": current + float(row["amount"])
                 }).eq("agent_id", row["agent_id"]).execute()
-                logger.info("MOOLRE WEBHOOK: refunded GH₵%s to agent/subagent %s", row['amount'], row['agent_id'])
+                logger.info("MOOLRE WEBHOOK: refunded GH₵%s to agent %s", row['amount'], row['agent_id'])
 
         logger.info("MOOLRE WEBHOOK: withdrawal %s updated to %s", external_ref, final_status)
         return {"received": True}
@@ -2247,6 +1835,7 @@ async def moolre_webhook(request: Request):
 
 # =========================
 # ADMIN WITHDRAWALS — PROTECTED
+# FIX: these were completely open before. Now require X-Admin-Secret header.
 # =========================
 @app.post("/admin/withdrawals/{withdrawal_id}/paid")
 async def mark_paid(withdrawal_id: int, _: None = Depends(require_admin)):
@@ -2273,6 +1862,7 @@ async def reject_withdrawal(withdrawal_id: int, _: None = Depends(require_admin)
 
 # =========================
 # AGENT PRICING
+# FIX: added require_agent dependency to prevent IDOR
 # =========================
 @app.get("/agent/pricing/{agent_id}")
 @limiter.limit("30/minute")
@@ -2313,6 +1903,7 @@ def get_agent_pricing(request: Request, agent_id: str, _: int = Depends(require_
         return {"status": "error", "prices": []}
 
 
+# FIX: added require_agent token check on agent_id from payload
 @app.post("/agent/pricing/save")
 @limiter.limit("10/minute")
 def save_agent_pricing(request: Request, payload: dict):
@@ -2323,6 +1914,7 @@ def save_agent_pricing(request: Request, payload: dict):
         if not agent_id:
             return {"status": "failed", "message": "agent_id required"}
 
+        # Verify ownership
         token = request.headers.get("X-Agent-Token", "")
         try:
             agent_id_int = int(agent_id)
@@ -2339,7 +1931,7 @@ def save_agent_pricing(request: Request, payload: dict):
             bundle  = str(item.get("bundle", "")).strip()
             try:
                 markup = float(item.get("markup", 0) or 0)
-            except Exception:
+            except:
                 markup = 0
             rows.append({"agent_id": agent_id, "network": network, "bundle": bundle, "markup": markup})
 
@@ -2356,11 +1948,13 @@ def save_agent_pricing(request: Request, payload: dict):
 
 # =========================
 # AGENT WALLET DEPOSIT
+# FIX: added require_agent token check on agent_id from payload
 # =========================
 @app.post("/agent/deposit/initiate")
 @limiter.limit("10/minute")
 async def initiate_deposit(request: Request, payload: DepositInitiateRequest):
     try:
+        # Verify ownership
         token = request.headers.get("X-Agent-Token", "")
         if not token or not verify_agent_token(token, payload.agent_id):
             raise HTTPException(status_code=403, detail="Forbidden")
@@ -2433,6 +2027,7 @@ async def verify_deposit(request: Request, payload: dict):
 
         deposit = existing.data[0]
 
+        # Verify the caller owns this deposit
         token = request.headers.get("X-Agent-Token", "")
         if not token or not verify_agent_token(token, deposit["agent_id"]):
             raise HTTPException(status_code=403, detail="Forbidden")
@@ -2485,11 +2080,13 @@ async def verify_deposit(request: Request, payload: dict):
 
 # =========================
 # AGENT BUY DATA
+# FIX: added require_agent token check on agent_id from payload
 # =========================
 @app.post("/agent/buy-data")
 @limiter.limit("10/minute")
 async def agent_buy_data(request: Request, payload: AgentBuyDataRequest):
     try:
+        # Verify ownership
         token = request.headers.get("X-Agent-Token", "")
         if not token or not verify_agent_token(token, payload.agent_id):
             raise HTTPException(status_code=403, detail="Forbidden")
@@ -2559,7 +2156,62 @@ async def agent_buy_data(request: Request, payload: AgentBuyDataRequest):
         }).execute()
 
         try:
-            dispatch_data_order(network, bundle, phone_number, order_id)
+            provider = get_provider(network)
+            if provider == "DATAMART":
+                dm_response = requests.post(
+                    f"{DATAMART_BASE}/purchase",
+                    headers={"X-API-Key": DATAMART_API_KEY},
+                    json={
+                        "phoneNumber": phone_number,
+                        "network":     NETWORK_MAP.get(network.upper()),
+                        "capacity":    extract_capacity(bundle),
+                        "gateway":     "wallet"
+                    },
+                    timeout=REQUEST_TIMEOUT
+                )
+                dm = dm_response.json()
+                dm_data = dm.get("data", {})
+                supabase.table("orders").update({
+                    "datamart_ref": dm_data.get("orderReference"),
+                    "datamart_order_id": dm_data.get("orderId"),
+                    "status": "processing"
+                }).eq("id", order_id).execute()
+
+            elif provider == "BUNDLES_GHANA":
+                BG_NETWORK_MAP = {"MTN": "MTN", "TELECEL": "Telecel", "AIRTELTIGO": "AirtelTigo"}
+                network_name = BG_NETWORK_MAP.get(network.upper(), network)
+                bg_bundles = call_bundles_ghana(f"/bundles?network={network_name}")
+                if bg_bundles.get("success"):
+                    bundle_volume = bundle.upper().replace(" ", "")
+                    matched = next(
+                        (b for b in bg_bundles.get("bundles", [])
+                         if b.get("volume", "").upper().replace(" ", "") == bundle_volume
+                         and b.get("status") == "active"),
+                        None
+                    )
+                    if matched:
+                        bg_order = call_bundles_ghana("/order", method="POST", body={
+                            "bundle_id":   matched["id"],
+                            "phone":       phone_number,
+                            "webhook_url": "https://api.evosdata.xyz/webhook/bundlesghana"
+                        })
+                        if bg_order.get("success"):
+                            supabase.table("orders").update({
+                                "datamart_ref": bg_order["order"]["reference"],
+                                "datamart_order_id": str(bg_order["order"]["id"]),
+                                "status": "processing"
+                            }).eq("id", order_id).execute()
+
+            elif provider == "SWIFT_DATA_LINK":
+                volume = float(extract_capacity(bundle) or 0)
+                sdl = call_swift_data_link(network=network, volume=volume, phone=phone_number)
+                if sdl.get("success"):
+                    supabase.table("orders").update({
+                        "datamart_ref": sdl.get("reference"),
+                        "datamart_order_id": sdl.get("orderId"),
+                        "status": "processing"
+                    }).eq("id", order_id).execute()
+
         except Exception as dispatch_err:
             logger.error("AGENT BUY DATA DISPATCH ERROR: %s", str(dispatch_err))
 
@@ -2627,6 +2279,7 @@ async def public_agent_store(request: Request, agent_id: int):
         return {"status": "error", "message": "Failed to load store"}
 
 
+# FIX: added require_agent token check on agent_id from payload
 @app.post("/agent/store-name")
 @limiter.limit("10/minute")
 async def save_store_name(request: Request, payload: dict):
@@ -2636,6 +2289,7 @@ async def save_store_name(request: Request, payload: dict):
         if not agent_id:
             return {"error": "agent_id required"}
 
+        # Verify ownership
         token = request.headers.get("X-Agent-Token", "")
         try:
             agent_id_int = int(agent_id)
@@ -2655,6 +2309,7 @@ async def save_store_name(request: Request, payload: dict):
         return {"error": "Failed to save store name"}
 
 
+# FIX: added require_agent dependency to prevent IDOR
 @app.get("/agent/store-name/{agent_id}")
 @limiter.limit("30/minute")
 async def get_store_name(request: Request, agent_id: int, _: int = Depends(require_agent)):
@@ -2671,7 +2326,7 @@ async def get_store_name(request: Request, agent_id: int, _: int = Depends(requi
 
 
 # =========================
-# STORE ORDER (agent store)
+# STORE ORDER
 # =========================
 @app.post("/store/order")
 @limiter.limit("10/minute")
@@ -2754,652 +2409,6 @@ async def create_store_order(request: Request, payload: StoreOrderRequest):
 
 
 # =========================
-# SUBAGENT PUBLIC STORE
-# =========================
-@app.get("/store/subagent/{subagent_id}")
-@limiter.limit("60/minute")
-async def public_subagent_store(request: Request, subagent_id: int):
-    """
-    Public store for a subagent.
-    Prices shown = base_price + agent's subagent_markup for this bundle.
-    """
-    try:
-        sub_res = supabase.table("users") \
-            .select("id,username,full_name,store_name,role,agent_status,referred_by_id") \
-            .eq("id", subagent_id).limit(1).execute()
-        if not sub_res.data:
-            return {"status": "error", "message": "Store not found"}
-
-        sub = sub_res.data[0]
-        if sub.get("role") != "subagent" or sub.get("agent_status") != "approved":
-            return {"status": "error", "message": "Store unavailable"}
-
-        parent_agent_id = sub.get("referred_by_id")
-
-        # Get base prices
-        prices_res = supabase.table("base_prices").select("*").order("network").execute()
-
-        # Get the parent agent's subagent markups
-        sp_res = supabase.table("subagent_prices").select("*").eq("agent_id", parent_agent_id).execute() \
-            if parent_agent_id else type("", (), {"data": []})()
-
-        sp_map = {}
-        for m in (sp_res.data or []):
-            key = f"{m['network'].strip().lower()}::{m['bundle'].strip().lower()}"
-            sp_map[key] = float(m.get("markup", 0) or 0)
-
-        bundles = []
-        for row in (prices_res.data or []):
-            network    = row.get("network", "").strip()
-            bundle     = row.get("bundle", "").strip()
-            key        = f"{network.lower()}::{bundle.lower()}"
-            cost_price = float(row.get("cost_price", 0) or 0)
-            markup     = sp_map.get(key, 0)
-            bundles.append({
-                "network":     network,
-                "bundle":      bundle,
-                "cost_price":  cost_price,
-                "final_price": round(cost_price + markup, 2),
-            })
-
-        return {
-            "status":       "success",
-            "subagent_id":  subagent_id,
-            "store_name":   sub.get("store_name") or sub.get("username") or sub.get("full_name") or "Subagent",
-            "prices":       bundles,
-        }
-    except Exception as e:
-        logger.error("SUBAGENT STORE ERROR: %s", str(e))
-        return {"status": "error", "message": "Failed to load store"}
-
-
-@app.post("/store/subagent/order")
-@limiter.limit("10/minute")
-async def create_subagent_store_order(request: Request, payload: SubagentStoreOrderRequest):
-    """
-    Customer buys from a subagent's public store.
-    - Charges customer at subagent_price (cost + agent's subagent markup)
-    - On payment, credits subagent's wallet with their markup
-    - Dispatches data to customer
-    """
-    try:
-        subagent_id    = payload.subagent_id
-        network        = payload.network
-        bundle         = payload.bundle
-        phone_number   = payload.phone_number
-        customer_email = str(payload.email or "customer@evoshub.store").strip()
-
-        # Validate subagent
-        sub_res = supabase.table("users") \
-            .select("id,role,agent_status,referred_by_id,full_name,store_name,username") \
-            .eq("id", subagent_id).limit(1).execute()
-        if not sub_res.data:
-            return {"status": "error", "message": "Store not found"}
-        sub = sub_res.data[0]
-        if sub.get("role") != "subagent" or sub.get("agent_status") != "approved":
-            return {"status": "error", "message": "Store unavailable"}
-
-        parent_agent_id = sub.get("referred_by_id")
-
-        # Base price
-        base_res = supabase.table("base_prices").select("cost_price") \
-            .eq("network", network).eq("bundle", bundle).limit(1).execute()
-        if not base_res.data:
-            return {"status": "error", "message": "Bundle not found"}
-        cost_price = float(base_res.data[0]["cost_price"])
-
-        # Subagent markup from parent agent's subagent_prices
-        sp_markup = 0.0
-        if parent_agent_id:
-            sp_res = supabase.table("subagent_prices").select("markup") \
-                .eq("agent_id", parent_agent_id) \
-                .eq("network", network) \
-                .eq("bundle", bundle).limit(1).execute()
-            if sp_res.data:
-                sp_markup = float(sp_res.data[0].get("markup", 0) or 0)
-
-        subagent_price = round(cost_price + sp_markup, 2)
-        reference      = f"SSTOR-{subagent_id}-{uuid.uuid4().hex[:10].upper()}"
-
-        # Create order — store subagent_id so we can credit after payment
-        order_res = supabase.table("orders").insert({
-            "agent_id":     subagent_id,   # reuse agent_id col for subagent_id
-            "subagent_id":  subagent_id,
-            "network":      network,
-            "bundle":       bundle,
-            "price":        subagent_price,
-            "phone_number": phone_number,
-            "email":        customer_email,
-            "paystack_ref": reference,
-            "status":       "pending_payment",
-            "base_price":   cost_price,
-            "agent_price":  subagent_price,
-            "profit":       sp_markup,
-        }).execute()
-
-        if not order_res.data:
-            return {"status": "error", "message": "Failed to create order"}
-
-        order_id = order_res.data[0]["id"]
-
-        pay = requests.post(
-            "https://api.paystack.co/transaction/initialize",
-            json={
-                "email":        customer_email,
-                "amount":       int(subagent_price * 100),
-                "reference":    reference,
-                "callback_url": f"https://evosdata.xyz/store/subagent/{subagent_id}",
-                "metadata":     {
-                    "order_id":    order_id,
-                    "subagent_id": subagent_id,
-                    "network":     network,
-                    "bundle":      bundle,
-                }
-            },
-            headers={"Authorization": f"Bearer {PAYSTACK_SECRET}", "Content-Type": "application/json"},
-            timeout=30
-        )
-        pay_data = pay.json()
-
-        if not pay_data.get("status"):
-            supabase.table("orders").delete().eq("id", order_id).execute()
-            return {"status": "error", "message": "Payment initialization failed"}
-
-        return {
-            "status":      "created",
-            "order_id":    order_id,
-            "reference":   reference,
-            "pay_amount":  subagent_price,
-            "payment_url": pay_data["data"]["authorization_url"],
-        }
-    except Exception as e:
-        logger.error("SUBAGENT STORE ORDER ERROR: %s", str(e))
-        return {"status": "error", "message": "Failed to create order"}
-
-
-# =========================
-# SUBAGENT DASHBOARD
-# =========================
-@app.get("/subagent/dashboard/{subagent_id}")
-@limiter.limit("30/minute")
-async def subagent_dashboard(request: Request, subagent_id: int, _: int = Depends(require_subagent)):
-    try:
-        user_res = supabase.table("users") \
-            .select("role, agent_status, referred_by_id, username, full_name") \
-            .eq("id", subagent_id).limit(1).execute()
-        if not user_res.data:
-            raise HTTPException(404, "Subagent not found")
-        u = user_res.data[0]
-        if u["role"] != "subagent" or u["agent_status"] != "approved":
-            raise HTTPException(403, "Not authorized")
-
-        wallet = supabase.table("agent_wallets").select("balance").eq("agent_id", subagent_id).limit(1).execute()
-        balance = float(wallet.data[0]["balance"]) if wallet.data else 0.0
-
-        txns = supabase.table("agent_transactions").select("amount, type").eq("agent_id", subagent_id).execute()
-        total_earned = sum(t["amount"] for t in (txns.data or []) if t.get("type") == "credit")
-
-        orders = supabase.table("orders").select("id", count="exact").eq("agent_id", subagent_id).execute()
-        order_count = orders.count if hasattr(orders, "count") else len(orders.data or [])
-
-        return {
-            "wallet_balance":  balance,
-            "total_earned":    total_earned,
-            "total_orders":    order_count,
-            "username":        u.get("username"),
-            "full_name":       u.get("full_name"),
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("SUBAGENT DASHBOARD ERROR: %s", str(e))
-        raise HTTPException(500, "Server error")
-
-
-@app.get("/subagent/wallet/{subagent_id}")
-@limiter.limit("30/minute")
-async def subagent_wallet(request: Request, subagent_id: int, _: int = Depends(require_subagent)):
-    wallet = supabase.table("agent_wallets").select("*").eq("agent_id", subagent_id).limit(1).execute()
-    if not wallet.data:
-        return {"agent_id": subagent_id, "balance": 0}
-    return wallet.data[0]
-
-
-@app.get("/subagent/transactions/{subagent_id}")
-@limiter.limit("30/minute")
-async def subagent_transactions(request: Request, subagent_id: int, _: int = Depends(require_subagent)):
-    res = supabase.table("agent_transactions") \
-        .select("*") \
-        .eq("agent_id", subagent_id) \
-        .order("created_at", desc=True) \
-        .limit(50) \
-        .execute()
-    return {"transactions": res.data or []}
-
-
-# =========================
-# SUBAGENT BUNDLES (at agent-set subagent prices)
-# =========================
-@app.get("/subagent/bundles/{subagent_id}")
-@limiter.limit("60/minute")
-async def subagent_bundles(request: Request, subagent_id: int, _: int = Depends(require_subagent)):
-    """
-    Returns bundles at the prices the subagent pays (set by their parent agent).
-    """
-    try:
-        sub_res = supabase.table("users").select("referred_by_id, role, agent_status") \
-            .eq("id", subagent_id).limit(1).execute()
-        if not sub_res.data:
-            raise HTTPException(404, "Subagent not found")
-        sub = sub_res.data[0]
-        if sub.get("role") != "subagent" or sub.get("agent_status") != "approved":
-            raise HTTPException(403, "Not authorized")
-
-        parent_agent_id = sub.get("referred_by_id")
-
-        base_res = supabase.table("base_prices").select("*").execute()
-        sp_res   = supabase.table("subagent_prices").select("*").eq("agent_id", parent_agent_id).execute() \
-            if parent_agent_id else type("", (), {"data": []})()
-
-        sp_map = {}
-        for row in (sp_res.data or []):
-            key = f"{row.get('network','').strip().lower()}-{row.get('bundle','').strip().lower()}"
-            sp_map[key] = float(row.get("markup", 0) or 0)
-
-        result = []
-        for item in (base_res.data or []):
-            network    = item.get("network", "").strip()
-            bundle     = item.get("bundle", "").strip()
-            cost_price = float(item.get("cost_price", 0) or 0)
-            key        = f"{network.lower()}-{bundle.lower()}"
-            markup     = sp_map.get(key, 0)
-            result.append({
-                "network":         network,
-                "bundle":          bundle,
-                "cost_price":      cost_price,
-                "subagent_price":  round(cost_price + markup, 2),
-            })
-
-        return {"status": "success", "bundles": result}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("SUBAGENT BUNDLES ERROR: %s", str(e))
-        raise HTTPException(500, "Failed to load bundles")
-
-
-# =========================
-# SUBAGENT BUY DATA (wallet debit)
-# =========================
-@app.post("/subagent/buy-data")
-@limiter.limit("10/minute")
-async def subagent_buy_data(request: Request, payload: SubagentBuyDataRequest):
-    """
-    Subagent buys data using wallet balance.
-    - Deducted at subagent_price (cost + agent's markup on subagent)
-    - Parent agent credited the margin automatically
-    - Data dispatched to provider
-    """
-    try:
-        token = request.headers.get("X-Subagent-Token", "")
-        if not token or not verify_subagent_token(token, payload.subagent_id):
-            raise HTTPException(status_code=403, detail="Forbidden")
-
-        subagent_id  = payload.subagent_id
-        network      = payload.network
-        bundle       = payload.bundle
-        phone_number = payload.phone_number
-
-        # Verify subagent
-        sub_res = supabase.table("users") \
-            .select("role, agent_status, referred_by_id") \
-            .eq("id", subagent_id) \
-            .eq("role", "subagent") \
-            .eq("agent_status", "approved") \
-            .limit(1).execute()
-        if not sub_res.data:
-            return {"status": "error", "message": "Subagent not found or not approved"}
-
-        parent_agent_id = sub_res.data[0].get("referred_by_id")
-
-        # Get cost price
-        base_res = supabase.table("base_prices") \
-            .select("cost_price") \
-            .ilike("network", network) \
-            .ilike("bundle", bundle) \
-            .limit(1).execute()
-        if not base_res.data:
-            return {"status": "error", "message": "Bundle not found"}
-
-        cost_price = float(base_res.data[0].get("cost_price", 0))
-        if cost_price <= 0:
-            return {"status": "error", "message": "Invalid bundle price"}
-
-        # Get subagent markup from parent agent's subagent_prices
-        sp_markup = 0.0
-        if parent_agent_id:
-            sp_res = supabase.table("subagent_prices").select("markup") \
-                .eq("agent_id", parent_agent_id) \
-                .ilike("network", network) \
-                .ilike("bundle", bundle) \
-                .limit(1).execute()
-            if sp_res.data:
-                sp_markup = float(sp_res.data[0].get("markup", 0) or 0)
-
-        subagent_price = round(cost_price + sp_markup, 2)
-
-        # Check wallet
-        wallet_res = supabase.table("agent_wallets").select("balance").eq("agent_id", subagent_id).limit(1).execute()
-        wallet_balance = float(wallet_res.data[0]["balance"]) if wallet_res.data else 0.0
-
-        if wallet_balance < subagent_price:
-            return {
-                "status": "error",
-                "message": f"Insufficient wallet balance. Need GH₵ {subagent_price:.2f}, have GH₵ {wallet_balance:.2f}"
-            }
-
-        new_balance = round(wallet_balance - subagent_price, 2)
-        supabase.table("agent_wallets").update({"balance": new_balance}).eq("agent_id", subagent_id).execute()
-
-        reference = f"EVOS-SAGT-{subagent_id}-{uuid.uuid4().hex[:10].upper()}"
-
-        order_res = supabase.table("orders").insert({
-            "agent_id":     subagent_id,
-            "subagent_id":  subagent_id,
-            "network":      network,
-            "bundle":       bundle,
-            "phone_number": phone_number,
-            "price":        subagent_price,
-            "base_price":   cost_price,
-            "agent_price":  subagent_price,
-            "evosdata_ref": reference,
-            "paystack_ref": reference,
-            "status":       "processing",
-        }).execute()
-
-        if not order_res.data:
-            supabase.table("agent_wallets").update({"balance": wallet_balance}).eq("agent_id", subagent_id).execute()
-            return {"status": "error", "message": "Failed to create order"}
-
-        order_id = order_res.data[0].get("id")
-
-        supabase.table("agent_transactions").insert({
-            "agent_id":  subagent_id,
-            "type":      "debit",
-            "amount":    subagent_price,
-            "reference": reference,
-            "order_id":  order_id,
-            "note":      f"Data purchase: {bundle} {network} → {phone_number}",
-        }).execute()
-
-        # Credit parent agent's margin
-        process_subagent_margin(
-            subagent_id    = subagent_id,
-            network        = network,
-            bundle         = bundle,
-            cost_price     = cost_price,
-            subagent_price = subagent_price,
-            order_id       = order_id,
-            reference      = reference,
-        )
-
-        # Dispatch to provider
-        try:
-            dispatch_data_order(network, bundle, phone_number, order_id)
-        except Exception as dispatch_err:
-            logger.error("SUBAGENT BUY DATA DISPATCH ERROR: %s", str(dispatch_err))
-
-        return {
-            "status":             "success",
-            "message":            f"{bundle} queued for {phone_number}",
-            "reference":          reference,
-            "order_id":           order_id,
-            "new_wallet_balance": new_balance,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("SUBAGENT BUY DATA ERROR: %s", str(e))
-        return {"status": "error", "message": "Something went wrong. Please try again."}
-
-
-# =========================
-# SUBAGENT DEPOSIT
-# =========================
-@app.post("/subagent/deposit/initiate")
-@limiter.limit("10/minute")
-async def subagent_initiate_deposit(request: Request, payload: SubagentDepositInitiateRequest):
-    try:
-        token = request.headers.get("X-Subagent-Token", "")
-        if not token or not verify_subagent_token(token, payload.subagent_id):
-            raise HTTPException(status_code=403, detail="Forbidden")
-
-        subagent_id  = payload.subagent_id
-        amount       = payload.amount
-        total_charge = payload.total_charge
-
-        user_res = supabase.table("users").select("email, username").eq("id", subagent_id).limit(1).execute()
-        if not user_res.data:
-            return {"error": "Subagent not found"}
-
-        subagent_email = user_res.data[0].get("email", "")
-        reference      = f"EVOS-SDEP-{subagent_id}-{uuid.uuid4().hex[:10].upper()}"
-
-        async with httpx.AsyncClient() as client:
-            res = await client.post(
-                "https://api.paystack.co/transaction/initialize",
-                headers={"Authorization": f"Bearer {PAYSTACK_SECRET}", "Content-Type": "application/json"},
-                json={
-                    "email":     subagent_email,
-                    "amount":    int(total_charge * 100),
-                    "reference": reference,
-                    "currency":  "GHS",
-                    "metadata": {
-                        "subagent_id":   subagent_id,
-                        "type":          "subagent_wallet_deposit",
-                        "credit_amount": amount,
-                    },
-                    "callback_url": f"{os.getenv('FRONTEND_URL', 'https://evosdata.xyz')}/success?type=subagent_deposit",
-                },
-            )
-            data = res.json()
-
-        if not data.get("status"):
-            return {"error": data.get("message", "Paystack init failed")}
-
-        paystack_ref = data["data"].get("reference", reference)
-
-        # Reuse wallet_deposits table, agent_id = subagent_id
-        supabase.table("wallet_deposits").insert({
-            "agent_id":     subagent_id,
-            "reference":    reference,
-            "paystack_ref": paystack_ref,
-            "amount":       amount,
-            "total_charge": total_charge,
-            "status":       "pending",
-        }).execute()
-
-        return {"status": "created", "reference": reference, "payment_url": data["data"]["authorization_url"]}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("SUBAGENT DEPOSIT INITIATE ERROR: %s", str(e))
-        return {"error": "Failed to initiate deposit"}
-
-
-@app.post("/subagent/deposit/verify")
-@limiter.limit("20/minute")
-async def subagent_verify_deposit(request: Request, payload: dict):
-    try:
-        reference = str(payload.get("reference", "")).strip()
-        if not reference:
-            return {"error": "reference required"}
-
-        lookup_col = "reference" if reference.startswith("EVOS-SDEP-") else "paystack_ref"
-        existing = supabase.table("wallet_deposits").select("*").eq(lookup_col, reference).limit(1).execute()
-        if not existing.data:
-            return {"error": "Deposit record not found"}
-
-        deposit     = existing.data[0]
-        subagent_id = deposit["agent_id"]
-
-        token = request.headers.get("X-Subagent-Token", "")
-        if not token or not verify_subagent_token(token, subagent_id):
-            raise HTTPException(status_code=403, detail="Forbidden")
-
-        if deposit.get("status") == "credited":
-            wallet_res = supabase.table("agent_wallets").select("balance").eq("agent_id", subagent_id).limit(1).execute()
-            balance = float(wallet_res.data[0]["balance"]) if wallet_res.data else 0
-            return {"status": "already_credited", "wallet_balance": balance}
-
-        verify_ref = deposit.get("paystack_ref") or deposit.get("reference")
-        async with httpx.AsyncClient() as client:
-            res = await client.get(
-                f"https://api.paystack.co/transaction/verify/{verify_ref}",
-                headers={"Authorization": f"Bearer {PAYSTACK_SECRET}"},
-            )
-            data = res.json()
-
-        if not data.get("status") or data["data"].get("status") != "success":
-            supabase.table("wallet_deposits").update({"status": "failed"}).eq("id", deposit["id"]).execute()
-            return {"error": "Payment not successful", "paystack_status": data["data"].get("status")}
-
-        credit_amount = float(deposit["amount"])
-
-        wallet_res = supabase.table("agent_wallets").select("balance").eq("agent_id", subagent_id).limit(1).execute()
-        if wallet_res.data:
-            current_balance = float(wallet_res.data[0]["balance"] or 0)
-            new_balance     = round(current_balance + credit_amount, 2)
-            supabase.table("agent_wallets").update({"balance": new_balance}).eq("agent_id", subagent_id).execute()
-        else:
-            new_balance = round(credit_amount, 2)
-            supabase.table("agent_wallets").insert({"agent_id": subagent_id, "balance": new_balance}).execute()
-
-        supabase.table("wallet_deposits").update({"status": "credited"}).eq("id", deposit["id"]).execute()
-        supabase.table("agent_transactions").insert({
-            "agent_id":  subagent_id,
-            "type":      "credit",
-            "amount":    credit_amount,
-            "reference": deposit.get("reference"),
-            "note":      "Subagent wallet top-up via Paystack",
-        }).execute()
-
-        return {"status": "credited", "credited_amount": credit_amount, "wallet_balance": new_balance}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("SUBAGENT DEPOSIT VERIFY ERROR: %s", str(e))
-        return {"error": "Verification failed"}
-
-
-# =========================
-# SUBAGENT WITHDRAW
-# =========================
-@app.post("/subagent/withdraw")
-@limiter.limit("5/minute")
-async def subagent_withdraw(request: Request, payload: SubagentWithdrawRequest):
-    """
-    Subagent withdraws from their wallet via Moolre MoMo transfer.
-    Reuses agent_wallets + agent_withdrawals tables with subagent_id.
-    """
-    try:
-        token = request.headers.get("X-Subagent-Token", "")
-        if not token or not verify_subagent_token(token, payload.subagent_id):
-            raise HTTPException(status_code=403, detail="Forbidden")
-
-        subagent_id   = payload.subagent_id
-        amount        = payload.amount
-        mobile_number = payload.mobile_number
-        network       = payload.network
-        account_name  = payload.account_name or ""
-
-        wallet = supabase.table("agent_wallets").select("balance").eq("agent_id", subagent_id).limit(1).execute()
-        if not wallet.data:
-            return {"error": "Wallet not found"}
-
-        balance = float(wallet.data[0]["balance"])
-        if float(amount) > balance:
-            return {"error": "Insufficient balance"}
-        if float(amount) < 5:
-            return {"error": "Minimum withdrawal is GH₵5"}
-
-        new_balance = balance - float(amount)
-        supabase.table("agent_wallets").update({"balance": new_balance}).eq("agent_id", subagent_id).execute()
-
-        channel = MOOLRE_CHANNEL_MAP.get(network) or MOOLRE_CHANNEL_MAP.get(network.upper())
-        if not channel:
-            supabase.table("agent_wallets").update({"balance": balance}).eq("agent_id", subagent_id).execute()
-            return {"error": f"Unsupported network: {network}"}
-
-        external_ref = f"EVOS-WD-{subagent_id}-{uuid.uuid4().hex[:8].upper()}"
-
-        wd = supabase.table("agent_withdrawals").insert({
-            "agent_id":       subagent_id,
-            "amount":         float(amount),
-            "account_name":   account_name,
-            "account_number": mobile_number,
-            "bank_name":      network,
-            "status":         "processing",
-            "moolre_ref":     external_ref,
-        }).execute()
-
-        if not wd.data:
-            supabase.table("agent_wallets").update({"balance": balance}).eq("agent_id", subagent_id).execute()
-            return {"error": "Failed to create withdrawal record"}
-
-        withdrawal_id = wd.data[0]["id"]
-
-        try:
-            moolre_res = call_moolre("transfer", {
-                "type":          1,
-                "channel":       channel,
-                "currency":      "GHS",
-                "amount":        str(float(amount)),
-                "receiver":      mobile_number,
-                "externalref":   external_ref,
-                "reference":     f"EVOS Subagent Withdrawal #{withdrawal_id}",
-                "accountnumber": MOOLRE_ACCOUNT_NUMBER,
-            })
-
-            if str(moolre_res.get("status")) == "1":
-                tx_data      = moolre_res.get("data", {})
-                tx_status    = tx_data.get("txstatus", 0) if isinstance(tx_data, dict) else 0
-                final_status = "paid" if tx_status == 1 else "processing"
-                supabase.table("agent_withdrawals").update({"status": final_status}).eq("id", withdrawal_id).execute()
-                supabase.table("agent_transactions").insert({
-                    "agent_id":  subagent_id,
-                    "amount":    -float(amount),
-                    "type":      "withdrawal",
-                    "reference": external_ref
-                }).execute()
-                return {
-                    "status":          "success",
-                    "message":         "Transfer initiated. Funds will arrive shortly.",
-                    "withdrawal_id":   withdrawal_id,
-                    "transfer_status": final_status,
-                }
-            else:
-                supabase.table("agent_wallets").update({"balance": balance}).eq("agent_id", subagent_id).execute()
-                supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
-                error_msg = moolre_res.get("message", "Transfer failed")
-                if isinstance(error_msg, list):
-                    error_msg = " ".join(error_msg)
-                return {"error": error_msg or "Moolre transfer failed"}
-
-        except Exception as e:
-            logger.error("SUBAGENT MOOLRE TRANSFER ERROR: %s", str(e))
-            supabase.table("agent_wallets").update({"balance": balance}).eq("agent_id", subagent_id).execute()
-            supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
-            return {"error": "Transfer service error. Funds refunded to wallet."}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("SUBAGENT WITHDRAW ERROR: %s", str(e))
-        return {"error": "Something went wrong. Please try again."}
-
-
-# =========================
 # AUTH
 # =========================
 @app.post("/auth/register")
@@ -3426,53 +2435,22 @@ def register(request: Request, data: RegisterRequest):
 
         referral_code = f"{username}_{phone[-4:]}" if len(phone) >= 4 else username
 
-        # ── Subagent detection via referral code ──
-        role             = "user"
-        agent_status     = "pending"
-        referred_by_id   = None
-
-        if data.referred_by:
-            ref_res = supabase.table("users") \
-                .select("id, role, agent_status") \
-                .eq("referral_code", data.referred_by.strip()) \
-                .limit(1).execute()
-            if ref_res.data:
-                referrer = ref_res.data[0]
-                # Only agents can refer subagents
-                if referrer.get("role") == "agent" and referrer.get("agent_status") == "approved":
-                    role           = "subagent"
-                    agent_status   = "approved"   # auto-approve subagents
-                    referred_by_id = referrer["id"]
-                    logger.info(
-                        "REGISTER: %s registering as subagent under agent %s",
-                        username, referred_by_id
-                    )
-
         insert = supabase.table("users").insert({
-            "username":       username,
-            "full_name":      data.full_name.strip(),
-            "email":          email,
-            "phone":          phone,
-            "password":       hashed_password,
-            "referred_by":    data.referred_by,      # raw code string (kept for legacy)
-            "referred_by_id": referred_by_id,        # FK to users.id
-            "referral_code":  referral_code,
-            "role":           role,
-            "agent_status":   agent_status,
-            "order_count":    0,
-            "rank":           1
+            "username":      username,
+            "full_name":     data.full_name.strip(),
+            "email":         email,
+            "phone":         phone,
+            "password":      hashed_password,
+            "referred_by":   data.referred_by,
+            "referral_code": referral_code,
+            "order_count":   0,
+            "rank":          1
         }).execute()
 
         if not insert.data:
             raise HTTPException(status_code=500, detail="User creation failed")
 
-        return {
-            "status":        "created",
-            "email":         email,
-            "username":      username,
-            "referral_code": referral_code,
-            "role":          role,
-        }
+        return {"status": "created", "email": email, "username": username, "referral_code": referral_code}
 
     except HTTPException:
         raise
@@ -3481,6 +2459,7 @@ def register(request: Request, data: RegisterRequest):
         raise HTTPException(status_code=500, detail="Server error")
 
 
+# FIX: login now returns agent_token for approved agents, used by require_agent on all protected endpoints
 @app.post("/auth/login")
 @limiter.limit("10/minute")
 def login(request: Request, data: LoginRequest):
@@ -3495,6 +2474,8 @@ def login(request: Request, data: LoginRequest):
             .limit(1) \
             .execute()
 
+        # Constant-time path: always verify a dummy hash even on not-found
+        # to prevent username enumeration via timing
         dummy_hash = "$2b$12$KIXzCq3C3T6tFkUd9nj6aO.WwSIFqh4fQieFzpxKx5Mj5.z1rklHC"
         stored_password = user_res.data[0].get("password") if user_res.data else dummy_hash
 
@@ -3507,27 +2488,20 @@ def login(request: Request, data: LoginRequest):
             return {"status": "invalid_credentials"}
 
         user = user_res.data[0]
-        role         = user.get("role", "user")
-        agent_status = user.get("agent_status", "pending")
-
-        # Issue agent_token for approved agents AND approved subagents
-        is_approved_agent    = (role == "agent"    and agent_status == "approved")
-        is_approved_subagent = (role == "subagent" and agent_status == "approved")
 
         user_data = {
-            "id":              user.get("id"),
-            "username":        user.get("username"),
-            "email":           user.get("email"),
-            "full_name":       user.get("full_name"),
-            "referral_code":   user.get("referral_code"),
-            "rank":            user.get("rank", 1),
-            "role":            role,
-            "agent_status":    agent_status,
-            "referred_by_id":  user.get("referred_by_id"),
-            # Token for agents
-            "agent_token":     make_agent_token(user["id"]) if is_approved_agent else None,
-            # Token for subagents (same HMAC scheme, different header name)
-            "subagent_token":  make_subagent_token(user["id"]) if is_approved_subagent else None,
+            "id":            user.get("id"),
+            "username":      user.get("username"),
+            "email":         user.get("email"),
+            "full_name":     user.get("full_name"),
+            "referral_code": user.get("referral_code"),
+            "rank":          user.get("rank", 1),
+            "role":          user.get("role", "user"),
+            "agent_status":  user.get("agent_status", "pending"),
+            # Provide token only to approved agents; frontend stores and sends as X-Agent-Token header
+            "agent_token":   make_agent_token(user["id"]) if (
+                user.get("role") == "agent" and user.get("agent_status") == "approved"
+            ) else None,
         }
         return {"status": "ok", "user": user_data}
 
@@ -3587,6 +2561,7 @@ def today_dashboard(request: Request, user_id: int):
 
 # =========================
 # USSD
+# FIX: no longer calls itself over HTTP — processes the order directly
 # =========================
 @app.post("/ussd")
 @limiter.limit("30/minute")
@@ -3623,6 +2598,7 @@ async def ussd(request: Request):
 
         bundle, price = bundle_data
 
+        # FIX: create order directly (no internal HTTP call)
         try:
             price_res = supabase.table("prices").select("price").eq("network", network).eq("bundle", bundle).limit(1).execute()
             if not price_res.data:
@@ -3709,12 +2685,14 @@ def forgot_password(request: Request, data: ForgotPasswordRequest):
         user    = user_res.data[0]
         user_id = user["id"]
 
+        # Invalidate existing unused OTPs
         supabase.table("password_resets") \
             .update({"used": True}) \
             .eq("user_id", user_id) \
             .eq("used", False) \
             .execute()
 
+        # Generate OTP
         otp        = str(random.randint(100000, 999999))
         expires_at = (utc_now() + timedelta(minutes=10)).isoformat()
 
@@ -3843,6 +2821,8 @@ def reset_password(request: Request, data: ResetPasswordRequest):
 
 # =========================
 # WHATSAPP WEBHOOK
+# NOTE: In-memory sessions reset on restart. For production persistence,
+#       migrate sessions to Supabase or Redis.
 # =========================
 from fastapi.responses import Response
 
