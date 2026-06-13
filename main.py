@@ -613,6 +613,7 @@ def get_prices(request: Request):
 # FIX: query window widened to 6 hrs so orders aren't silently dropped
 #      before the age-based fail logic can run.
 # =========================
+
 _retry_running = False
 
 async def retry_stuck_orders():
@@ -671,8 +672,8 @@ async def retry_stuck_orders():
 
                         if dm_data.get("orderReference"):
                             supabase.table("orders").update({
-                                "status":           "processing",
-                                "datamart_ref":     dm_data.get("orderReference"),
+                                "status":            "processing",
+                                "datamart_ref":      dm_data.get("orderReference"),
                                 "datamart_order_id": dm_data.get("orderId")
                             }).eq("id", order["id"]).execute()
 
@@ -697,10 +698,10 @@ async def retry_stuck_orders():
                     # ── BUNDLES GHANA ──────────────────────────────────────
                     elif provider == "BUNDLES_GHANA":
                         BG_NETWORK_MAP = {
-                            "MTN":       "MTN",
-                            "TELECEL":   "Telecel",
+                            "MTN":        "MTN",
+                            "TELECEL":    "Telecel",
                             "AIRTELTIGO": "AirtelTigo",
-                            "AT":        "AirtelTigo",
+                            "AT":         "AirtelTigo",
                         }
                         network_name = BG_NETWORK_MAP.get(order["network"].upper(), order["network"])
                         bg_bundles   = call_bundles_ghana(f"/bundles?network={network_name}")
