@@ -3306,3 +3306,13 @@ async def whatsapp_webhook(request: Request):
 @app.get("/")
 def root():
     return {"status": "EVOS API is running"}
+
+
+# Quick test outside your app
+import requests
+res = requests.get(
+    "https://www.agyekumdata.com/api/v1/wallet",
+    headers={"X-API-KEY": AGYEKUMDATA_API_KEY, "Content-Type": "application/json"},
+    allow_redirects=False,
+)
+print(res.status_code, res.text[:300])
