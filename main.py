@@ -91,6 +91,10 @@ SWIFT_DATA_LINK_API_KEY = os.getenv("SWIFT_DATA_LINK_API_KEY")
 SWIFT_DATA_LINK_BASE    = os.getenv("SWIFT_DATA_LINK_BASE", "https://swiftdata-link.com/api/v1")
 SWIFT_DATA_LINK_WEBHOOK = os.getenv("SWIFT_DATA_LINK_WEBHOOK_URL", "https://api.evosdata.xyz/webhook/swiftdatalink")
 
+AGYEKUMDATA_API_KEY          = os.getenv("AGYEKUMDATA_API_KEY")
+AGYEKUMDATA_BASE             = os.getenv("AGYEKUMDATA_BASE", "https://www.agyekumdata.com/api/v1")
+AGYEKUMDATA_WEBHOOK_SECRET   = os.getenv("AGYEKUMDATA_WEBHOOK_SECRET")
+
 SMTP_HOST     = os.getenv("SMTP_HOST", "mail.spacemail.com")
 SMTP_PORT     = int(os.getenv("SMTP_PORT", "465"))
 SMTP_USER     = os.getenv("SMTP_USER", "support@evoshub.xyz")
@@ -103,21 +107,23 @@ ADMIN_SECRET = os.getenv("ADMIN_SECRET")
 # SAFETY CHECK
 # =========================
 required_envs = {
-    "SUPABASE_URL": SUPABASE_URL,
-    "SUPABASE_KEY": SUPABASE_KEY,
-    "PAYSTACK_SECRET_KEY": PAYSTACK_SECRET,
-    "DATAMART_API_KEY": DATAMART_API_KEY,
-    "DATAMART_WEBHOOK_SECRET": DATAMART_WEBHOOK_SECRET,
-    "BUNDLES_GHANA_API_KEY": BUNDLES_GHANA_API_KEY,
-    "BUNDLES_GHANA_API_SECRET": BUNDLES_GHANA_API_SECRET,
-    "MOOLRE_USERNAME": MOOLRE_USERNAME,
-    "MOOLRE_API_KEY": MOOLRE_API_KEY,
-    "MOOLRE_ACCOUNT_NUMBER": MOOLRE_ACCOUNT_NUMBER,
-    "SWIFT_DATA_LINK_API_KEY": SWIFT_DATA_LINK_API_KEY,
-    "SWIFT_DATA_LINK_WEBHOOK": SWIFT_DATA_LINK_WEBHOOK,
-    "ADMIN_SECRET": ADMIN_SECRET,
-    "SMTP_USER": SMTP_USER,
-    "SMTP_PASSWORD": SMTP_PASSWORD,
+    "SUPABASE_URL":               SUPABASE_URL,
+    "SUPABASE_KEY":               SUPABASE_KEY,
+    "PAYSTACK_SECRET_KEY":        PAYSTACK_SECRET,
+    "DATAMART_API_KEY":           DATAMART_API_KEY,
+    "DATAMART_WEBHOOK_SECRET":    DATAMART_WEBHOOK_SECRET,
+    "BUNDLES_GHANA_API_KEY":      BUNDLES_GHANA_API_KEY,
+    "BUNDLES_GHANA_API_SECRET":   BUNDLES_GHANA_API_SECRET,
+    "MOOLRE_USERNAME":            MOOLRE_USERNAME,
+    "MOOLRE_API_KEY":             MOOLRE_API_KEY,
+    "MOOLRE_ACCOUNT_NUMBER":      MOOLRE_ACCOUNT_NUMBER,
+    "SWIFT_DATA_LINK_API_KEY":    SWIFT_DATA_LINK_API_KEY,
+    "SWIFT_DATA_LINK_WEBHOOK":    SWIFT_DATA_LINK_WEBHOOK,
+    "AGYEKUMDATA_API_KEY":        AGYEKUMDATA_API_KEY,
+    "AGYEKUMDATA_WEBHOOK_SECRET": AGYEKUMDATA_WEBHOOK_SECRET,
+    "ADMIN_SECRET":               ADMIN_SECRET,
+    "SMTP_USER":                  SMTP_USER,
+    "SMTP_PASSWORD":              SMTP_PASSWORD,
 }
 
 missing = [k for k, v in required_envs.items() if not v]
@@ -334,6 +340,26 @@ SDL_OFFER_SLUG = {
     "AT":         "ishare_data_bundle",
 }
 
+# Agyekumdata uses packageId strings like "MTN-1GB", "Telecel-2GB" etc.
+# Their category names must match exactly what their /categories endpoint returns.
+AGYEKUMDATA_CATEGORY_MAP = {
+    "MTN":        "MTN",
+    "TELECEL":    "Telecel",
+    "AIRTELTIGO": "AirtelTigo",
+    "AT":         "AirtelTigo",
+}
+
+def build_agyekumdata_package_id(network: str, bundle: str) -> str:
+    """
+    Construct the packageId Agyekumdata expects.
+    e.g. network=MTN, bundle=1GB  →  "MTN-1GB"
+         network=TELECEL, bundle=2GB → "Telecel-2GB"
+    """
+    category = AGYEKUMDATA_CATEGORY_MAP.get(network.upper(), network)
+    # bundle is stored as "1GB", "2GB" etc — use as-is, uppercased
+    return f"{category}-{bundle.strip().upper()}"
+
+
 # =========================
 # BUNDLES GHANA HELPER
 # =========================
@@ -351,6 +377,7 @@ def call_bundles_ghana(endpoint: str, method: str = "GET", body: dict = None):
     except Exception as e:
         logger.error("BUNDLES GHANA PROXY ERROR: %s", str(e))
         return {"success": False, "error": str(e)}
+
 
 # =========================
 # SWIFT DATA LINK HELPER
@@ -386,6 +413,88 @@ def call_swift_data_link(network: str, volume: float, phone: str) -> dict:
         logger.error("SDL ORDER ERROR: %s", str(e))
         return {"success": False, "error": str(e)}
 
+
+# =========================
+# AGYEKUMDATA HELPER
+# =========================
+def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str) -> dict:
+    """
+    Place a data order via Agyekumdata wallet purchase endpoint.
+    Returns the full response dict; caller checks .get("success").
+    Phone is normalised to local 0XXXXXXXXX format (their API preference).
+    """
+    phone = phone.strip()
+    # Convert 233XXXXXXXXX → 0XXXXXXXXX
+    if phone.startswith("233") and len(phone) == 12:
+        phone = "0" + phone[3:]
+    # If still no leading zero and 9 digits, prepend 0
+    elif len(phone) == 9 and not phone.startswith("0"):
+        phone = "0" + phone
+
+    try:
+        logger.info(
+            "AGYEKUMDATA PURCHASE: packageId=%s phone=%s ref=%s",
+            package_id, phone, client_reference
+        )
+        res = requests.post(
+            f"{AGYEKUMDATA_BASE}/purchase",
+            headers={
+                "X-API-KEY":    AGYEKUMDATA_API_KEY,
+                "Content-Type": "application/json",
+            },
+            json={
+                "packageId":       package_id,
+                "mobileNo":        phone,
+                "clientReference": client_reference,
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        return res.json()
+    except Exception as e:
+        logger.error("AGYEKUMDATA PURCHASE ERROR: %s", str(e))
+        return {"success": False, "error": str(e)}
+
+
+def call_agyekumdata_status(client_reference: str) -> dict:
+    """
+    Poll order status by our clientReference.
+    Returns the full response dict; caller reads .get("data", {}).get("status").
+    """
+    try:
+        res = requests.get(
+            f"{AGYEKUMDATA_BASE}/order/status",
+            headers={
+                "X-API-KEY":    AGYEKUMDATA_API_KEY,
+                "Content-Type": "application/json",
+            },
+            params={"clientReference": client_reference},
+            timeout=REQUEST_TIMEOUT,
+        )
+        return res.json()
+    except Exception as e:
+        logger.error("AGYEKUMDATA STATUS ERROR: %s", str(e))
+        return {"success": False, "error": str(e)}
+
+
+def verify_agyekumdata_signature(body: bytes, signature: str) -> bool:
+    """
+    Verify HMAC-SHA256 from the X-AGYEKUMDATA-SIGNATURE webhook header.
+    """
+    try:
+        if not signature:
+            logger.warning("AGYEKUMDATA WEBHOOK: missing signature")
+            return False
+        computed = hmac.new(
+            AGYEKUMDATA_WEBHOOK_SECRET.encode("utf-8"),
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(computed, signature)
+    except Exception as e:
+        logger.error("AGYEKUMDATA SIGNATURE ERROR: %s", str(e))
+        return False
+
+
 # =========================
 # MOOLRE HELPER
 # =========================
@@ -405,6 +514,7 @@ def call_moolre(endpoint: str, body: dict):
     except Exception as e:
         logger.error("MOOLRE ERROR: %s", str(e))
         return {"status": 0, "message": str(e)}
+
 
 # =========================
 # PASSWORD SECURITY
@@ -429,6 +539,7 @@ def verify_password(plain: str, hashed: str) -> bool:
         logger.error("VERIFY ERROR: %s", str(e))
         return False
 
+
 # =========================
 # UTILITIES
 # =========================
@@ -452,6 +563,7 @@ def parse_db_dt(raw: str) -> datetime:
     naive = datetime.fromisoformat(cleaned)
     return naive.replace(tzinfo=timezone.utc)
 
+
 # =========================
 # PAYSTACK SIGNATURE (SHA512)
 # =========================
@@ -469,6 +581,7 @@ def verify_paystack_signature(body: bytes, signature: str, secret: str) -> bool:
     except Exception as e:
         logger.error("PAYSTACK SIGNATURE ERROR: %s", str(e))
         return False
+
 
 # =========================
 # DATAMART SIGNATURE (SHA256)
@@ -491,6 +604,7 @@ def verify_datamart_signature(body: bytes, signature: str, secret: str) -> bool:
 def verify_signature(body: bytes, signature: str, secret: str) -> bool:
     return verify_paystack_signature(body, signature, secret)
 
+
 # =========================
 # NETWORK PROVIDERS
 # =========================
@@ -509,6 +623,7 @@ def get_provider(network: str):
     except Exception as e:
         logger.error("PROVIDER LOOKUP ERROR: %s", str(e))
         return None
+
 
 # =========================
 # AGENT PROFIT
@@ -569,6 +684,7 @@ def process_agent_profit(order_id, reference):
         "reference": reference
     }).execute()
 
+
 # =========================
 # USER STATS
 # =========================
@@ -593,6 +709,7 @@ def increment_user_orders(user_id: int):
     except Exception as e:
         logger.error("INCREMENT USER ERROR: %s", str(e))
 
+
 # =========================
 # PRICES
 # =========================
@@ -606,12 +723,14 @@ def get_prices(request: Request):
         logger.error("PRICES ERROR: %s", str(e))
         raise HTTPException(status_code=500, detail="Failed to load prices")
 
+
 # =========================
 # BACKGROUND: RETRY STUCK ORDERS
 # FIX: auto-fail moved inside each provider rejection branch so it
 #      actually fires (old approach was unreachable due to query window).
 # FIX: query window widened to 6 hrs so orders aren't silently dropped
 #      before the age-based fail logic can run.
+# NEW: AGYEKUMDATA provider branch added with duplicate-ref recovery.
 # =========================
 
 _retry_running = False
@@ -813,6 +932,63 @@ async def retry_stuck_orders():
                                     order['id']
                                 )
 
+                    # ── AGYEKUMDATA ────────────────────────────────────────
+                    elif provider == "AGYEKUMDATA":
+                        package_id = build_agyekumdata_package_id(order["network"], order["bundle"])
+                        # Use our existing reference as clientReference so we can look it up later
+                        client_ref = (
+                            order.get("paystack_ref")
+                            or order.get("evosdata_ref")
+                            or str(order["id"])
+                        )
+                        agd = call_agyekumdata_purchase(
+                            package_id=package_id,
+                            phone=order["phone_number"],
+                            client_reference=client_ref,
+                        )
+
+                        if agd.get("success"):
+                            agd_data = agd.get("data", {})
+                            supabase.table("orders").update({
+                                "status":            "processing",
+                                "datamart_ref":      agd_data.get("clientReference") or client_ref,
+                                "datamart_order_id": agd_data.get("orderId"),
+                            }).eq("id", order["id"]).execute()
+
+                            if order.get("paystack_ref") and not str(order["paystack_ref"]).startswith("EVOS-AGT-"):
+                                process_agent_profit(order["id"], order["paystack_ref"])
+
+                            logger.info("RETRY JOB: order %s sent to AGYEKUMDATA ✅", order['id'])
+                        else:
+                            err_msg = str(agd.get("error", ""))
+                            logger.warning(
+                                "RETRY JOB: AGYEKUMDATA rejected order %s: %s",
+                                order['id'], agd
+                            )
+
+                            # Duplicate clientReference means order already accepted on their end — recover it
+                            if "Duplicate clientReference" in err_msg:
+                                supabase.table("orders").update({
+                                    "status":       "processing",
+                                    "datamart_ref": client_ref,
+                                }).eq("id", order["id"]).execute()
+                                logger.info(
+                                    "RETRY JOB: order %s recovered from duplicate clientReference ✅",
+                                    order['id']
+                                )
+                                continue
+
+                            order_age = utc_now() - parse_db_dt(order["created_at"])
+                            if order_age > timedelta(hours=3):
+                                supabase.table("orders") \
+                                    .update({"status": "failed"}) \
+                                    .eq("id", order["id"]) \
+                                    .execute()
+                                logger.info(
+                                    "RETRY JOB: order %s marked failed after repeated AGYEKUMDATA rejection",
+                                    order['id']
+                                )
+
                 except Exception as e:
                     logger.error("RETRY JOB: error on order %s: %s", order.get('id'), str(e))
 
@@ -865,6 +1041,19 @@ async def retry_stuck_orders():
                             timeout=REQUEST_TIMEOUT
                         ).json()
                         status = str(sdl_res.get("order", {}).get("status", "")).lower()
+
+                    elif provider == "AGYEKUMDATA":
+                        # Use clientReference (stored in datamart_ref) for status polling
+                        client_ref = ref or order_id
+                        if not client_ref:
+                            continue
+                        agd_res = call_agyekumdata_status(client_reference=client_ref)
+                        # Their status values: PENDING, SUCCESS, FAILED etc — normalise to lower
+                        status = str(agd_res.get("data", {}).get("status", "processing")).lower()
+                        logger.info(
+                            "STATUS SYNC: AGYEKUMDATA order %s clientRef=%s status=%s",
+                            order['id'], client_ref, status
+                        )
 
                     else:
                         continue
@@ -1080,6 +1269,7 @@ def send_otp_email(to_email: str, otp: str, full_name: str) -> bool:
     except Exception as e:
         logger.error("SPACEMAIL SMTP ERROR: %s", str(e))
         return False
+
 
 # =========================
 # ORDERS
@@ -1333,6 +1523,28 @@ async def paystack_webhook(request: Request):
                 }).eq("paystack_ref", reference).execute()
                 process_agent_profit(order["id"], reference)
 
+            elif provider == "AGYEKUMDATA":
+                # Use the Paystack reference as clientReference — unique and traceable
+                package_id = build_agyekumdata_package_id(order["network"], order["bundle"])
+                agd = call_agyekumdata_purchase(
+                    package_id=package_id,
+                    phone=order["phone_number"],
+                    client_reference=reference,
+                )
+                if not agd.get("success"):
+                    raise Exception(f"AGYEKUMDATA order failed: {agd.get('error', agd)}")
+                agd_data = agd.get("data", {})
+                supabase.table("orders").update({
+                    "status":            "processing",
+                    "datamart_ref":      agd_data.get("clientReference") or reference,
+                    "datamart_order_id": agd_data.get("orderId"),
+                }).eq("paystack_ref", reference).execute()
+                process_agent_profit(order["id"], reference)
+                logger.info(
+                    "PAYSTACK WEBHOOK: order %s dispatched to AGYEKUMDATA orderId=%s ✅",
+                    order['id'], agd_data.get("orderId")
+                )
+
             else:
                 raise Exception("No provider assigned")
 
@@ -1469,6 +1681,78 @@ async def swiftdatalink_webhook(request: Request):
 
 
 # =========================
+# AGYEKUMDATA WEBHOOK
+# NEW: handles ORDER_STATUS_UPDATED events from Agyekumdata.
+#      We store clientReference in datamart_ref and their orderId in
+#      datamart_order_id — consistent with all other providers.
+# =========================
+@app.post("/webhook/agyekumdata")
+async def agyekumdata_webhook(request: Request):
+    try:
+        body      = await request.body()
+        signature = request.headers.get("X-AGYEKUMDATA-SIGNATURE", "")
+
+        if not verify_agyekumdata_signature(body, signature):
+            logger.warning(
+                "AGYEKUMDATA WEBHOOK: invalid signature from %s",
+                request.client.host
+            )
+            # Return 200 so they don't flood us with retries on a config mismatch
+            return {"received": False, "reason": "invalid signature"}
+
+        payload    = await request.json()
+        event      = payload.get("event", "")
+        order_id   = payload.get("orderId", "")        # their internal ref e.g. "ORD-FD63E9AA"
+        client_ref = payload.get("clientReference", "") # our reference we sent at purchase time
+        status     = str(payload.get("status", "")).upper()
+
+        logger.info("AGYEKUMDATA WEBHOOK EVENT: %s", event)
+        logger.info("AGYEKUMDATA WEBHOOK ORDER_ID: %s", order_id)
+        logger.info("AGYEKUMDATA WEBHOOK CLIENT_REF: %s", client_ref)
+        logger.info("AGYEKUMDATA WEBHOOK STATUS: %s", status)
+
+        if event != "ORDER_STATUS_UPDATED":
+            logger.info("AGYEKUMDATA WEBHOOK: ignoring event %s", event)
+            return {"received": True}
+
+        if not client_ref and not order_id:
+            logger.warning("AGYEKUMDATA WEBHOOK: no clientReference or orderId in payload")
+            return {"received": True}
+
+        final_status = (
+            "successful" if status in ["SUCCESS", "COMPLETED", "DELIVERED"]
+            else "failed"  if status in ["FAILED", "CANCELLED", "REJECTED"]
+            else "processing"
+        )
+
+        # Prefer clientReference lookup (more reliable — it's our own ref)
+        if client_ref:
+            supabase.table("orders") \
+                .update({"status": final_status}) \
+                .eq("datamart_ref", client_ref) \
+                .execute()
+            logger.info(
+                "AGYEKUMDATA WEBHOOK: updated by clientReference=%s → %s",
+                client_ref, final_status
+            )
+        elif order_id:
+            supabase.table("orders") \
+                .update({"status": final_status}) \
+                .eq("datamart_order_id", order_id) \
+                .execute()
+            logger.info(
+                "AGYEKUMDATA WEBHOOK: updated by orderId=%s → %s",
+                order_id, final_status
+            )
+
+        return {"received": True}
+
+    except Exception as e:
+        logger.error("AGYEKUMDATA WEBHOOK ERROR: %s", str(e))
+        return {"received": False}
+
+
+# =========================
 # SYNC ORDER
 # =========================
 @app.post("/orders/sync/{reference}")
@@ -1511,6 +1795,15 @@ def sync_order(request: Request, reference: str):
                 timeout=REQUEST_TIMEOUT
             ).json()
             status = str(sdl_res.get("order", {}).get("status", "processing")).lower()
+
+        elif provider == "AGYEKUMDATA":
+            # tracker could be datamart_order_id (their orderId) or datamart_ref (our clientReference)
+            # Try by clientReference first (datamart_ref holds our ref)
+            client_ref = order.get("datamart_ref") or tracker
+            agd_res = call_agyekumdata_status(client_reference=client_ref)
+            # Their status: PENDING, SUCCESS, FAILED — normalise to lower
+            status = str(agd_res.get("data", {}).get("status", "processing")).lower()
+            logger.info("SYNC ORDER: AGYEKUMDATA clientRef=%s status=%s", client_ref, status)
 
         else:
             status = "processing"
@@ -2082,6 +2375,7 @@ async def verify_deposit(request: Request, payload: dict):
 # =========================
 # AGENT BUY DATA
 # FIX: added require_agent token check on agent_id from payload
+# NEW: AGYEKUMDATA dispatch branch added
 # =========================
 @app.post("/agent/buy-data")
 @limiter.limit("10/minute")
@@ -2158,6 +2452,7 @@ async def agent_buy_data(request: Request, payload: AgentBuyDataRequest):
 
         try:
             provider = get_provider(network)
+
             if provider == "DATAMART":
                 dm_response = requests.post(
                     f"{DATAMART_BASE}/purchase",
@@ -2212,6 +2507,30 @@ async def agent_buy_data(request: Request, payload: AgentBuyDataRequest):
                         "datamart_order_id": sdl.get("orderId"),
                         "status": "processing"
                     }).eq("id", order_id).execute()
+
+            elif provider == "AGYEKUMDATA":
+                package_id = build_agyekumdata_package_id(network, bundle)
+                agd = call_agyekumdata_purchase(
+                    package_id=package_id,
+                    phone=phone_number,
+                    client_reference=reference,
+                )
+                if agd.get("success"):
+                    agd_data = agd.get("data", {})
+                    supabase.table("orders").update({
+                        "datamart_ref":      agd_data.get("clientReference") or reference,
+                        "datamart_order_id": agd_data.get("orderId"),
+                        "status":            "processing",
+                    }).eq("id", order_id).execute()
+                    logger.info(
+                        "AGENT BUY DATA: order %s dispatched to AGYEKUMDATA orderId=%s ✅",
+                        order_id, agd_data.get("orderId")
+                    )
+                else:
+                    logger.warning(
+                        "AGENT BUY DATA: AGYEKUMDATA rejected order %s: %s",
+                        order_id, agd
+                    )
 
         except Exception as dispatch_err:
             logger.error("AGENT BUY DATA DISPATCH ERROR: %s", str(dispatch_err))
