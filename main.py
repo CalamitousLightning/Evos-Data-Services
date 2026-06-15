@@ -100,7 +100,6 @@ SMTP_PORT     = int(os.getenv("SMTP_PORT", "465"))
 SMTP_USER     = os.getenv("SMTP_USER", "support@evoshub.xyz")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
-# ── Admin secret for protected endpoints ──
 ADMIN_SECRET = os.getenv("ADMIN_SECRET")
 
 # =========================
@@ -147,7 +146,6 @@ BG_TIMEOUT = 25
 PHONE_RE = re.compile(r"^\d{9,15}$")
 
 def normalise_phone(raw: str) -> str:
-    """Strip spaces/dashes, validate length, return cleaned string."""
     cleaned = re.sub(r"[\s\-\(\)]", "", raw.strip())
     if not PHONE_RE.match(cleaned):
         raise HTTPException(status_code=400, detail="Invalid phone number")
@@ -157,24 +155,20 @@ def normalise_phone(raw: str) -> str:
 # ADMIN AUTH DEPENDENCY
 # =========================
 def require_admin(request: Request):
-    """Checks X-Admin-Secret header. Raise 403 if missing or wrong."""
     secret = request.headers.get("X-Admin-Secret", "")
     if not secret or not hmac.compare_digest(secret, ADMIN_SECRET):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 # =========================
 # AGENT TOKEN AUTH
-# FIX: prevents IDOR — agents can only access their own data
 # =========================
 def make_agent_token(agent_id: int) -> str:
-    """Create a simple HMAC-signed token: base64(agent_id).signature"""
     msg = str(agent_id).encode()
     sig = hmac.new(ADMIN_SECRET.encode(), msg, hashlib.sha256).hexdigest()
     payload = base64.urlsafe_b64encode(msg).decode()
     return f"{payload}.{sig}"
 
 def verify_agent_token(token: str, agent_id: int) -> bool:
-    """Return True only if token was signed for this exact agent_id."""
     try:
         payload, sig = token.rsplit(".", 1)
         msg = base64.urlsafe_b64decode(payload.encode())
@@ -187,7 +181,6 @@ def verify_agent_token(token: str, agent_id: int) -> bool:
         return False
 
 def require_agent(request: Request, agent_id: int) -> int:
-    """Verify caller owns this agent_id via X-Agent-Token header."""
     token = request.headers.get("X-Agent-Token", "")
     if not token or not verify_agent_token(token, agent_id):
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -340,7 +333,6 @@ SDL_OFFER_SLUG = {
     "AT":         "ishare_data_bundle",
 }
 
-# Agyekumdata category names must match exactly what their /categories endpoint returns.
 AGYEKUMDATA_CATEGORY_MAP = {
     "MTN":        "MTN",
     "TELECEL":    "Telecel",
@@ -405,18 +397,20 @@ def call_swift_data_link(network: str, volume: float, phone: str) -> dict:
 
 # =========================
 # AGYEKUMDATA HELPERS
-# FIX: added raw-response logging and empty-body guard so JSON decode
-#      errors are caught and reported clearly instead of crashing.
-# FIX: get_agyekumdata_package_id now does a live /products lookup to
-#      get the exact packageid string from their API instead of guessing.
-# FIX: sanitise_agyekumdata_ref strips hyphens/special chars so the
-#      clientReference format matches what their API expects.
-# FIX: allow_redirects=False on purchase so silent HTTP redirects that
-#      drop the POST body are caught and logged explicitly.
+# FIX: API key sent as X-API-KEY header (not query param) per their docs.
+#      Single purchase attempt — no shotgun fallbacks needed.
+#      _safe_agyekumdata_json handles empty/non-JSON bodies gracefully.
+#      sanitise_agyekumdata_ref keeps clientReference alphanumeric ≤20 chars.
+#      get_agyekumdata_package_id does live /products lookup with header auth.
 # =========================
 
 def _agyekumdata_headers() -> dict:
-    return {"X-API-KEY": AGYEKUMDATA_API_KEY, "Content-Type": "application/json"}
+    """Standard headers for all Agyekumdata API calls."""
+    return {
+        "X-API-KEY":    AGYEKUMDATA_API_KEY,
+        "Content-Type": "application/json",
+        "Accept":       "application/json",
+    }
 
 
 def _safe_agyekumdata_json(res: requests.Response, context: str) -> dict:
@@ -433,17 +427,16 @@ def _safe_agyekumdata_json(res: requests.Response, context: str) -> dict:
     try:
         return res.json()
     except ValueError as e:
-        logger.error("AGYEKUMDATA %s JSON ERROR: %s", context, str(e))
+        logger.error("AGYEKUMDATA %s JSON ERROR: %s | body was: %s", context, str(e), res.text[:200])
         return {"success": False, "error": f"Invalid JSON: {str(e)}"}
 
 
 def sanitise_agyekumdata_ref(ref: str) -> str:
     """
     Agyekumdata clientReference must be alphanumeric + underscores only,
-    and their example shows short refs like ORDER_10004.
-    Strip hyphens and any non-alphanumeric chars, truncate to 20 chars.
+    max 20 chars (based on their ORDER_10004 example style).
+    Strips hyphens and any other non-alphanumeric chars.
     E.g. "EVOS-AGT-1-7AF2440807" → "EVOSAGT17AF2440807"
-         "EVOS-DEP-5-ABCDE12345" → "EVOSDEP5ABCDE12345"
     """
     cleaned = re.sub(r"[^A-Z0-9_]", "", ref.upper())
     return cleaned[:20]
@@ -452,9 +445,9 @@ def sanitise_agyekumdata_ref(ref: str) -> str:
 def get_agyekumdata_package_id(network: str, bundle: str) -> str:
     """
     Fetch the exact packageid from Agyekumdata's /products endpoint.
-    Matches by normalising the title (e.g. "1 GB" -> "1GB") against our
-    bundle value.  Falls back to the constructed "Category-BUNDLE" string
-    if the API call fails or no match is found.
+    Filters by category so the response is small and relevant.
+    Matches by normalising the title (e.g. "1 GB" → "1GB") against our
+    bundle string. Falls back to "Category-BUNDLE" if no match found.
     """
     category = AGYEKUMDATA_CATEGORY_MAP.get(network.upper(), network)
     fallback  = f"{category}-{bundle.strip().upper()}"
@@ -468,7 +461,7 @@ def get_agyekumdata_package_id(network: str, bundle: str) -> str:
         )
         data = _safe_agyekumdata_json(res, "PRODUCTS")
 
-        # Their /products returns a plain list, not wrapped in {"success": ...}
+        # /products returns a plain list, not {"success": ..., "data": [...]}
         products = data if isinstance(data, list) else data.get("data", [])
         bundle_upper = bundle.strip().upper().replace(" ", "")
 
@@ -494,6 +487,11 @@ def get_agyekumdata_package_id(network: str, bundle: str) -> str:
 
 
 def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str) -> dict:
+    """
+    POST /purchase to Agyekumdata.
+    Auth is via X-API-KEY header — no query params needed.
+    """
+    # Normalise phone to local format (0XXXXXXXXX)
     phone = phone.strip()
     if phone.startswith("233") and len(phone) == 12:
         phone = "0" + phone[3:]
@@ -508,94 +506,50 @@ def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str
         "clientReference": safe_ref,
     }
 
-    # Try multiple URL/auth combinations until one doesn't redirect.
-    # Their Java server accepts GET /wallet with header auth but may
-    # require the key as a query param on POST /purchase.
-    attempts = [
-        # 1. Standard: header auth, www, https
-        {
-            "url":     f"{AGYEKUMDATA_BASE}/purchase",
-            "headers": {"X-API-KEY": AGYEKUMDATA_API_KEY, "Content-Type": "application/json", "Accept": "application/json"},
-            "params":  None,
-        },
-        # 2. Key as query param (common Java API pattern)
-        {
-            "url":     f"{AGYEKUMDATA_BASE}/purchase",
-            "headers": {"Content-Type": "application/json", "Accept": "application/json"},
-            "params":  {"apiKey": AGYEKUMDATA_API_KEY},
-        },
-        # 3. Key as query param, different param name
-        {
-            "url":     f"{AGYEKUMDATA_BASE}/purchase",
-            "headers": {"Content-Type": "application/json", "Accept": "application/json"},
-            "params":  {"api_key": AGYEKUMDATA_API_KEY},
-        },
-        # 4. No www
-        {
-            "url":     f"https://agyekumdata.com/api/v1/purchase",
-            "headers": {"X-API-KEY": AGYEKUMDATA_API_KEY, "Content-Type": "application/json", "Accept": "application/json"},
-            "params":  None,
-        },
-        # 5. Trailing slash
-        {
-            "url":     f"{AGYEKUMDATA_BASE}/purchase/",
-            "headers": {"X-API-KEY": AGYEKUMDATA_API_KEY, "Content-Type": "application/json", "Accept": "application/json"},
-            "params":  None,
-        },
-    ]
-
-    last_error = "No attempts made"
-
-    for i, attempt in enumerate(attempts):
-        try:
-            logger.info(
-                "AGYEKUMDATA PURCHASE attempt %d: url=%s params=%s packageId=%s phone=%s ref=%s",
-                i + 1, attempt["url"], attempt["params"], package_id, phone, safe_ref
-            )
-
-            res = requests.post(
-                attempt["url"],
-                headers=attempt["headers"],
-                params=attempt["params"],
-                json=body,
-                timeout=REQUEST_TIMEOUT,
-                allow_redirects=False,
-            )
-
-            if res.status_code in (301, 302, 307, 308):
-                location = res.headers.get("Location", "unknown")
-                logger.warning(
-                    "AGYEKUMDATA PURCHASE attempt %d: redirect %s → %s",
-                    i + 1, res.status_code, location
-                )
-                last_error = f"Redirect {res.status_code} to {location}"
-                continue  # try next attempt
-
-            # Got a non-redirect response — parse and return it
-            logger.info(
-                "AGYEKUMDATA PURCHASE attempt %d succeeded: status=%s",
-                i + 1, res.status_code
-            )
-            return _safe_agyekumdata_json(res, "PURCHASE")
-
-        except requests.exceptions.Timeout:
-            logger.error("AGYEKUMDATA PURCHASE attempt %d TIMEOUT", i + 1)
-            last_error = "Request timed out"
-            continue
-        except requests.exceptions.ConnectionError as e:
-            logger.error("AGYEKUMDATA PURCHASE attempt %d CONNECTION ERROR: %s", i + 1, str(e))
-            last_error = f"Connection failed: {str(e)}"
-            continue
-        except Exception as e:
-            logger.error("AGYEKUMDATA PURCHASE attempt %d ERROR: %s", i + 1, str(e))
-            last_error = str(e)
-            continue
-
-    logger.error(
-        "AGYEKUMDATA PURCHASE: all attempts failed. last_error=%s packageId=%s ref=%s",
-        last_error, package_id, safe_ref
+    logger.info(
+        "AGYEKUMDATA PURCHASE: packageId=%s phone=%s ref=%s",
+        package_id, phone, safe_ref
     )
-    return {"success": False, "error": last_error}
+
+    try:
+        res = requests.post(
+            f"{AGYEKUMDATA_BASE}/purchase",
+            headers=_agyekumdata_headers(),
+            json=body,
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=False,
+        )
+
+        # Catch redirects — means the base URL or auth is wrong
+        if res.status_code in (301, 302, 307, 308):
+            location = res.headers.get("Location", "unknown")
+            logger.error(
+                "AGYEKUMDATA PURCHASE: unexpected redirect %s → %s "
+                "(check AGYEKUMDATA_BASE env var and API key)",
+                res.status_code, location
+            )
+            return {"success": False, "error": f"Redirect {res.status_code} to {location}"}
+
+        result = _safe_agyekumdata_json(res, "PURCHASE")
+
+        # Map HTTP 4xx/5xx with success=False to a clear error
+        if not result.get("success") and res.status_code >= 400:
+            logger.error(
+                "AGYEKUMDATA PURCHASE FAILED: status=%s error=%s",
+                res.status_code, result.get("error")
+            )
+
+        return result
+
+    except requests.exceptions.Timeout:
+        logger.error("AGYEKUMDATA PURCHASE TIMEOUT: ref=%s", safe_ref)
+        return {"success": False, "error": "Request timed out"}
+    except requests.exceptions.ConnectionError as e:
+        logger.error("AGYEKUMDATA PURCHASE CONNECTION ERROR: %s", str(e))
+        return {"success": False, "error": f"Connection failed: {str(e)}"}
+    except Exception as e:
+        logger.error("AGYEKUMDATA PURCHASE ERROR: %s", str(e))
+        return {"success": False, "error": str(e)}
 
 
 def call_agyekumdata_status(client_reference: str) -> dict:
@@ -603,7 +557,6 @@ def call_agyekumdata_status(client_reference: str) -> dict:
     Poll order status by our clientReference (sanitised form).
     Returns the full response dict; caller reads .get("data", {}).get("status").
     """
-    # Always query with the sanitised ref — that is what was submitted to their API.
     safe_ref = sanitise_agyekumdata_ref(client_reference)
 
     try:
@@ -694,14 +647,9 @@ def extract_capacity(bundle: str) -> str:
     return bundle.upper().replace("GB", "").replace("MB", "").strip()
 
 def utc_now() -> datetime:
-    """Always return timezone-aware UTC datetime."""
     return datetime.now(timezone.utc)
 
 def parse_db_dt(raw: str) -> datetime:
-    """
-    Parse a datetime string from Supabase into a timezone-aware datetime.
-    FIX: was mixing naive/aware — now always returns aware UTC.
-    """
     if not raw:
         raise ValueError("Empty datetime string")
     cleaned = raw.replace("Z", "").replace("+00:00", "")
@@ -772,10 +720,8 @@ def get_provider(network: str):
 
 # =========================
 # AGENT PROFIT
-# FIX: added recheck guard before wallet update to prevent double-credit
 # =========================
 def process_agent_profit(order_id, reference):
-    # Guard 1: idempotency check on transactions table
     existing = supabase.table("agent_transactions") \
         .select("id") \
         .eq("reference", reference) \
@@ -1055,11 +1001,6 @@ async def retry_stuck_orders():
                                 logger.info("RETRY JOB: order %s marked failed after repeated SDL rejection", order['id'])
 
                     # ── AGYEKUMDATA ────────────────────────────────────────
-                    # FIX: clientReference sanitised via sanitise_agyekumdata_ref
-                    #      before being sent to their API.
-                    # FIX: datamart_ref is stored as the SANITISED ref so that
-                    #      status polling uses the same value we submitted.
-                    # FIX: duplicate clientReference error is recovered gracefully.
                     elif provider == "AGYEKUMDATA":
                         package_id = get_agyekumdata_package_id(order["network"], order["bundle"])
                         raw_ref    = (
@@ -1071,14 +1012,13 @@ async def retry_stuck_orders():
                         agd        = call_agyekumdata_purchase(
                             package_id=package_id,
                             phone=order["phone_number"],
-                            client_reference=raw_ref,  # function sanitises internally
+                            client_reference=raw_ref,
                         )
 
                         if agd.get("success"):
                             agd_data = agd.get("data", {})
                             supabase.table("orders").update({
                                 "status":            "processing",
-                                # Store the sanitised ref so status polling works
                                 "datamart_ref":      agd_data.get("clientReference") or safe_ref,
                                 "datamart_order_id": agd_data.get("orderId"),
                             }).eq("id", order["id"]).execute()
@@ -1091,7 +1031,6 @@ async def retry_stuck_orders():
                             err_msg = str(agd.get("error", ""))
                             logger.warning("RETRY JOB: AGYEKUMDATA rejected order %s: %s", order['id'], agd)
 
-                            # Duplicate clientReference → order already accepted, recover it
                             if "Duplicate clientReference" in err_msg:
                                 supabase.table("orders").update({
                                     "status":       "processing",
@@ -1168,13 +1107,10 @@ async def retry_stuck_orders():
                         status = str(sdl_res.get("order", {}).get("status", "")).lower()
 
                     elif provider == "AGYEKUMDATA":
-                        # datamart_ref holds our sanitised clientReference — use it for polling.
-                        # call_agyekumdata_status will sanitise again (idempotent) to be safe.
                         client_ref = ref
                         if not client_ref:
                             continue
                         agd_res = call_agyekumdata_status(client_reference=client_ref)
-                        # Their statuses: PENDING, SUCCESS, FAILED — normalise to lower
                         status = str(agd_res.get("data", {}).get("status", "processing")).lower()
                         logger.info(
                             "STATUS SYNC: AGYEKUMDATA order %s clientRef=%s status=%s",
@@ -1343,7 +1279,6 @@ async def startup_event():
 # =========================
 
 def send_otp_email(to_email: str, otp: str, full_name: str) -> bool:
-    """Send OTP email via Spacemail SMTP. Returns True on success."""
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = "EVOS Data Hub — Password Reset OTP"
@@ -1634,22 +1569,19 @@ async def paystack_webhook(request: Request):
                 }).eq("paystack_ref", reference).execute()
                 process_agent_profit(order["id"], reference)
 
-            # FIX: clientReference sanitised before submission.
-            #      datamart_ref stored as sanitised ref for status polling.
             elif provider == "AGYEKUMDATA":
                 package_id = get_agyekumdata_package_id(order["network"], order["bundle"])
                 safe_ref   = sanitise_agyekumdata_ref(reference)
                 agd        = call_agyekumdata_purchase(
                     package_id=package_id,
                     phone=order["phone_number"],
-                    client_reference=reference,  # function sanitises internally
+                    client_reference=reference,
                 )
                 if not agd.get("success"):
                     raise Exception(f"AGYEKUMDATA order failed: {agd.get('error', agd)}")
                 agd_data = agd.get("data", {})
                 supabase.table("orders").update({
                     "status":            "processing",
-                    # Store sanitised ref so status polling matches what was sent
                     "datamart_ref":      agd_data.get("clientReference") or safe_ref,
                     "datamart_order_id": agd_data.get("orderId"),
                 }).eq("paystack_ref", reference).execute()
@@ -1796,9 +1728,8 @@ async def swiftdatalink_webhook(request: Request):
 
 # =========================
 # AGYEKUMDATA WEBHOOK
-# FIX: webhook payload does NOT include clientReference per their docs —
-#      only orderId is sent. We now look up by datamart_order_id (their
-#      orderId) as the primary key, with datamart_ref as fallback.
+# NOTE: Their webhook payload includes orderId but NOT clientReference.
+#       Primary lookup is by datamart_order_id; falls back to datamart_ref.
 # =========================
 @app.post("/webhook/agyekumdata")
 async def agyekumdata_webhook(request: Request):
@@ -1815,10 +1746,8 @@ async def agyekumdata_webhook(request: Request):
 
         payload  = await request.json()
         event    = payload.get("event", "")
-        order_id = payload.get("orderId", "")   # e.g. "ORD-FD63E9AA" — their internal ID
+        order_id = payload.get("orderId", "")
         status   = str(payload.get("status", "")).upper()
-        # NOTE: clientReference is NOT included in their webhook payload.
-        # We rely on orderId (stored in datamart_order_id) for lookup.
 
         logger.info(
             "AGYEKUMDATA WEBHOOK EVENT=%s ORDER_ID=%s STATUS=%s",
@@ -1839,7 +1768,6 @@ async def agyekumdata_webhook(request: Request):
             else "processing"
         )
 
-        # Primary: look up by their orderId stored in datamart_order_id
         result = supabase.table("orders") \
             .update({"status": final_status}) \
             .eq("datamart_order_id", order_id) \
@@ -1851,8 +1779,6 @@ async def agyekumdata_webhook(request: Request):
                 len(result.data), order_id, final_status
             )
         else:
-            # Fallback: some orders may have orderId in datamart_ref if
-            # datamart_order_id was not saved (e.g. from an older code path)
             fallback = supabase.table("orders") \
                 .update({"status": final_status}) \
                 .eq("datamart_ref", order_id) \
@@ -1913,8 +1839,6 @@ def sync_order(request: Request, reference: str):
             ).json()
             status = str(sdl_res.get("order", {}).get("status", "processing")).lower()
 
-        # FIX: use datamart_ref (sanitised clientReference) for status polling.
-        #      call_agyekumdata_status sanitises again internally (idempotent).
         elif provider == "AGYEKUMDATA":
             client_ref = order.get("datamart_ref") or tracker
             agd_res = call_agyekumdata_status(client_reference=client_ref)
@@ -2263,7 +2187,6 @@ async def reject_withdrawal(withdrawal_id: int, _: None = Depends(require_admin)
 
 # =========================
 # AGENT PRICING
-# FIX: agent_id type corrected to int so require_agent Depends works
 # =========================
 @app.get("/agent/pricing/{agent_id}")
 @limiter.limit("30/minute")
@@ -2476,8 +2399,6 @@ async def verify_deposit(request: Request, payload: dict):
 
 # =========================
 # AGENT BUY DATA
-# FIX: clientReference sanitised before sending to Agyekumdata.
-#      datamart_ref stored as sanitised ref for consistent status polling.
 # =========================
 @app.post("/agent/buy-data")
 @limiter.limit("10/minute")
@@ -2609,20 +2530,17 @@ async def agent_buy_data(request: Request, payload: AgentBuyDataRequest):
                         "status": "processing"
                     }).eq("id", order_id).execute()
 
-            # FIX: sanitised clientReference stored in datamart_ref
-            #      so status polling uses the same value submitted.
             elif provider == "AGYEKUMDATA":
                 package_id = get_agyekumdata_package_id(network, bundle)
                 safe_ref   = sanitise_agyekumdata_ref(reference)
                 agd        = call_agyekumdata_purchase(
                     package_id=package_id,
                     phone=phone_number,
-                    client_reference=reference,  # function sanitises internally
+                    client_reference=reference,
                 )
                 if agd.get("success"):
                     agd_data = agd.get("data", {})
                     supabase.table("orders").update({
-                        # Store sanitised ref so status polling matches
                         "datamart_ref":      agd_data.get("clientReference") or safe_ref,
                         "datamart_order_id": agd_data.get("orderId"),
                         "status":            "processing",
@@ -3235,8 +3153,8 @@ def reset_password(request: Request, data: ResetPasswordRequest):
 
 # =========================
 # WHATSAPP WEBHOOK
-# NOTE: In-memory sessions reset on restart. For production persistence,
-#       migrate sessions to Supabase or Redis.
+# NOTE: In-memory sessions reset on restart.
+#       For persistence, migrate sessions to Supabase or Redis.
 # =========================
 from fastapi.responses import Response
 
