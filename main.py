@@ -475,6 +475,7 @@ def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str
             headers={
                 "X-API-KEY":    AGYEKUMDATA_API_KEY,
                 "Content-Type": "application/json",
+                "Accept":       "application/json",
             },
             json={
                 "packageId":       package_id,
@@ -502,6 +503,7 @@ def call_agyekumdata_status(client_reference: str) -> dict:
             headers={
                 "X-API-KEY":    AGYEKUMDATA_API_KEY,
                 "Content-Type": "application/json",
+                "Accept":       "application/json",
             },
             params={"clientReference": client_reference},
             timeout=REQUEST_TIMEOUT,
@@ -517,7 +519,7 @@ def call_agyekumdata_wallet() -> dict:
     try:
         res = requests.get(
             f"{AGYEKUMDATA_BASE}/wallet",
-            headers={"X-API-KEY": AGYEKUMDATA_API_KEY},
+            headers={"X-API-KEY": AGYEKUMDATA_API_KEY, "Accept": "application/json"},
             timeout=REQUEST_TIMEOUT,
         )
         return _agyekumdata_safe_json(res, "WALLET")
@@ -533,7 +535,7 @@ def call_agyekumdata_products(category: str = "") -> dict:
         params = {"category": category} if category else {}
         res    = requests.get(
             url,
-            headers={"X-API-KEY": AGYEKUMDATA_API_KEY},
+            headers={"X-API-KEY": AGYEKUMDATA_API_KEY, "Accept": "application/json"},
             params=params,
             timeout=REQUEST_TIMEOUT,
         )
@@ -761,6 +763,95 @@ def process_agent_profit(order_id, reference):
 
 
 # =========================
+# AGENT REFUNDS
+# FIX: orders paid for out of an agent's wallet (paystack_ref starting with
+#      "EVOS-AGT-") were never refunded if the provider purchase ultimately
+#      failed — the wallet stayed debited forever with status="failed" and
+#      no corresponding transaction. refund_agent_order() reverses the debit
+#      exactly once (idempotent via a "<reference>-REFUND" transaction row),
+#      and finalize_order_status() is the single place that should be used
+#      to move an order into a terminal status so the refund always fires.
+# =========================
+def refund_agent_order(order_id, reference, agent_id, amount):
+    """Credit an agent's wallet back for a failed agent-funded order. Idempotent."""
+    if not agent_id or amount is None:
+        return
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        return
+    if amount <= 0:
+        return
+
+    refund_ref = f"{reference}-REFUND"
+
+    # Idempotency: never refund the same order twice
+    existing = supabase.table("agent_transactions") \
+        .select("id") \
+        .eq("reference", refund_ref) \
+        .limit(1) \
+        .execute()
+    if existing.data:
+        return
+
+    wallet = supabase.table("agent_wallets") \
+        .select("balance") \
+        .eq("agent_id", agent_id) \
+        .limit(1) \
+        .execute()
+
+    if wallet.data:
+        new_balance = round(float(wallet.data[0]["balance"]) + amount, 2)
+        supabase.table("agent_wallets") \
+            .update({"balance": new_balance}) \
+            .eq("agent_id", agent_id) \
+            .execute()
+    else:
+        new_balance = round(amount, 2)
+        supabase.table("agent_wallets") \
+            .insert({"agent_id": agent_id, "balance": new_balance}) \
+            .execute()
+
+    supabase.table("agent_transactions").insert({
+        "agent_id":  agent_id,
+        "order_id":  order_id,
+        "amount":    amount,
+        "type":      "refund",
+        "reference": refund_ref,
+    }).execute()
+
+    logger.info(
+        "REFUND: order %s — refunded GH₵%s to agent %s (new balance GH₵%s) ✅",
+        order_id, amount, agent_id, new_balance
+    )
+
+
+def finalize_order_status(order: dict, final_status: str):
+    """
+    Update an order's status. If the order is transitioning to 'failed' and
+    it was funded from an agent's wallet (paystack_ref starts with
+    "EVOS-AGT-"), refund the agent's wallet for the order price.
+
+    `order` must be a row already fetched with select("*") so we have
+    id, status, paystack_ref, agent_id and price available.
+    """
+    order_id = order.get("id")
+    if order_id is None:
+        return
+
+    if order.get("status") == final_status:
+        # Nothing changed — avoids re-processing refunds on repeated webhooks/syncs
+        return
+
+    supabase.table("orders").update({"status": final_status}).eq("id", order_id).execute()
+
+    if final_status == "failed":
+        ref = str(order.get("paystack_ref") or "")
+        if ref.startswith("EVOS-AGT-"):
+            refund_agent_order(order_id, ref, order.get("agent_id"), order.get("price"))
+
+
+# =========================
 # USER STATS
 # =========================
 def calculate_rank(order_count: int):
@@ -807,6 +898,8 @@ def get_prices(request: Request):
 #      before the age-based fail logic can run.
 # FIX: AGYEKUMDATA now uses _agyekumdata_safe_json via call_agyekumdata_purchase
 #      so empty/non-JSON bodies are handled gracefully instead of crashing.
+# FIX: any order marked "failed" here now goes through finalize_order_status()
+#      so agent-funded orders (EVOS-AGT-) get their wallet debit refunded.
 # =========================
 
 _retry_running = False
@@ -878,10 +971,7 @@ async def retry_stuck_orders():
                             logger.warning("RETRY JOB: DATAMART rejected order %s: %s", order['id'], dm)
                             order_age = utc_now() - parse_db_dt(order["created_at"])
                             if order_age > timedelta(hours=3):
-                                supabase.table("orders") \
-                                    .update({"status": "failed"}) \
-                                    .eq("id", order["id"]) \
-                                    .execute()
+                                finalize_order_status(order, "failed")
                                 logger.info(
                                     "RETRY JOB: order %s marked failed after repeated DATAMART rejection",
                                     order['id']
@@ -960,10 +1050,7 @@ async def retry_stuck_orders():
                             logger.warning("RETRY JOB: BG rejected order %s: %s", order['id'], bg_order)
                             order_age = utc_now() - parse_db_dt(order["created_at"])
                             if order_age > timedelta(hours=3):
-                                supabase.table("orders") \
-                                    .update({"status": "failed"}) \
-                                    .eq("id", order["id"]) \
-                                    .execute()
+                                finalize_order_status(order, "failed")
                                 logger.info(
                                     "RETRY JOB: order %s marked failed after repeated BG rejection",
                                     order['id']
@@ -993,10 +1080,7 @@ async def retry_stuck_orders():
                             logger.warning("RETRY JOB: SDL rejected order %s: %s", order['id'], sdl)
                             order_age = utc_now() - parse_db_dt(order["created_at"])
                             if order_age > timedelta(hours=3):
-                                supabase.table("orders") \
-                                    .update({"status": "failed"}) \
-                                    .eq("id", order["id"]) \
-                                    .execute()
+                                finalize_order_status(order, "failed")
                                 logger.info(
                                     "RETRY JOB: order %s marked failed after repeated SDL rejection",
                                     order['id']
@@ -1052,10 +1136,7 @@ async def retry_stuck_orders():
 
                             order_age = utc_now() - parse_db_dt(order["created_at"])
                             if order_age > timedelta(hours=3):
-                                supabase.table("orders") \
-                                    .update({"status": "failed"}) \
-                                    .eq("id", order["id"]) \
-                                    .execute()
+                                finalize_order_status(order, "failed")
                                 logger.info(
                                     "RETRY JOB: order %s marked failed after repeated AGYEKUMDATA rejection",
                                     order['id']
@@ -1137,10 +1218,7 @@ async def retry_stuck_orders():
                     )
 
                     if final_status:
-                        supabase.table("orders") \
-                            .update({"status": final_status}) \
-                            .eq("id", order["id"]) \
-                            .execute()
+                        finalize_order_status(order, final_status)
                         logger.info("STATUS SYNC: order %s → %s ✅", order['id'], final_status)
 
                 except Exception as e:
@@ -1654,11 +1732,18 @@ async def datamart_webhook(request: Request):
         )
 
         if order_ref:
-            supabase.table("orders").update({"status": final_status}).eq("datamart_ref", order_ref).execute()
-            logger.info("DATAMART WEBHOOK: updated by datamart_ref=%s → %s", order_ref, final_status)
-        elif order_id:
-            supabase.table("orders").update({"status": final_status}).eq("datamart_order_id", str(order_id)).execute()
-            logger.info("DATAMART WEBHOOK: updated by order_id=%s → %s", order_id, final_status)
+            order_res = supabase.table("orders").select("*").eq("datamart_ref", order_ref).limit(1).execute()
+        else:
+            order_res = supabase.table("orders").select("*").eq("datamart_order_id", str(order_id)).limit(1).execute()
+
+        if order_res.data:
+            finalize_order_status(order_res.data[0], final_status)
+            logger.info(
+                "DATAMART WEBHOOK: updated order %s (ref=%s order_id=%s) → %s",
+                order_res.data[0]["id"], order_ref, order_id, final_status
+            )
+        else:
+            logger.warning("DATAMART WEBHOOK: no matching order for ref=%s order_id=%s", order_ref, order_id)
 
         return {"received": True}
 
@@ -1694,7 +1779,13 @@ async def bundlesghana_webhook(request: Request):
             else "failed" if status in ["failed", "cancelled", "refunded"]
             else "processing"
         )
-        supabase.table("orders").update({"status": final_status}).eq("datamart_ref", reference).execute()
+
+        order_res = supabase.table("orders").select("*").eq("datamart_ref", reference).limit(1).execute()
+        if order_res.data:
+            finalize_order_status(order_res.data[0], final_status)
+        else:
+            logger.warning("BUNDLES GHANA WEBHOOK: no matching order for reference=%s", reference)
+
         return {"received": True}
     except Exception as e:
         logger.error("BUNDLES GHANA WEBHOOK ERROR: %s", str(e))
@@ -1728,11 +1819,18 @@ async def swiftdatalink_webhook(request: Request):
         )
 
         if reference:
-            supabase.table("orders").update({"status": final_status}).eq("datamart_ref", reference).execute()
-            logger.info("SDL WEBHOOK: updated by reference=%s → %s", reference, final_status)
-        elif order_id:
-            supabase.table("orders").update({"status": final_status}).eq("datamart_order_id", order_id).execute()
-            logger.info("SDL WEBHOOK: updated by orderId=%s → %s", order_id, final_status)
+            order_res = supabase.table("orders").select("*").eq("datamart_ref", reference).limit(1).execute()
+        else:
+            order_res = supabase.table("orders").select("*").eq("datamart_order_id", order_id).limit(1).execute()
+
+        if order_res.data:
+            finalize_order_status(order_res.data[0], final_status)
+            logger.info(
+                "SDL WEBHOOK: updated order %s (reference=%s orderId=%s) → %s",
+                order_res.data[0]["id"], reference, order_id, final_status
+            )
+        else:
+            logger.warning("SDL WEBHOOK: no matching order for reference=%s orderId=%s", reference, order_id)
 
         return {"received": True}
     except Exception as e:
@@ -1782,22 +1880,20 @@ async def agyekumdata_webhook(request: Request):
         )
 
         if client_ref:
-            supabase.table("orders") \
-                .update({"status": final_status}) \
-                .eq("datamart_ref", client_ref) \
-                .execute()
+            order_res = supabase.table("orders").select("*").eq("datamart_ref", client_ref).limit(1).execute()
+        else:
+            order_res = supabase.table("orders").select("*").eq("datamart_order_id", order_id).limit(1).execute()
+
+        if order_res.data:
+            finalize_order_status(order_res.data[0], final_status)
             logger.info(
-                "AGYEKUMDATA WEBHOOK: updated by clientReference=%s → %s",
-                client_ref, final_status
+                "AGYEKUMDATA WEBHOOK: updated order %s (clientReference=%s orderId=%s) → %s",
+                order_res.data[0]["id"], client_ref, order_id, final_status
             )
-        elif order_id:
-            supabase.table("orders") \
-                .update({"status": final_status}) \
-                .eq("datamart_order_id", order_id) \
-                .execute()
-            logger.info(
-                "AGYEKUMDATA WEBHOOK: updated by orderId=%s → %s",
-                order_id, final_status
+        else:
+            logger.warning(
+                "AGYEKUMDATA WEBHOOK: no matching order for clientReference=%s orderId=%s",
+                client_ref, order_id
             )
 
         return {"received": True}
@@ -1865,7 +1961,7 @@ def sync_order(request: Request, reference: str):
             else "failed" if status in ["failed", "cancelled", "refunded"]
             else "processing"
         )
-        supabase.table("orders").update({"status": final_status}).eq("paystack_ref", reference).execute()
+        finalize_order_status(order, final_status)
         return {"status": final_status}
 
     except HTTPException as e:
