@@ -340,7 +340,8 @@ SDL_OFFER_SLUG = {
     "AT":         "ishare_data_bundle",
 }
 
-# Agyekumdata category names must match exactly what their /categories endpoint returns.
+# Agyekumdata uses packageId strings like "MTN-1GB", "Telecel-2GB" etc.
+# Their category names must match exactly what their /categories endpoint returns.
 AGYEKUMDATA_CATEGORY_MAP = {
     "MTN":        "MTN",
     "TELECEL":    "Telecel",
@@ -352,12 +353,10 @@ def build_agyekumdata_package_id(network: str, bundle: str) -> str:
     """
     Construct the packageId Agyekumdata expects.
     e.g. network=MTN, bundle=1GB  →  "MTN-1GB"
-         network=TELECEL, bundle=5GB → "Telecel-5GB"
-
-    NOTE: If your bundle strings don't match their exact packageId values,
-    use /admin/agyekumdata/products to inspect and update this function.
+         network=TELECEL, bundle=2GB → "Telecel-2GB"
     """
     category = AGYEKUMDATA_CATEGORY_MAP.get(network.upper(), network)
+    # bundle is stored as "1GB", "2GB" etc — use as-is, uppercased
     return f"{category}-{bundle.strip().upper()}"
 
 
@@ -416,41 +415,8 @@ def call_swift_data_link(network: str, volume: float, phone: str) -> dict:
 
 
 # =========================
-# AGYEKUMDATA HELPERS
-# FIX: hardened against empty/non-JSON response bodies which caused
-#      "Expecting value: line 1 column 1 (char 0)" errors in the retry job.
-#      Now logs HTTP status + raw body snippet before failing gracefully.
+# AGYEKUMDATA HELPER
 # =========================
-
-def _agyekumdata_safe_json(res: requests.Response, context: str) -> dict:
-    """
-    Safely parse a requests.Response from Agyekumdata.
-    Returns a dict with success=False and a descriptive error on any failure,
-    instead of raising JSONDecodeError on empty/non-JSON bodies.
-    """
-    text = res.text.strip() if res.text else ""
-    if not text:
-        logger.error(
-            "AGYEKUMDATA %s: empty response body (HTTP %s)",
-            context, res.status_code
-        )
-        return {
-            "success": False,
-            "error":   f"Empty response body (HTTP {res.status_code})"
-        }
-    try:
-        return res.json()
-    except Exception:
-        logger.error(
-            "AGYEKUMDATA %s: non-JSON response (HTTP %s): %s",
-            context, res.status_code, text[:300]
-        )
-        return {
-            "success": False,
-            "error":   f"Non-JSON response (HTTP {res.status_code}): {text[:100]}"
-        }
-
-
 def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str) -> dict:
     """
     Place a data order via Agyekumdata wallet purchase endpoint.
@@ -475,7 +441,6 @@ def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str
             headers={
                 "X-API-KEY":    AGYEKUMDATA_API_KEY,
                 "Content-Type": "application/json",
-                "Accept":       "application/json",
             },
             json={
                 "packageId":       package_id,
@@ -484,9 +449,7 @@ def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str
             },
             timeout=REQUEST_TIMEOUT,
         )
-        result = _agyekumdata_safe_json(res, "PURCHASE")
-        logger.info("AGYEKUMDATA PURCHASE RESPONSE: %s", result)
-        return result
+        return res.json()
     except Exception as e:
         logger.error("AGYEKUMDATA PURCHASE ERROR: %s", str(e))
         return {"success": False, "error": str(e)}
@@ -503,53 +466,13 @@ def call_agyekumdata_status(client_reference: str) -> dict:
             headers={
                 "X-API-KEY":    AGYEKUMDATA_API_KEY,
                 "Content-Type": "application/json",
-                "Accept":       "application/json",
             },
             params={"clientReference": client_reference},
             timeout=REQUEST_TIMEOUT,
         )
-        return _agyekumdata_safe_json(res, "STATUS")
+        return res.json()
     except Exception as e:
         logger.error("AGYEKUMDATA STATUS ERROR: %s", str(e))
-        return {"success": False, "error": str(e)}
-
-
-def call_agyekumdata_wallet() -> dict:
-    """Fetch Agyekumdata wallet balance."""
-    try:
-        res = requests.get(
-            f"{AGYEKUMDATA_BASE}/wallet",
-            headers={"X-API-KEY": AGYEKUMDATA_API_KEY, "Accept": "application/json"},
-            timeout=REQUEST_TIMEOUT,
-        )
-        return _agyekumdata_safe_json(res, "WALLET")
-    except Exception as e:
-        logger.error("AGYEKUMDATA WALLET ERROR: %s", str(e))
-        return {"success": False, "error": str(e)}
-
-
-def call_agyekumdata_products(category: str = "") -> dict:
-    """Fetch Agyekumdata product list, optionally filtered by category."""
-    try:
-        url    = f"{AGYEKUMDATA_BASE}/products"
-        params = {"category": category} if category else {}
-        res    = requests.get(
-            url,
-            headers={"X-API-KEY": AGYEKUMDATA_API_KEY, "Accept": "application/json"},
-            params=params,
-            timeout=REQUEST_TIMEOUT,
-        )
-        text = res.text.strip() if res.text else ""
-        if not text:
-            return {"success": False, "error": f"Empty response (HTTP {res.status_code})"}
-        try:
-            data = res.json()
-            # Their /products returns a plain list, not a dict with "success"
-            return {"success": True, "data": data, "http_status": res.status_code}
-        except Exception:
-            return {"success": False, "error": f"Non-JSON (HTTP {res.status_code}): {text[:200]}"}
-    except Exception as e:
-        logger.error("AGYEKUMDATA PRODUCTS ERROR: %s", str(e))
         return {"success": False, "error": str(e)}
 
 
@@ -763,95 +686,6 @@ def process_agent_profit(order_id, reference):
 
 
 # =========================
-# AGENT REFUNDS
-# FIX: orders paid for out of an agent's wallet (paystack_ref starting with
-#      "EVOS-AGT-") were never refunded if the provider purchase ultimately
-#      failed — the wallet stayed debited forever with status="failed" and
-#      no corresponding transaction. refund_agent_order() reverses the debit
-#      exactly once (idempotent via a "<reference>-REFUND" transaction row),
-#      and finalize_order_status() is the single place that should be used
-#      to move an order into a terminal status so the refund always fires.
-# =========================
-def refund_agent_order(order_id, reference, agent_id, amount):
-    """Credit an agent's wallet back for a failed agent-funded order. Idempotent."""
-    if not agent_id or amount is None:
-        return
-    try:
-        amount = float(amount)
-    except (TypeError, ValueError):
-        return
-    if amount <= 0:
-        return
-
-    refund_ref = f"{reference}-REFUND"
-
-    # Idempotency: never refund the same order twice
-    existing = supabase.table("agent_transactions") \
-        .select("id") \
-        .eq("reference", refund_ref) \
-        .limit(1) \
-        .execute()
-    if existing.data:
-        return
-
-    wallet = supabase.table("agent_wallets") \
-        .select("balance") \
-        .eq("agent_id", agent_id) \
-        .limit(1) \
-        .execute()
-
-    if wallet.data:
-        new_balance = round(float(wallet.data[0]["balance"]) + amount, 2)
-        supabase.table("agent_wallets") \
-            .update({"balance": new_balance}) \
-            .eq("agent_id", agent_id) \
-            .execute()
-    else:
-        new_balance = round(amount, 2)
-        supabase.table("agent_wallets") \
-            .insert({"agent_id": agent_id, "balance": new_balance}) \
-            .execute()
-
-    supabase.table("agent_transactions").insert({
-        "agent_id":  agent_id,
-        "order_id":  order_id,
-        "amount":    amount,
-        "type":      "refund",
-        "reference": refund_ref,
-    }).execute()
-
-    logger.info(
-        "REFUND: order %s — refunded GH₵%s to agent %s (new balance GH₵%s) ✅",
-        order_id, amount, agent_id, new_balance
-    )
-
-
-def finalize_order_status(order: dict, final_status: str):
-    """
-    Update an order's status. If the order is transitioning to 'failed' and
-    it was funded from an agent's wallet (paystack_ref starts with
-    "EVOS-AGT-"), refund the agent's wallet for the order price.
-
-    `order` must be a row already fetched with select("*") so we have
-    id, status, paystack_ref, agent_id and price available.
-    """
-    order_id = order.get("id")
-    if order_id is None:
-        return
-
-    if order.get("status") == final_status:
-        # Nothing changed — avoids re-processing refunds on repeated webhooks/syncs
-        return
-
-    supabase.table("orders").update({"status": final_status}).eq("id", order_id).execute()
-
-    if final_status == "failed":
-        ref = str(order.get("paystack_ref") or "")
-        if ref.startswith("EVOS-AGT-"):
-            refund_agent_order(order_id, ref, order.get("agent_id"), order.get("price"))
-
-
-# =========================
 # USER STATS
 # =========================
 def calculate_rank(order_count: int):
@@ -896,10 +730,7 @@ def get_prices(request: Request):
 #      actually fires (old approach was unreachable due to query window).
 # FIX: query window widened to 6 hrs so orders aren't silently dropped
 #      before the age-based fail logic can run.
-# FIX: AGYEKUMDATA now uses _agyekumdata_safe_json via call_agyekumdata_purchase
-#      so empty/non-JSON bodies are handled gracefully instead of crashing.
-# FIX: any order marked "failed" here now goes through finalize_order_status()
-#      so agent-funded orders (EVOS-AGT-) get their wallet debit refunded.
+# NEW: AGYEKUMDATA provider branch added with duplicate-ref recovery.
 # =========================
 
 _retry_running = False
@@ -917,6 +748,8 @@ async def retry_stuck_orders():
         try:
             logger.info("RETRY JOB: scanning for stuck orders...")
             now    = utc_now()
+            # FIX: widened from 3 hrs → 6 hrs so age-based fail logic
+            #      inside each branch can actually trigger
             cutoff = (now - timedelta(hours=6)).isoformat()
             floor  = (now - timedelta(minutes=10)).isoformat()
 
@@ -969,9 +802,13 @@ async def retry_stuck_orders():
                             logger.info("RETRY JOB: order %s sent to DATAMART ✅", order['id'])
                         else:
                             logger.warning("RETRY JOB: DATAMART rejected order %s: %s", order['id'], dm)
+                            # FIX: auto-fail inside rejection branch
                             order_age = utc_now() - parse_db_dt(order["created_at"])
                             if order_age > timedelta(hours=3):
-                                finalize_order_status(order, "failed")
+                                supabase.table("orders") \
+                                    .update({"status": "failed"}) \
+                                    .eq("id", order["id"]) \
+                                    .execute()
                                 logger.info(
                                     "RETRY JOB: order %s marked failed after repeated DATAMART rejection",
                                     order['id']
@@ -1033,6 +870,7 @@ async def retry_stuck_orders():
                             msg        = bg_order.get("message", "")
                             order_type = bg_order.get("type", "")
 
+                            # Recover duplicate orders via embedded ref
                             if order_type == "ORDER_FAILED" and "Ref:" in msg:
                                 ref_match = re.search(r'Ref:\s*([\w\-]+)', msg)
                                 if ref_match:
@@ -1048,9 +886,13 @@ async def retry_stuck_orders():
                                     continue
 
                             logger.warning("RETRY JOB: BG rejected order %s: %s", order['id'], bg_order)
+                            # FIX: auto-fail inside rejection branch
                             order_age = utc_now() - parse_db_dt(order["created_at"])
                             if order_age > timedelta(hours=3):
-                                finalize_order_status(order, "failed")
+                                supabase.table("orders") \
+                                    .update({"status": "failed"}) \
+                                    .eq("id", order["id"]) \
+                                    .execute()
                                 logger.info(
                                     "RETRY JOB: order %s marked failed after repeated BG rejection",
                                     order['id']
@@ -1078,20 +920,22 @@ async def retry_stuck_orders():
                             logger.info("RETRY JOB: order %s sent to SWIFT_DATA_LINK ✅", order['id'])
                         else:
                             logger.warning("RETRY JOB: SDL rejected order %s: %s", order['id'], sdl)
+                            # FIX: auto-fail inside rejection branch
                             order_age = utc_now() - parse_db_dt(order["created_at"])
                             if order_age > timedelta(hours=3):
-                                finalize_order_status(order, "failed")
+                                supabase.table("orders") \
+                                    .update({"status": "failed"}) \
+                                    .eq("id", order["id"]) \
+                                    .execute()
                                 logger.info(
                                     "RETRY JOB: order %s marked failed after repeated SDL rejection",
                                     order['id']
                                 )
 
                     # ── AGYEKUMDATA ────────────────────────────────────────
-                    # FIX: call_agyekumdata_purchase now uses _agyekumdata_safe_json
-                    #      internally, so empty/non-JSON bodies return a clean dict
-                    #      with success=False instead of crashing the retry loop.
                     elif provider == "AGYEKUMDATA":
                         package_id = build_agyekumdata_package_id(order["network"], order["bundle"])
+                        # Use our existing reference as clientReference so we can look it up later
                         client_ref = (
                             order.get("paystack_ref")
                             or order.get("evosdata_ref")
@@ -1122,7 +966,7 @@ async def retry_stuck_orders():
                                 order['id'], agd
                             )
 
-                            # Duplicate clientReference means order already accepted — recover it
+                            # Duplicate clientReference means order already accepted on their end — recover it
                             if "Duplicate clientReference" in err_msg:
                                 supabase.table("orders").update({
                                     "status":       "processing",
@@ -1136,7 +980,10 @@ async def retry_stuck_orders():
 
                             order_age = utc_now() - parse_db_dt(order["created_at"])
                             if order_age > timedelta(hours=3):
-                                finalize_order_status(order, "failed")
+                                supabase.table("orders") \
+                                    .update({"status": "failed"}) \
+                                    .eq("id", order["id"]) \
+                                    .execute()
                                 logger.info(
                                     "RETRY JOB: order %s marked failed after repeated AGYEKUMDATA rejection",
                                     order['id']
@@ -1196,10 +1043,12 @@ async def retry_stuck_orders():
                         status = str(sdl_res.get("order", {}).get("status", "")).lower()
 
                     elif provider == "AGYEKUMDATA":
+                        # Use clientReference (stored in datamart_ref) for status polling
                         client_ref = ref or order_id
                         if not client_ref:
                             continue
                         agd_res = call_agyekumdata_status(client_reference=client_ref)
+                        # Their status values: PENDING, SUCCESS, FAILED etc — normalise to lower
                         status = str(agd_res.get("data", {}).get("status", "processing")).lower()
                         logger.info(
                             "STATUS SYNC: AGYEKUMDATA order %s clientRef=%s status=%s",
@@ -1218,7 +1067,10 @@ async def retry_stuck_orders():
                     )
 
                     if final_status:
-                        finalize_order_status(order, final_status)
+                        supabase.table("orders") \
+                            .update({"status": final_status}) \
+                            .eq("id", order["id"]) \
+                            .execute()
                         logger.info("STATUS SYNC: order %s → %s ✅", order['id'], final_status)
 
                 except Exception as e:
@@ -1232,6 +1084,10 @@ async def retry_stuck_orders():
 
 # =========================
 # BACKGROUND: RETRY STUCK DEPOSITS
+# FIX: widened query window from 1hr → 2hr so slow Paystack verifications
+#      aren't missed.
+# FIX: added recheck guard right before wallet credit to prevent
+#      double-credit if two retry cycles overlap on a redeploy.
 # =========================
 _deposit_retry_running = False
 
@@ -1250,6 +1106,7 @@ async def retry_stuck_deposits():
 
             now    = utc_now()
             floor  = (now - timedelta(minutes=5)).isoformat()
+            # FIX: widened from 1 hr → 2 hrs
             cutoff = (now - timedelta(hours=2)).isoformat()
 
             stuck = supabase.table("wallet_deposits") \
@@ -1306,6 +1163,8 @@ async def retry_stuck_deposits():
                             )
                         continue
 
+                    # FIX: recheck deposit status right before crediting to
+                    #      prevent double-credit if two cycles overlap
                     recheck = supabase.table("wallet_deposits") \
                         .select("status") \
                         .eq("id", dep_id) \
@@ -1466,6 +1325,7 @@ def create_order(request: Request, data: CreateOrderRequest):
 
             if existing.data:
                 order = existing.data[0]
+                # FIX: use parse_db_dt for timezone-aware comparison
                 created_at = parse_db_dt(order["created_at"])
                 if utc_now() - created_at < timedelta(minutes=10):
                     if data.user_id:
@@ -1571,6 +1431,7 @@ async def paystack_webhook(request: Request):
         signature = request.headers.get("x-paystack-signature")
 
         if not signature or not verify_signature(body, signature, PAYSTACK_SECRET):
+            # Return 200 to prevent Paystack retrying (attacker gets no info)
             logger.warning("PAYSTACK WEBHOOK: invalid signature from %s", request.client.host)
             return {"status": "invalid signature"}
 
@@ -1663,6 +1524,7 @@ async def paystack_webhook(request: Request):
                 process_agent_profit(order["id"], reference)
 
             elif provider == "AGYEKUMDATA":
+                # Use the Paystack reference as clientReference — unique and traceable
                 package_id = build_agyekumdata_package_id(order["network"], order["bundle"])
                 agd = call_agyekumdata_purchase(
                     package_id=package_id,
@@ -1732,18 +1594,11 @@ async def datamart_webhook(request: Request):
         )
 
         if order_ref:
-            order_res = supabase.table("orders").select("*").eq("datamart_ref", order_ref).limit(1).execute()
-        else:
-            order_res = supabase.table("orders").select("*").eq("datamart_order_id", str(order_id)).limit(1).execute()
-
-        if order_res.data:
-            finalize_order_status(order_res.data[0], final_status)
-            logger.info(
-                "DATAMART WEBHOOK: updated order %s (ref=%s order_id=%s) → %s",
-                order_res.data[0]["id"], order_ref, order_id, final_status
-            )
-        else:
-            logger.warning("DATAMART WEBHOOK: no matching order for ref=%s order_id=%s", order_ref, order_id)
+            supabase.table("orders").update({"status": final_status}).eq("datamart_ref", order_ref).execute()
+            logger.info("DATAMART WEBHOOK: updated by datamart_ref=%s → %s", order_ref, final_status)
+        elif order_id:
+            supabase.table("orders").update({"status": final_status}).eq("datamart_order_id", str(order_id)).execute()
+            logger.info("DATAMART WEBHOOK: updated by order_id=%s → %s", order_id, final_status)
 
         return {"received": True}
 
@@ -1779,13 +1634,7 @@ async def bundlesghana_webhook(request: Request):
             else "failed" if status in ["failed", "cancelled", "refunded"]
             else "processing"
         )
-
-        order_res = supabase.table("orders").select("*").eq("datamart_ref", reference).limit(1).execute()
-        if order_res.data:
-            finalize_order_status(order_res.data[0], final_status)
-        else:
-            logger.warning("BUNDLES GHANA WEBHOOK: no matching order for reference=%s", reference)
-
+        supabase.table("orders").update({"status": final_status}).eq("datamart_ref", reference).execute()
         return {"received": True}
     except Exception as e:
         logger.error("BUNDLES GHANA WEBHOOK ERROR: %s", str(e))
@@ -1819,18 +1668,11 @@ async def swiftdatalink_webhook(request: Request):
         )
 
         if reference:
-            order_res = supabase.table("orders").select("*").eq("datamart_ref", reference).limit(1).execute()
-        else:
-            order_res = supabase.table("orders").select("*").eq("datamart_order_id", order_id).limit(1).execute()
-
-        if order_res.data:
-            finalize_order_status(order_res.data[0], final_status)
-            logger.info(
-                "SDL WEBHOOK: updated order %s (reference=%s orderId=%s) → %s",
-                order_res.data[0]["id"], reference, order_id, final_status
-            )
-        else:
-            logger.warning("SDL WEBHOOK: no matching order for reference=%s orderId=%s", reference, order_id)
+            supabase.table("orders").update({"status": final_status}).eq("datamart_ref", reference).execute()
+            logger.info("SDL WEBHOOK: updated by reference=%s → %s", reference, final_status)
+        elif order_id:
+            supabase.table("orders").update({"status": final_status}).eq("datamart_order_id", order_id).execute()
+            logger.info("SDL WEBHOOK: updated by orderId=%s → %s", order_id, final_status)
 
         return {"received": True}
     except Exception as e:
@@ -1840,6 +1682,9 @@ async def swiftdatalink_webhook(request: Request):
 
 # =========================
 # AGYEKUMDATA WEBHOOK
+# NEW: handles ORDER_STATUS_UPDATED events from Agyekumdata.
+#      We store clientReference in datamart_ref and their orderId in
+#      datamart_order_id — consistent with all other providers.
 # =========================
 @app.post("/webhook/agyekumdata")
 async def agyekumdata_webhook(request: Request):
@@ -1852,12 +1697,13 @@ async def agyekumdata_webhook(request: Request):
                 "AGYEKUMDATA WEBHOOK: invalid signature from %s",
                 request.client.host
             )
+            # Return 200 so they don't flood us with retries on a config mismatch
             return {"received": False, "reason": "invalid signature"}
 
         payload    = await request.json()
         event      = payload.get("event", "")
-        order_id   = payload.get("orderId", "")
-        client_ref = payload.get("clientReference", "")
+        order_id   = payload.get("orderId", "")        # their internal ref e.g. "ORD-FD63E9AA"
+        client_ref = payload.get("clientReference", "") # our reference we sent at purchase time
         status     = str(payload.get("status", "")).upper()
 
         logger.info("AGYEKUMDATA WEBHOOK EVENT: %s", event)
@@ -1879,21 +1725,24 @@ async def agyekumdata_webhook(request: Request):
             else "processing"
         )
 
+        # Prefer clientReference lookup (more reliable — it's our own ref)
         if client_ref:
-            order_res = supabase.table("orders").select("*").eq("datamart_ref", client_ref).limit(1).execute()
-        else:
-            order_res = supabase.table("orders").select("*").eq("datamart_order_id", order_id).limit(1).execute()
-
-        if order_res.data:
-            finalize_order_status(order_res.data[0], final_status)
+            supabase.table("orders") \
+                .update({"status": final_status}) \
+                .eq("datamart_ref", client_ref) \
+                .execute()
             logger.info(
-                "AGYEKUMDATA WEBHOOK: updated order %s (clientReference=%s orderId=%s) → %s",
-                order_res.data[0]["id"], client_ref, order_id, final_status
+                "AGYEKUMDATA WEBHOOK: updated by clientReference=%s → %s",
+                client_ref, final_status
             )
-        else:
-            logger.warning(
-                "AGYEKUMDATA WEBHOOK: no matching order for clientReference=%s orderId=%s",
-                client_ref, order_id
+        elif order_id:
+            supabase.table("orders") \
+                .update({"status": final_status}) \
+                .eq("datamart_order_id", order_id) \
+                .execute()
+            logger.info(
+                "AGYEKUMDATA WEBHOOK: updated by orderId=%s → %s",
+                order_id, final_status
             )
 
         return {"received": True}
@@ -1948,8 +1797,11 @@ def sync_order(request: Request, reference: str):
             status = str(sdl_res.get("order", {}).get("status", "processing")).lower()
 
         elif provider == "AGYEKUMDATA":
+            # tracker could be datamart_order_id (their orderId) or datamart_ref (our clientReference)
+            # Try by clientReference first (datamart_ref holds our ref)
             client_ref = order.get("datamart_ref") or tracker
             agd_res = call_agyekumdata_status(client_reference=client_ref)
+            # Their status: PENDING, SUCCESS, FAILED — normalise to lower
             status = str(agd_res.get("data", {}).get("status", "processing")).lower()
             logger.info("SYNC ORDER: AGYEKUMDATA clientRef=%s status=%s", client_ref, status)
 
@@ -1961,7 +1813,7 @@ def sync_order(request: Request, reference: str):
             else "failed" if status in ["failed", "cancelled", "refunded"]
             else "processing"
         )
-        finalize_order_status(order, final_status)
+        supabase.table("orders").update({"status": final_status}).eq("paystack_ref", reference).execute()
         return {"status": final_status}
 
     except HTTPException as e:
@@ -2001,6 +1853,7 @@ def get_user(request: Request, user_id: int):
 
 # =========================
 # AGENT DASHBOARD
+# FIX: added require_agent dependency to prevent IDOR
 # =========================
 @app.get("/agent/dashboard/{agent_id}")
 @limiter.limit("30/minute")
@@ -2028,6 +1881,7 @@ async def agent_dashboard(request: Request, agent_id: int, _: int = Depends(requ
     }
 
 
+# FIX: added require_agent dependency to prevent IDOR
 @app.get("/agent/wallet/{agent_id}")
 @limiter.limit("30/minute")
 async def get_wallet(request: Request, agent_id: int, _: int = Depends(require_agent)):
@@ -2037,6 +1891,7 @@ async def get_wallet(request: Request, agent_id: int, _: int = Depends(require_a
     return wallet.data[0]
 
 
+# FIX: added require_agent dependency to prevent IDOR
 @app.get("/agent/transactions/{agent_id}")
 @limiter.limit("30/minute")
 async def agent_transactions(request: Request, agent_id: int, _: int = Depends(require_agent)):
@@ -2049,6 +1904,7 @@ async def agent_transactions(request: Request, agent_id: int, _: int = Depends(r
     return {"transactions": res.data or []}
 
 
+# FIX: added require_agent dependency to prevent IDOR
 @app.get("/agent/sales/{agent_id}")
 @limiter.limit("30/minute")
 async def agent_sales(request: Request, agent_id: int, _: int = Depends(require_agent)):
@@ -2067,10 +1923,12 @@ async def agent_sales(request: Request, agent_id: int, _: int = Depends(require_
 
 # =========================
 # AGENT WITHDRAW
+# FIX: added require_agent token check on agent_id from payload
 # =========================
 @app.post("/agent/withdraw")
 @limiter.limit("5/minute")
 async def request_withdrawal(request: Request, payload: WithdrawRequest):
+    # Verify the caller owns this agent_id
     token = request.headers.get("X-Agent-Token", "")
     if not token or not verify_agent_token(token, payload.agent_id):
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -2163,6 +2021,7 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
 
 # =========================
 # WITHDRAWAL STATUS CHECK
+# FIX: verify agent owns the withdrawal before returning data
 # =========================
 @app.get("/agent/withdrawal/status/{withdrawal_id}")
 @limiter.limit("20/minute")
@@ -2174,6 +2033,7 @@ async def check_withdrawal_status(request: Request, withdrawal_id: int):
 
         row = wd.data[0]
 
+        # FIX: verify the caller owns this withdrawal via their agent token
         token = request.headers.get("X-Agent-Token", "")
         if not token or not verify_agent_token(token, row["agent_id"]):
             raise HTTPException(status_code=403, detail="Forbidden")
@@ -2269,6 +2129,7 @@ async def moolre_webhook(request: Request):
 
 # =========================
 # ADMIN WITHDRAWALS — PROTECTED
+# FIX: these were completely open before. Now require X-Admin-Secret header.
 # =========================
 @app.post("/admin/withdrawals/{withdrawal_id}/paid")
 async def mark_paid(withdrawal_id: int, _: None = Depends(require_admin)):
@@ -2294,55 +2155,8 @@ async def reject_withdrawal(withdrawal_id: int, _: None = Depends(require_admin)
 
 
 # =========================
-# AGYEKUMDATA DEBUG ENDPOINTS — ADMIN PROTECTED
-# Use these to diagnose packageId mismatches and wallet issues.
-# Remove or disable once confirmed working in production.
-# =========================
-
-@app.get("/admin/agyekumdata/products")
-@limiter.limit("10/minute")
-def debug_agyekumdata_products(
-    request: Request,
-    category: str = Query(default=""),
-    _: None = Depends(require_admin)
-):
-    """
-    Fetch live product list from Agyekumdata.
-    Use ?category=MTN, ?category=Telecel, ?category=AirtelTigo to filter.
-    Compare the returned 'packageid' values against build_agyekumdata_package_id()
-    output to confirm they match exactly.
-    """
-    result = call_agyekumdata_products(category=category)
-    return result
-
-
-@app.get("/admin/agyekumdata/wallet")
-@limiter.limit("10/minute")
-def debug_agyekumdata_wallet(
-    request: Request,
-    _: None = Depends(require_admin)
-):
-    """Check Agyekumdata wallet balance to rule out low-balance silent failures."""
-    return call_agyekumdata_wallet()
-
-
-@app.get("/admin/agyekumdata/order-status")
-@limiter.limit("10/minute")
-def debug_agyekumdata_order_status(
-    request: Request,
-    client_reference: str = Query(...),
-    _: None = Depends(require_admin)
-):
-    """
-    Manually poll Agyekumdata order status by clientReference.
-    Useful for checking stuck orders without waiting for the retry job.
-    """
-    result = call_agyekumdata_status(client_reference=client_reference)
-    return result
-
-
-# =========================
 # AGENT PRICING
+# FIX: added require_agent dependency to prevent IDOR
 # =========================
 @app.get("/agent/pricing/{agent_id}")
 @limiter.limit("30/minute")
@@ -2383,6 +2197,7 @@ def get_agent_pricing(request: Request, agent_id: str, _: int = Depends(require_
         return {"status": "error", "prices": []}
 
 
+# FIX: added require_agent token check on agent_id from payload
 @app.post("/agent/pricing/save")
 @limiter.limit("10/minute")
 def save_agent_pricing(request: Request, payload: dict):
@@ -2393,6 +2208,7 @@ def save_agent_pricing(request: Request, payload: dict):
         if not agent_id:
             return {"status": "failed", "message": "agent_id required"}
 
+        # Verify ownership
         token = request.headers.get("X-Agent-Token", "")
         try:
             agent_id_int = int(agent_id)
@@ -2426,11 +2242,13 @@ def save_agent_pricing(request: Request, payload: dict):
 
 # =========================
 # AGENT WALLET DEPOSIT
+# FIX: added require_agent token check on agent_id from payload
 # =========================
 @app.post("/agent/deposit/initiate")
 @limiter.limit("10/minute")
 async def initiate_deposit(request: Request, payload: DepositInitiateRequest):
     try:
+        # Verify ownership
         token = request.headers.get("X-Agent-Token", "")
         if not token or not verify_agent_token(token, payload.agent_id):
             raise HTTPException(status_code=403, detail="Forbidden")
@@ -2503,6 +2321,7 @@ async def verify_deposit(request: Request, payload: dict):
 
         deposit = existing.data[0]
 
+        # Verify the caller owns this deposit
         token = request.headers.get("X-Agent-Token", "")
         if not token or not verify_agent_token(token, deposit["agent_id"]):
             raise HTTPException(status_code=403, detail="Forbidden")
@@ -2555,11 +2374,14 @@ async def verify_deposit(request: Request, payload: dict):
 
 # =========================
 # AGENT BUY DATA
+# FIX: added require_agent token check on agent_id from payload
+# NEW: AGYEKUMDATA dispatch branch added
 # =========================
 @app.post("/agent/buy-data")
 @limiter.limit("10/minute")
 async def agent_buy_data(request: Request, payload: AgentBuyDataRequest):
     try:
+        # Verify ownership
         token = request.headers.get("X-Agent-Token", "")
         if not token or not verify_agent_token(token, payload.agent_id):
             raise HTTPException(status_code=403, detail="Forbidden")
@@ -2777,6 +2599,7 @@ async def public_agent_store(request: Request, agent_id: int):
         return {"status": "error", "message": "Failed to load store"}
 
 
+# FIX: added require_agent token check on agent_id from payload
 @app.post("/agent/store-name")
 @limiter.limit("10/minute")
 async def save_store_name(request: Request, payload: dict):
@@ -2786,6 +2609,7 @@ async def save_store_name(request: Request, payload: dict):
         if not agent_id:
             return {"error": "agent_id required"}
 
+        # Verify ownership
         token = request.headers.get("X-Agent-Token", "")
         try:
             agent_id_int = int(agent_id)
@@ -2805,6 +2629,7 @@ async def save_store_name(request: Request, payload: dict):
         return {"error": "Failed to save store name"}
 
 
+# FIX: added require_agent dependency to prevent IDOR
 @app.get("/agent/store-name/{agent_id}")
 @limiter.limit("30/minute")
 async def get_store_name(request: Request, agent_id: int, _: int = Depends(require_agent)):
@@ -2910,9 +2735,9 @@ async def create_store_order(request: Request, payload: StoreOrderRequest):
 @limiter.limit("5/minute")
 def register(request: Request, data: RegisterRequest):
     try:
-        username = data.username
+        username = data.username  # already normalised by validator
         email    = str(data.email).strip().lower()
-        phone    = data.phone
+        phone    = data.phone  # already cleaned by validator
 
         existing_user = supabase.table("users").select("id").eq("username", username).limit(1).execute()
         if existing_user.data:
@@ -2954,6 +2779,7 @@ def register(request: Request, data: RegisterRequest):
         raise HTTPException(status_code=500, detail="Server error")
 
 
+# FIX: login now returns agent_token for approved agents, used by require_agent on all protected endpoints
 @app.post("/auth/login")
 @limiter.limit("10/minute")
 def login(request: Request, data: LoginRequest):
@@ -2968,6 +2794,8 @@ def login(request: Request, data: LoginRequest):
             .limit(1) \
             .execute()
 
+        # Constant-time path: always verify a dummy hash even on not-found
+        # to prevent username enumeration via timing
         dummy_hash = "$2b$12$KIXzCq3C3T6tFkUd9nj6aO.WwSIFqh4fQieFzpxKx5Mj5.z1rklHC"
         stored_password = user_res.data[0].get("password") if user_res.data else dummy_hash
 
@@ -2990,6 +2818,7 @@ def login(request: Request, data: LoginRequest):
             "rank":          user.get("rank", 1),
             "role":          user.get("role", "user"),
             "agent_status":  user.get("agent_status", "pending"),
+            # Provide token only to approved agents; frontend stores and sends as X-Agent-Token header
             "agent_token":   make_agent_token(user["id"]) if (
                 user.get("role") == "agent" and user.get("agent_status") == "approved"
             ) else None,
@@ -3052,6 +2881,7 @@ def today_dashboard(request: Request, user_id: int):
 
 # =========================
 # USSD
+# FIX: no longer calls itself over HTTP — processes the order directly
 # =========================
 @app.post("/ussd")
 @limiter.limit("30/minute")
@@ -3088,6 +2918,7 @@ async def ussd(request: Request):
 
         bundle, price = bundle_data
 
+        # FIX: create order directly (no internal HTTP call)
         try:
             price_res = supabase.table("prices").select("price").eq("network", network).eq("bundle", bundle).limit(1).execute()
             if not price_res.data:
@@ -3174,12 +3005,14 @@ def forgot_password(request: Request, data: ForgotPasswordRequest):
         user    = user_res.data[0]
         user_id = user["id"]
 
+        # Invalidate existing unused OTPs
         supabase.table("password_resets") \
             .update({"used": True}) \
             .eq("user_id", user_id) \
             .eq("used", False) \
             .execute()
 
+        # Generate OTP
         otp        = str(random.randint(100000, 999999))
         expires_at = (utc_now() + timedelta(minutes=10)).isoformat()
 
@@ -3308,6 +3141,8 @@ def reset_password(request: Request, data: ResetPasswordRequest):
 
 # =========================
 # WHATSAPP WEBHOOK
+# NOTE: In-memory sessions reset on restart. For production persistence,
+#       migrate sessions to Supabase or Redis.
 # =========================
 from fastapi.responses import Response
 
