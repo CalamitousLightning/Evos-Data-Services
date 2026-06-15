@@ -343,7 +343,7 @@ SDL_OFFER_SLUG = {
 # Agyekumdata category names must match exactly what their /categories endpoint returns.
 AGYEKUMDATA_CATEGORY_MAP = {
     "MTN":        "MTN",
-    "TELECEL":    "Telecel",
+    "TELECEL":    "Telecel Offer",
     "AIRTELTIGO": "AirtelTigo",
     "AT":         "AirtelTigo",
 }
