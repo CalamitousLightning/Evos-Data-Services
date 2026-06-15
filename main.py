@@ -494,80 +494,108 @@ def get_agyekumdata_package_id(network: str, bundle: str) -> str:
 
 
 def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str) -> dict:
-    """
-    Place a data order via Agyekumdata wallet purchase endpoint.
-    Phone is normalised to local 0XXXXXXXXX format (their API preference).
-    clientReference is sanitised to alphanumeric-only, max 20 chars.
-    allow_redirects=False so any silent HTTP redirect is caught and logged.
-    Returns the full response dict; caller checks .get("success").
-    """
-    # ── Phone normalisation ──────────────────────────────────────────────
     phone = phone.strip()
-    # 233XXXXXXXXX (12 digits) → 0XXXXXXXXX
     if phone.startswith("233") and len(phone) == 12:
         phone = "0" + phone[3:]
-    # bare 9 digits → prepend 0
     elif len(phone) == 9 and not phone.startswith("0"):
         phone = "0" + phone
 
-    # ── Reference sanitisation ───────────────────────────────────────────
-    # FIX: strip hyphens/special chars — their API rejects refs like
-    #      "EVOS-AGT-1-7AF2440807" and returns HTML instead of JSON.
     safe_ref = sanitise_agyekumdata_ref(client_reference)
 
-    try:
-        logger.info(
-            "AGYEKUMDATA PURCHASE: packageId=%s phone=%s ref=%s (raw=%s)",
-            package_id, phone, safe_ref, client_reference
-        )
-        logger.info(
-            "AGYEKUMDATA PURCHASE URL: %s/purchase",
-            AGYEKUMDATA_BASE
-        )
+    body = {
+        "packageId":       package_id,
+        "mobileNo":        phone,
+        "clientReference": safe_ref,
+    }
 
-        res = requests.post(
-            f"{AGYEKUMDATA_BASE}/purchase",
-            headers=_agyekumdata_headers(),
-            json={
-                "packageId":       package_id,
-                "mobileNo":        phone,
-                "clientReference": safe_ref,
-            },
-            timeout=REQUEST_TIMEOUT,
-            allow_redirects=False,  # FIX: catch silent redirects that drop POST body
-        )
+    # Try multiple URL/auth combinations until one doesn't redirect.
+    # Their Java server accepts GET /wallet with header auth but may
+    # require the key as a query param on POST /purchase.
+    attempts = [
+        # 1. Standard: header auth, www, https
+        {
+            "url":     f"{AGYEKUMDATA_BASE}/purchase",
+            "headers": {"X-API-KEY": AGYEKUMDATA_API_KEY, "Content-Type": "application/json", "Accept": "application/json"},
+            "params":  None,
+        },
+        # 2. Key as query param (common Java API pattern)
+        {
+            "url":     f"{AGYEKUMDATA_BASE}/purchase",
+            "headers": {"Content-Type": "application/json", "Accept": "application/json"},
+            "params":  {"apiKey": AGYEKUMDATA_API_KEY},
+        },
+        # 3. Key as query param, different param name
+        {
+            "url":     f"{AGYEKUMDATA_BASE}/purchase",
+            "headers": {"Content-Type": "application/json", "Accept": "application/json"},
+            "params":  {"api_key": AGYEKUMDATA_API_KEY},
+        },
+        # 4. No www
+        {
+            "url":     f"https://agyekumdata.com/api/v1/purchase",
+            "headers": {"X-API-KEY": AGYEKUMDATA_API_KEY, "Content-Type": "application/json", "Accept": "application/json"},
+            "params":  None,
+        },
+        # 5. Trailing slash
+        {
+            "url":     f"{AGYEKUMDATA_BASE}/purchase/",
+            "headers": {"X-API-KEY": AGYEKUMDATA_API_KEY, "Content-Type": "application/json", "Accept": "application/json"},
+            "params":  None,
+        },
+    ]
 
-        # ── Redirect detection ───────────────────────────────────────────
-        # If their server returns a 3xx, requests would normally follow it
-        # and silently convert POST → GET (losing our body).  With
-        # allow_redirects=False we catch it here and log the Location so
-        # we know exactly where the request is being sent.
-        if res.status_code in (301, 302, 307, 308):
-            location = res.headers.get("Location", "unknown")
-            logger.error(
-                "AGYEKUMDATA PURCHASE REDIRECT: HTTP %s → %s — "
-                "this means the purchase URL or API key is wrong",
-                res.status_code, location
+    last_error = "No attempts made"
+
+    for i, attempt in enumerate(attempts):
+        try:
+            logger.info(
+                "AGYEKUMDATA PURCHASE attempt %d: url=%s params=%s packageId=%s phone=%s ref=%s",
+                i + 1, attempt["url"], attempt["params"], package_id, phone, safe_ref
             )
-            return {
-                "success": False,
-                "error":   f"Redirect {res.status_code} to {location}",
-            }
 
-        return _safe_agyekumdata_json(res, "PURCHASE")
+            res = requests.post(
+                attempt["url"],
+                headers=attempt["headers"],
+                params=attempt["params"],
+                json=body,
+                timeout=REQUEST_TIMEOUT,
+                allow_redirects=False,
+            )
 
-    except requests.exceptions.Timeout:
-        logger.error(
-            "AGYEKUMDATA PURCHASE TIMEOUT: packageId=%s ref=%s",
-            package_id, safe_ref
-        )
-        return {"success": False, "error": "Request timed out"}
-    except requests.exceptions.ConnectionError as e:
-        logger.error("AGYEKUMDATA PURCHASE CONNECTION ERROR: %s", str(e))
-        return {"success": False, "error": "Connection failed"}
-    except Exception as e:
-        logger.error("AGYEKUMDATA PURCHASE ERROR: %s", str(e))
-        return {"success": False, "error": str(e)}
+            if res.status_code in (301, 302, 307, 308):
+                location = res.headers.get("Location", "unknown")
+                logger.warning(
+                    "AGYEKUMDATA PURCHASE attempt %d: redirect %s → %s",
+                    i + 1, res.status_code, location
+                )
+                last_error = f"Redirect {res.status_code} to {location}"
+                continue  # try next attempt
+
+            # Got a non-redirect response — parse and return it
+            logger.info(
+                "AGYEKUMDATA PURCHASE attempt %d succeeded: status=%s",
+                i + 1, res.status_code
+            )
+            return _safe_agyekumdata_json(res, "PURCHASE")
+
+        except requests.exceptions.Timeout:
+            logger.error("AGYEKUMDATA PURCHASE attempt %d TIMEOUT", i + 1)
+            last_error = "Request timed out"
+            continue
+        except requests.exceptions.ConnectionError as e:
+            logger.error("AGYEKUMDATA PURCHASE attempt %d CONNECTION ERROR: %s", i + 1, str(e))
+            last_error = f"Connection failed: {str(e)}"
+            continue
+        except Exception as e:
+            logger.error("AGYEKUMDATA PURCHASE attempt %d ERROR: %s", i + 1, str(e))
+            last_error = str(e)
+            continue
+
+    logger.error(
+        "AGYEKUMDATA PURCHASE: all attempts failed. last_error=%s packageId=%s ref=%s",
+        last_error, package_id, safe_ref
+    )
+    return {"success": False, "error": last_error}
 
 
 def call_agyekumdata_status(client_reference: str) -> dict:
@@ -3306,13 +3334,3 @@ async def whatsapp_webhook(request: Request):
 @app.get("/")
 def root():
     return {"status": "EVOS API is running"}
-
-
-# Quick test outside your app
-import requests
-res = requests.get(
-    "https://www.agyekumdata.com/api/v1/wallet",
-    headers={"X-API-KEY": AGYEKUMDATA_API_KEY, "Content-Type": "application/json"},
-    allow_redirects=False,
-)
-print(res.status_code, res.text[:300])
