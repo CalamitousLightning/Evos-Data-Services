@@ -941,14 +941,15 @@ async def retry_stuck_orders():
             floor = (now - timedelta(minutes=10)).isoformat()
 
             # ── Find orders that are stuck:
-            #    - status is "paid" OR "processing"
-            #    - has a paystack_ref (payment confirmed on our side)
-            #    - BUT has no datamart_ref (never actually sent to provider)
-            #    - created more than 10 minutes ago (not brand-new)
-            # NOTE: No upper cutoff — we retry indefinitely until 3-6h age limit
+            #    - status is exactly "processing" (not paid, not failed, not successful)
+            #    - has a paystack_ref (Paystack payment was confirmed)
+            #    - BUT has no datamart_ref (was never actually sent to the provider)
+            #    - created more than 10 minutes ago (give webhook time to land first)
+            # NOTE: If an order is "failed" or "successful" we never touch it again.
+            #       No upper time cutoff — we retry every 5 mins until 3h age limit.
             stuck = supabase.table("orders") \
                 .select("*") \
-                .in_("status", ["paid", "processing"]) \
+                .eq("status", "processing") \
                 .not_.is_("paystack_ref", None) \
                 .is_("datamart_ref", None) \
                 .lte("created_at", floor) \
