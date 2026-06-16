@@ -404,13 +404,21 @@ def call_swift_data_link(network: str, volume: float, phone: str) -> dict:
 # =========================
 
 def _agyekumdata_headers() -> dict:
-    """Standard headers for all Agyekumdata API calls."""
-    return {
-        "X-API-KEY":    AGYEKUMDATA_API_KEY,
+    headers = {
+        "X-API-KEY": AGYEKUMDATA_API_KEY,
         "Content-Type": "application/json",
-        "Accept":       "application/json",
+        "Accept": "application/json",
     }
 
+    logger.info(
+        "AGYEKUMDATA HEADERS DEBUG: %s",
+        {
+            "X-API-KEY": AGYEKUMDATA_API_KEY[:5] + "*****"
+            if AGYEKUMDATA_API_KEY else "EMPTY"
+        }
+    )
+
+    return headers
 
 def _safe_agyekumdata_json(res: requests.Response, context: str) -> dict:
     """
