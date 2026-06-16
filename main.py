@@ -437,44 +437,103 @@ def sanitise_agyekumdata_ref(ref: str) -> str:
     cleaned = re.sub(r"[^A-Z0-9_]", "", ref.upper())
     return cleaned[:20]
 
-
+   
 def get_agyekumdata_package_id(network: str, bundle: str) -> str:
-    category = AGYEKUMDATA_CATEGORY_MAP.get(network.upper(), network)
-    fallback  = f"{category}-{bundle.strip().upper()}"
+    """
+    Fetch exact Agyekumdata packageId from /products.
+    Do NOT modify packageid because Agyekumdata expects exact value.
+    Example:
+    ISHARE OFFER-1GB must remain ISHARE OFFER-1GB
+    """
+
+    category = AGYEKUMDATA_CATEGORY_MAP.get(
+        network.upper(),
+        network
+    )
+
+    fallback = f"{category}-{bundle.strip().upper()}"
 
     try:
+
         res = requests.get(
             f"{AGYEKUMDATA_BASE}/products",
-            headers=_agyekumdata_headers(),           
+            headers=_agyekumdata_headers(),
+            params={"category": category},
             timeout=REQUEST_TIMEOUT,
         )
-        data = _safe_agyekumdata_json(res, "PRODUCTS")
 
-        products = data if isinstance(data, list) else data.get("data", [])
-        bundle_upper = bundle.strip().upper().replace(" ", "")
+        data = _safe_agyekumdata_json(
+            res,
+            "PRODUCTS"
+        )
 
-        for p in products:
-            title_norm = p.get("title", "").replace(" ", "").upper()
-            if title_norm == bundle_upper:
-                raw_pkg = p.get("packageid") or p.get("packageId") or fallback
-                
-                logger.info(
-                    "AGYEKUMDATA PRODUCTS: matched package=%s",
-                    raw_pkg
+        products = (
+            data
+            if isinstance(data, list)
+            else data.get("data", [])
+        )
+
+
+        bundle_clean = (
+            bundle
+            .strip()
+            .upper()
+            .replace(" ", "")
+        )
+
+
+        for product in products:
+
+            title_clean = (
+                product.get("title", "")
+                .upper()
+                .replace(" ", "")
+            )
+
+
+            if title_clean == bundle_clean:
+
+                package_id = (
+                    product.get("packageid")
+                    or product.get("packageId")
                 )
-                return raw_pkg
+
+
+                if package_id:
+
+                    logger.info(
+                        "AGYEKUMDATA PRODUCTS: matched packageId=%s category=%s",
+                        package_id,
+                        product.get("category")
+                    )
+
+
+                    # RETURN EXACT VALUE FROM API
+                    return package_id
+
+
 
         logger.warning(
-            "AGYEKUMDATA PRODUCTS: no match for %s %s — using fallback %s",
-            network, bundle, fallback
+            "AGYEKUMDATA PRODUCTS: no match for %s %s fallback=%s",
+            network,
+            bundle,
+            fallback
         )
+
+
         return fallback
+
+
 
     except Exception as e:
-        logger.error("AGYEKUMDATA PRODUCTS ERROR: %s — using fallback %s", str(e), fallback)
+
+        logger.error(
+            "AGYEKUMDATA PRODUCTS ERROR: %s",
+            str(e)
+        )
+
         return fallback
-
-
+        
 def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str) -> dict:
     """
     POST /purchase to Agyekumdata.
@@ -877,15 +936,21 @@ async def retry_stuck_orders():
     while True:
         try:
             logger.info("RETRY JOB: scanning for stuck orders...")
-            now    = utc_now()
-            cutoff = (now - timedelta(hours=6)).isoformat()
-            floor  = (now - timedelta(minutes=10)).isoformat()
+            now   = utc_now()
+            # Only skip orders newer than 10 minutes (give Paystack webhook time to land)
+            floor = (now - timedelta(minutes=10)).isoformat()
 
+            # ── Find orders that are stuck:
+            #    - status is "paid" OR "processing"
+            #    - has a paystack_ref (payment confirmed on our side)
+            #    - BUT has no datamart_ref (never actually sent to provider)
+            #    - created more than 10 minutes ago (not brand-new)
+            # NOTE: No upper cutoff — we retry indefinitely until 3-6h age limit
             stuck = supabase.table("orders") \
                 .select("*") \
                 .in_("status", ["paid", "processing"]) \
+                .not_.is_("paystack_ref", None) \
                 .is_("datamart_ref", None) \
-                .gte("created_at", cutoff) \
                 .lte("created_at", floor) \
                 .execute()
 
@@ -930,13 +995,19 @@ async def retry_stuck_orders():
                             logger.info("RETRY JOB: order %s sent to DATAMART ✅", order['id'])
                         else:
                             logger.warning("RETRY JOB: DATAMART rejected order %s: %s", order['id'], dm)
+                            # Only fail after 3 hours — never fail early
                             order_age = utc_now() - parse_db_dt(order["created_at"])
                             if order_age > timedelta(hours=3):
                                 supabase.table("orders") \
                                     .update({"status": "failed"}) \
                                     .eq("id", order["id"]) \
                                     .execute()
-                                logger.info("RETRY JOB: order %s marked failed after repeated DATAMART rejection", order['id'])
+                                logger.info("RETRY JOB: order %s marked failed after 3h DATAMART rejection", order['id'])
+                            else:
+                                logger.info(
+                                    "RETRY JOB: order %s age=%s — will keep retrying",
+                                    order['id'], order_age
+                                )
 
                     # ── BUNDLES GHANA ──────────────────────────────────────
                     elif provider == "BUNDLES_GHANA":
@@ -994,6 +1065,7 @@ async def retry_stuck_orders():
                             msg        = bg_order.get("message", "")
                             order_type = bg_order.get("type", "")
 
+                            # 409 conflict — BG already has this order, recover the ref
                             if order_type == "ORDER_FAILED" and "Ref:" in msg:
                                 ref_match = re.search(r'Ref:\s*([\w\-]+)', msg)
                                 if ref_match:
@@ -1006,13 +1078,19 @@ async def retry_stuck_orders():
                                     continue
 
                             logger.warning("RETRY JOB: BG rejected order %s: %s", order['id'], bg_order)
+                            # Only fail after 3 hours — never fail early
                             order_age = utc_now() - parse_db_dt(order["created_at"])
                             if order_age > timedelta(hours=3):
                                 supabase.table("orders") \
                                     .update({"status": "failed"}) \
                                     .eq("id", order["id"]) \
                                     .execute()
-                                logger.info("RETRY JOB: order %s marked failed after repeated BG rejection", order['id'])
+                                logger.info("RETRY JOB: order %s marked failed after 3h BG rejection", order['id'])
+                            else:
+                                logger.info(
+                                    "RETRY JOB: order %s age=%s — will keep retrying",
+                                    order['id'], order_age
+                                )
 
                     # ── SWIFT DATA LINK ────────────────────────────────────
                     elif provider == "SWIFT_DATA_LINK":
@@ -1036,13 +1114,19 @@ async def retry_stuck_orders():
                             logger.info("RETRY JOB: order %s sent to SWIFT_DATA_LINK ✅", order['id'])
                         else:
                             logger.warning("RETRY JOB: SDL rejected order %s: %s", order['id'], sdl)
+                            # Only fail after 3 hours — never fail early
                             order_age = utc_now() - parse_db_dt(order["created_at"])
                             if order_age > timedelta(hours=3):
                                 supabase.table("orders") \
                                     .update({"status": "failed"}) \
                                     .eq("id", order["id"]) \
                                     .execute()
-                                logger.info("RETRY JOB: order %s marked failed after repeated SDL rejection", order['id'])
+                                logger.info("RETRY JOB: order %s marked failed after 3h SDL rejection", order['id'])
+                            else:
+                                logger.info(
+                                    "RETRY JOB: order %s age=%s — will keep retrying",
+                                    order['id'], order_age
+                                )
 
                     # ── AGYEKUMDATA ────────────────────────────────────────
                     elif provider == "AGYEKUMDATA":
@@ -1075,6 +1159,7 @@ async def retry_stuck_orders():
                             err_msg = str(agd.get("error", ""))
                             logger.warning("RETRY JOB: AGYEKUMDATA rejected order %s: %s", order['id'], agd)
 
+                            # Duplicate clientReference — order was already submitted, recover it
                             if "Duplicate clientReference" in err_msg:
                                 supabase.table("orders").update({
                                     "status":       "processing",
@@ -1086,6 +1171,7 @@ async def retry_stuck_orders():
                                 )
                                 continue
 
+                            # Only fail after 3 hours — never fail early
                             order_age = utc_now() - parse_db_dt(order["created_at"])
                             if order_age > timedelta(hours=3):
                                 supabase.table("orders") \
@@ -1093,23 +1179,27 @@ async def retry_stuck_orders():
                                     .eq("id", order["id"]) \
                                     .execute()
                                 logger.info(
-                                    "RETRY JOB: order %s marked failed after repeated AGYEKUMDATA rejection",
+                                    "RETRY JOB: order %s marked failed after 3h AGYEKUMDATA rejection",
                                     order['id']
+                                )
+                            else:
+                                logger.info(
+                                    "RETRY JOB: order %s age=%s — will keep retrying",
+                                    order['id'], order_age
                                 )
 
                 except Exception as e:
                     logger.error("RETRY JOB: error on order %s: %s", order.get('id'), str(e))
 
             # ── STATUS SYNC ───────────────────────────────────────────────
+            # Poll ALL processing orders that have a provider ref, no time limit.
+            # We stop only when the provider confirms success or failure.
             logger.info("STATUS SYNC: scanning for unresolved processing orders...")
-            now    = utc_now()
-            cutoff = (now - timedelta(hours=6)).isoformat()
 
             processing = supabase.table("orders") \
                 .select("*") \
                 .eq("status", "processing") \
                 .not_.is_("datamart_ref", None) \
-                .gte("created_at", cutoff) \
                 .execute()
 
             proc_orders = processing.data or []
@@ -1178,6 +1268,12 @@ async def retry_stuck_orders():
                             .eq("id", order["id"]) \
                             .execute()
                         logger.info("STATUS SYNC: order %s → %s ✅", order['id'], final_status)
+                    else:
+                        # Status still pending/processing on provider side — keep polling
+                        logger.info(
+                            "STATUS SYNC: order %s still showing '%s' on provider — will poll again next cycle",
+                            order['id'], status
+                        )
 
                 except Exception as e:
                     logger.error("STATUS SYNC: error on order %s: %s", order.get('id'), str(e))
@@ -1191,6 +1287,7 @@ async def retry_stuck_orders():
 # =========================
 # BACKGROUND: RETRY STUCK DEPOSITS
 # =========================
+
 _deposit_retry_running = False
 
 async def retry_stuck_deposits():
@@ -1207,7 +1304,9 @@ async def retry_stuck_deposits():
             logger.info("DEPOSIT RETRY: scanning for stuck deposits...")
 
             now    = utc_now()
+            # Only pick up deposits older than 5 minutes (give webhook time to fire)
             floor  = (now - timedelta(minutes=5)).isoformat()
+            # Only look back 2 hours — deposits older than that are already handled
             cutoff = (now - timedelta(hours=2)).isoformat()
 
             stuck = supabase.table("wallet_deposits") \
@@ -1247,17 +1346,19 @@ async def retry_stuck_deposits():
                     logger.info("DEPOSIT RETRY: deposit %s — Paystack status: %s", dep_id, paystack_status)
 
                     if paystack_status != "success":
+                        # Fail deposits where Paystack hasn't confirmed within 30 minutes
                         age = utc_now() - parse_db_dt(deposit["created_at"])
                         if age > timedelta(minutes=30):
                             supabase.table("wallet_deposits") \
                                 .update({"status": "failed"}) \
                                 .eq("id", dep_id) \
                                 .execute()
-                            logger.info("DEPOSIT RETRY: deposit %s marked failed — unpaid after 30min", dep_id)
+                            logger.info("DEPOSIT RETRY: deposit %s marked failed — Paystack unpaid after 30min", dep_id)
                         else:
-                            logger.info("DEPOSIT RETRY: deposit %s still pending on Paystack, will retry", dep_id)
+                            logger.info("DEPOSIT RETRY: deposit %s still pending on Paystack — will retry", dep_id)
                         continue
 
+                    # ── Paystack confirmed success — guard against double-credit ──
                     recheck = supabase.table("wallet_deposits") \
                         .select("status") \
                         .eq("id", dep_id) \
@@ -1267,6 +1368,7 @@ async def retry_stuck_deposits():
                         logger.info("DEPOSIT RETRY: deposit %s already credited, skipping", dep_id)
                         continue
 
+                    # ── Credit the agent wallet ───────────────────────────
                     wallet_res = supabase.table("agent_wallets") \
                         .select("balance") \
                         .eq("agent_id", agent_id) \
