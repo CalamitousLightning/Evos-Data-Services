@@ -336,7 +336,7 @@ SDL_OFFER_SLUG = {
 AGYEKUMDATA_CATEGORY_MAP = {
     "MTN": "MTN Network",
     "TELECEL": "Telecel  Offer",
-    "AIRTELTIGO": "iShare Offer",
+    "AIRTELTIGO": "ISHARE OFFER",
     "AT":         "iShare Offer",
 }
 
