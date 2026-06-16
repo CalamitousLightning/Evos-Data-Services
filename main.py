@@ -333,11 +333,11 @@ SDL_OFFER_SLUG = {
     "AT":         "ishare_data_bundle",
 }
 
-AGYEKUMDATA_CATEGORY_MAP = {
-    "MTN": "MTN Network",
-    "TELECEL": "Telecel Offer",
-    "AIRTELTIGO": "iShare Offer",
-    "AT":         "iShare Offer",
+AGYEKUMDATA_CATEGORY_PRIORITY = {
+    "MTN":        ["MTN", "MTN Network", "MTN DATA", "MTN Bundle", "MTN OFFER", "MTN Package"],
+    "TELECEL":    ["Telecel", "Telecel Package", "Telecel Offer"],
+    "AIRTELTIGO": ["iShare", "iShare package", "iShare Offer"],
+    "AT":         ["iShare", "iShare package", "iShare Offer"],
 }
 
 # =========================
@@ -439,100 +439,39 @@ def sanitise_agyekumdata_ref(ref: str) -> str:
 
    
 def get_agyekumdata_package_id(network: str, bundle: str) -> str:
-    """
-    Fetch exact Agyekumdata packageId from /products.
-    Do NOT modify packageid because Agyekumdata expects exact value.
-    Example:
-    ISHARE OFFER-1GB must remain ISHARE OFFER-1GB
-    """
+    priorities = AGYEKUMDATA_CATEGORY_PRIORITY.get(network.upper(), [network])
+    bundle_clean = bundle.strip().upper().replace(" ", "")
 
-    category = AGYEKUMDATA_CATEGORY_MAP.get(
-        network.upper(),
-        network
-    )
-
-    fallback = f"{category}-{bundle.strip().upper()}"
-
-    try:
-
-        res = requests.get(
-            f"{AGYEKUMDATA_BASE}/products",
-            headers=_agyekumdata_headers(),
-            params={"category": category},
-            timeout=REQUEST_TIMEOUT,
-        )
-
-        data = _safe_agyekumdata_json(
-            res,
-            "PRODUCTS"
-        )
-
-        products = (
-            data
-            if isinstance(data, list)
-            else data.get("data", [])
-        )
-
-
-        bundle_clean = (
-            bundle
-            .strip()
-            .upper()
-            .replace(" ", "")
-        )
-
-
-        for product in products:
-
-            title_clean = (
-                product.get("title", "")
-                .upper()
-                .replace(" ", "")
+    for category in priorities:
+        try:
+            res = requests.get(
+                f"{AGYEKUMDATA_BASE}/products",
+                headers=_agyekumdata_headers(),
+                params={"category": category},
+                timeout=REQUEST_TIMEOUT,
             )
+            data = _safe_agyekumdata_json(res, "PRODUCTS")
+            products = data if isinstance(data, list) else data.get("data", [])
 
+            for product in products:
+                title_clean = product.get("title", "").upper().replace(" ", "")
+                if title_clean == bundle_clean:
+                    package_id = product.get("packageid") or product.get("packageId")
+                    if package_id:
+                        logger.info(
+                            "AGYEKUMDATA PRODUCTS: matched packageId=%s category=%s",
+                            package_id, category
+                        )
+                        return package_id
 
-            if title_clean == bundle_clean:
+        except Exception as e:
+            logger.error("AGYEKUMDATA PRODUCTS ERROR for category %s: %s", category, str(e))
+            continue
 
-                package_id = (
-                    product.get("packageid")
-                    or product.get("packageId")
-                )
-
-
-                if package_id:
-
-                    logger.info(
-                        "AGYEKUMDATA PRODUCTS: matched packageId=%s category=%s",
-                        package_id,
-                        product.get("category")
-                    )
-
-
-                    # RETURN EXACT VALUE FROM API
-                    return package_id
-
-
-
-        logger.warning(
-            "AGYEKUMDATA PRODUCTS: no match for %s %s fallback=%s",
-            network,
-            bundle,
-            fallback
-        )
-
-
-        return fallback
-
-
-
-    except Exception as e:
-
-        logger.error(
-            "AGYEKUMDATA PRODUCTS ERROR: %s",
-            str(e)
-        )
-
-        return fallback
+    # fallback
+    fallback = f"{network}-{bundle.strip().upper()}"
+    logger.warning("AGYEKUMDATA PRODUCTS: no match for %s %s, fallback=%s", network, bundle, fallback)
+    return fallback
         
 def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str) -> dict:
     """
