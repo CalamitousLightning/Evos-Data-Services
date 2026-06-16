@@ -334,12 +334,11 @@ SDL_OFFER_SLUG = {
 }
 
 AGYEKUMDATA_CATEGORY_MAP = {
-    "MTN":        "MTN NETWORK",
-    "TELECEL":    "TELECEL OFFER",
+    "MTN":        "MTN",
+    "TELECEL":    "Telecel",
     "AIRTELTIGO": "iShare Offer",
     "AT":         "iShare Offer",
 }
-
 
 # =========================
 # BUNDLES GHANA HELPER
@@ -443,12 +442,6 @@ def sanitise_agyekumdata_ref(ref: str) -> str:
 
 
 def get_agyekumdata_package_id(network: str, bundle: str) -> str:
-    """
-    Fetch the exact packageid from Agyekumdata's /products endpoint.
-    Filters by category so the response is small and relevant.
-    Matches by normalising the title (e.g. "1 GB" → "1GB") against our
-    bundle string. Falls back to "Category-BUNDLE" if no match found.
-    """
     category = AGYEKUMDATA_CATEGORY_MAP.get(network.upper(), network)
     fallback  = f"{category}-{bundle.strip().upper()}"
 
@@ -461,17 +454,19 @@ def get_agyekumdata_package_id(network: str, bundle: str) -> str:
         )
         data = _safe_agyekumdata_json(res, "PRODUCTS")
 
-        # /products returns a plain list, not {"success": ..., "data": [...]}
         products = data if isinstance(data, list) else data.get("data", [])
         bundle_upper = bundle.strip().upper().replace(" ", "")
 
         for p in products:
             title_norm = p.get("title", "").replace(" ", "").upper()
             if title_norm == bundle_upper:
-                pkg = p.get("packageid") or p.get("packageId") or fallback
+                raw_pkg = p.get("packageid") or p.get("packageId") or fallback
+                # Remove spaces — their /purchase rejects "ISHARE OFFER-1GB"
+                # but accepts "ISHAREOFFER-1GB" based on docs pattern
+                pkg = raw_pkg.replace(" ", "")
                 logger.info(
-                    "AGYEKUMDATA PRODUCTS: matched packageId=%s for %s %s",
-                    pkg, network, bundle
+                    "AGYEKUMDATA PRODUCTS: matched raw=%s cleaned=%s for %s %s",
+                    raw_pkg, pkg, network, bundle
                 )
                 return pkg
 
