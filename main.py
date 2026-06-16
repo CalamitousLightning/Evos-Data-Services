@@ -484,10 +484,12 @@ def get_agyekumdata_package_id(network: str, bundle: str) -> str:
 def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str) -> dict:
     """
     POST /purchase to Agyekumdata.
-    Auth is via X-API-KEY header — no query params needed.
+    Auth via X-API-KEY header only.
     """
-    # Normalise phone to local format (0XXXXXXXXX)
+
+    # Normalize phone
     phone = phone.strip()
+
     if phone.startswith("233") and len(phone) == 12:
         phone = "0" + phone[3:]
     elif len(phone) == 9 and not phone.startswith("0"):
@@ -496,56 +498,108 @@ def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str
     safe_ref = sanitise_agyekumdata_ref(client_reference)
 
     body = {
-        "packageId":       package_id,
-        "mobileNo":        phone,
+        "packageId": package_id,
+        "mobileNo": phone,
         "clientReference": safe_ref,
     }
 
+    url = f"{AGYEKUMDATA_BASE}/purchase"
+
+    logger.info(
+        "AGYEKUMDATA PURCHASE URL: %s",
+        url
+    )
+
     logger.info(
         "AGYEKUMDATA PURCHASE: packageId=%s phone=%s ref=%s",
-        package_id, phone, safe_ref
+        package_id,
+        phone,
+        safe_ref
     )
 
     try:
+
         res = requests.post(
-            f"{AGYEKUMDATA_BASE}/purchase",
+            url,
             headers=_agyekumdata_headers(),
-            params={"api_key": AGYEKUMDATA_API_KEY},  # add this line
             json=body,
             timeout=REQUEST_TIMEOUT,
             allow_redirects=False,
         )
 
-        # Catch redirects — means the base URL or auth is wrong
+
+        # Detect wrong endpoint/auth
         if res.status_code in (301, 302, 307, 308):
-            location = res.headers.get("Location", "unknown")
+
+            location = res.headers.get("Location")
+
             logger.error(
-                "AGYEKUMDATA PURCHASE: unexpected redirect %s → %s "
-                "(check AGYEKUMDATA_BASE env var and API key)",
-                res.status_code, location
+                "AGYEKUMDATA REDIRECT: %s -> %s",
+                res.status_code,
+                location
             )
-            return {"success": False, "error": f"Redirect {res.status_code} to {location}"}
 
-        result = _safe_agyekumdata_json(res, "PURCHASE")
+            return {
+                "success": False,
+                "error": f"API redirected to {location}"
+            }
 
-        # Map HTTP 4xx/5xx with success=False to a clear error
-        if not result.get("success") and res.status_code >= 400:
+
+        result = _safe_agyekumdata_json(
+            res,
+            "PURCHASE"
+        )
+
+
+        if not result.get("success"):
+
             logger.error(
                 "AGYEKUMDATA PURCHASE FAILED: status=%s error=%s",
-                res.status_code, result.get("error")
+                res.status_code,
+                result.get("error")
             )
+
 
         return result
 
+
     except requests.exceptions.Timeout:
-        logger.error("AGYEKUMDATA PURCHASE TIMEOUT: ref=%s", safe_ref)
-        return {"success": False, "error": "Request timed out"}
+
+        logger.error(
+            "AGYEKUMDATA PURCHASE TIMEOUT ref=%s",
+            safe_ref
+        )
+
+        return {
+            "success": False,
+            "error": "Request timed out"
+        }
+
+
     except requests.exceptions.ConnectionError as e:
-        logger.error("AGYEKUMDATA PURCHASE CONNECTION ERROR: %s", str(e))
-        return {"success": False, "error": f"Connection failed: {str(e)}"}
+
+        logger.error(
+            "AGYEKUMDATA CONNECTION ERROR: %s",
+            str(e)
+        )
+
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
     except Exception as e:
-        logger.error("AGYEKUMDATA PURCHASE ERROR: %s", str(e))
-        return {"success": False, "error": str(e)}
+
+        logger.error(
+            "AGYEKUMDATA PURCHASE ERROR: %s",
+            str(e)
+        )
+
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 
 def call_agyekumdata_status(client_reference: str) -> dict:
