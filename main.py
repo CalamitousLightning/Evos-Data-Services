@@ -656,24 +656,33 @@ def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str
 
 
 def call_agyekumdata_status(client_reference: str) -> dict:
-    """
-    Poll order status by our clientReference (sanitised form).
-    Returns the full response dict; caller reads .get("data", {}).get("status").
-    """
     safe_ref = sanitise_agyekumdata_ref(client_reference)
 
     try:
         res = requests.get(
             f"{AGYEKUMDATA_BASE}/order/status",
-            headers=_agyekumdata_headers(),
+            headers=_agyekumdata_headers(),  # MUST include API KEY
             params={"clientReference": safe_ref},
             timeout=REQUEST_TIMEOUT,
+            allow_redirects=False
         )
+
+        # 🔴 IMPORTANT: detect HTML early
+        if "text/html" in res.headers.get("Content-Type", "") or res.text.strip().startswith("<!DOCTYPE"):
+            logger.error(
+                "AGYEKUMDATA STATUS HTML RESPONSE (likely auth/base URL issue): %s",
+                res.text[:200]
+            )
+            return {
+                "success": False,
+                "error": "Invalid API response (HTML instead of JSON)"
+            }
+
         return _safe_agyekumdata_json(res, "STATUS")
 
     except requests.exceptions.Timeout:
-        logger.error("AGYEKUMDATA STATUS TIMEOUT: ref=%s", safe_ref)
         return {"success": False, "error": "Request timed out"}
+
     except Exception as e:
         logger.error("AGYEKUMDATA STATUS ERROR: %s", str(e))
         return {"success": False, "error": str(e)}
