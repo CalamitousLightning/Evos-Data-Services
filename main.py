@@ -1202,14 +1202,17 @@ async def retry_stuck_orders():
                     logger.error("RETRY JOB: error on order %s: %s", order.get('id'), str(e))
 
             # ── STATUS SYNC ───────────────────────────────────────────────
-            # Poll ALL processing orders that have a provider ref, no time limit.
-            # We stop only when the provider confirms success or failure.
+            # Poll processing orders that have a provider ref, up to 3 days old.
+            # Orders older than 3 days are considered stale and ignored.
+            # We stop polling only when the provider confirms success or failure.
             logger.info("STATUS SYNC: scanning for unresolved processing orders...")
+            sync_cutoff = (now - timedelta(days=3)).isoformat()
 
             processing = supabase.table("orders") \
                 .select("*") \
                 .eq("status", "processing") \
                 .not_.is_("datamart_ref", None) \
+                .gte("created_at", sync_cutoff) \
                 .execute()
 
             proc_orders = processing.data or []
@@ -1428,7 +1431,6 @@ async def retry_stuck_deposits():
 async def startup_event():
     asyncio.create_task(retry_stuck_orders())
     asyncio.create_task(retry_stuck_deposits())
-
 
 # =========================
 # SPACEMAIL SMTP
