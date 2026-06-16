@@ -688,6 +688,25 @@ def call_agyekumdata_status(client_reference: str) -> dict:
         return {"success": False, "error": str(e)}
 
 
+def log_agyekumdata_categories():
+    """
+    One-off diagnostic: fetch /categories and log the raw list so we can
+    confirm whether AirtelTigo/iShare is actually a valid purchasable
+    category on this account, or if our category mapping is just wrong.
+    """
+    try:
+        res = requests.get(
+            f"{AGYEKUMDATA_BASE}/categories",
+            headers=_agyekumdata_headers(),
+            timeout=REQUEST_TIMEOUT,
+        )
+        data = _safe_agyekumdata_json(res, "CATEGORIES")
+        logger.info("AGYEKUMDATA CATEGORIES: %s", data)
+        return data
+    except Exception as e:
+        logger.error("AGYEKUMDATA CATEGORIES ERROR: %s", str(e))
+        return {"success": False, "error": str(e)}
+        
 def verify_agyekumdata_signature(body: bytes, signature: str) -> bool:
     """Verify HMAC-SHA256 from the X-AGYEKUMDATA-SIGNATURE webhook header."""
     try:
@@ -1426,12 +1445,12 @@ async def retry_stuck_deposits():
 
         await asyncio.sleep(300)
 
-
+        
 @app.on_event("startup")
 async def startup_event():
+    log_agyekumdata_categories()
     asyncio.create_task(retry_stuck_orders())
     asyncio.create_task(retry_stuck_deposits())
-
 # =========================
 # SPACEMAIL SMTP
 # =========================
