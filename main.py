@@ -403,22 +403,11 @@ def call_swift_data_link(network: str, volume: float, phone: str) -> dict:
 #      get_agyekumdata_package_id does live /products lookup with header auth.
 # =========================
 
-def _agyekumdata_headers() -> dict:
-    headers = {
+def _agyekumdata_headers():
+    return {
         "X-API-KEY": AGYEKUMDATA_API_KEY,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
+        "Content-Type": "application/json"
     }
-
-    logger.info(
-        "AGYEKUMDATA HEADERS DEBUG: %s",
-        {
-            "X-API-KEY": AGYEKUMDATA_API_KEY[:5] + "*****"
-            if AGYEKUMDATA_API_KEY else "EMPTY"
-        }
-    )
-
-    return headers
 
 def _safe_agyekumdata_json(res: requests.Response, context: str) -> dict:
     """
@@ -469,14 +458,12 @@ def get_agyekumdata_package_id(network: str, bundle: str) -> str:
             title_norm = p.get("title", "").replace(" ", "").upper()
             if title_norm == bundle_upper:
                 raw_pkg = p.get("packageid") or p.get("packageId") or fallback
-                # Remove spaces — their /purchase rejects "ISHARE OFFER-1GB"
-                # but accepts "ISHAREOFFER-1GB" based on docs pattern
-                pkg = raw_pkg.replace(" ", "")
+                
                 logger.info(
-                    "AGYEKUMDATA PRODUCTS: matched raw=%s cleaned=%s for %s %s",
-                    raw_pkg, pkg, network, bundle
+                    "AGYEKUMDATA PRODUCTS: matched package=%s",
+                    raw_pkg
                 )
-                return pkg
+                return raw_pkg
 
         logger.warning(
             "AGYEKUMDATA PRODUCTS: no match for %s %s — using fallback %s",
