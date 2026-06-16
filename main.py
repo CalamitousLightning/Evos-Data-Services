@@ -334,9 +334,9 @@ SDL_OFFER_SLUG = {
 }
 
 AGYEKUMDATA_CATEGORY_MAP = {
-    "MTN":        "MTN",
-    "TELECEL":    "Telecel",
-    "AIRTELTIGO": "iShare Offer",
+    "MTN": "MTN",
+    "TELECEL": "Telecel",
+    "AIRTELTIGO": "AirtelTigo",
     "AT":         "iShare Offer",
 }
 
@@ -445,8 +445,7 @@ def get_agyekumdata_package_id(network: str, bundle: str) -> str:
     try:
         res = requests.get(
             f"{AGYEKUMDATA_BASE}/products",
-            headers=_agyekumdata_headers(),
-            params={"category": category},
+            headers=_agyekumdata_headers(),           
             timeout=REQUEST_TIMEOUT,
         )
         data = _safe_agyekumdata_json(res, "PRODUCTS")
