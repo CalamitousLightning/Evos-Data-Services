@@ -510,7 +510,7 @@ def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str
         res = requests.post(
             f"{AGYEKUMDATA_BASE}/purchase",
             headers=_agyekumdata_headers(),
-            params={"apiKey": AGYEKUMDATA_API_KEY},  # add this line
+            params={"api_key": AGYEKUMDATA_API_KEY},  # add this line
             json=body,
             timeout=REQUEST_TIMEOUT,
             allow_redirects=False,
