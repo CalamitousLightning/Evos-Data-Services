@@ -333,11 +333,27 @@ SDL_OFFER_SLUG = {
     "AT":         "ishare_data_bundle",
 }
 
+# =========================
+# AGYEKUMDATA CATEGORY MAP
+# FIX: Agyekumdata support confirmed only the "Package" category variants
+#      are live/fulfilled on their backend (ResellersHub). The legacy
+#      categories without "Package" (MTN, Telecel, iShare, BigTime) still
+#      appear in /products but purchases against them fail with
+#      "RESSELLERSHUB purchase failed".
+# FIX: "AT" now correctly maps to "iShare package" — it previously pointed
+#      to "iShare Offer" (a legacy/offer-tier category) while "AIRTELTIGO"
+#      pointed to "iShare package". They must be identical since AT and
+#      AIRTELTIGO are the same network, just different aliases used across
+#      the codebase (order requests use AIRTELTIGO/AT interchangeably).
+# NOTE: casing matters and must match their /categories response EXACTLY:
+#       "MTN Package", "Telecel Package", "iShare package" (lowercase
+#       "package"), "BigTime Package".
+# =========================
 AGYEKUMDATA_CATEGORY_MAP = {
     "MTN":        "MTN Package",
     "TELECEL":    "Telecel Package",
     "AIRTELTIGO": "iShare package",
-    "AT":         "iShare Offer",
+    "AT":         "iShare package",
 }
 
 # =========================
@@ -400,7 +416,9 @@ def call_swift_data_link(network: str, volume: float, phone: str) -> dict:
 #      Single purchase attempt — no shotgun fallbacks needed.
 #      _safe_agyekumdata_json handles empty/non-JSON bodies gracefully.
 #      sanitise_agyekumdata_ref keeps clientReference alphanumeric ≤20 chars.
-#      get_agyekumdata_package_id does live /products lookup with header auth.
+#      get_agyekumdata_package_id does live /products lookup with header auth,
+#      filtered strictly to the whitelisted "Package" category so we never
+#      accidentally match a legacy/unfulfillable product again.
 # =========================
 
 def _agyekumdata_headers():
@@ -437,8 +455,14 @@ def sanitise_agyekumdata_ref(ref: str) -> str:
     cleaned = re.sub(r"[^A-Z0-9_]", "", ref.upper())
     return cleaned[:20]
 
-   
+
 def get_agyekumdata_package_id(network: str, bundle: str) -> str:
+    """
+    Fetch the exact packageid from Agyekumdata's /products endpoint.
+    FIX: filters strictly to the whitelisted "Package" category for this
+    network (AGYEKUMDATA_CATEGORY_MAP), so we never fall back onto a
+    legacy/unfulfillable category like plain "MTN" or "iShare".
+    """
     category = AGYEKUMDATA_CATEGORY_MAP.get(network.upper(), network)
     bundle_clean = bundle.strip().upper().replace(" ", "")
     fallback = f"{category}-{bundle_clean}"
@@ -452,7 +476,8 @@ def get_agyekumdata_package_id(network: str, bundle: str) -> str:
         data = _safe_agyekumdata_json(res, "PRODUCTS")
         products = data if isinstance(data, list) else data.get("data", [])
 
-        # Filter by the whitelisted category first
+        # Filter by the whitelisted category first (exact match, case-sensitive
+        # to match their API exactly — e.g. "iShare package" lowercase "p")
         category_products = [
             p for p in products
             if p.get("category", "").strip() == category
@@ -478,7 +503,8 @@ def get_agyekumdata_package_id(network: str, bundle: str) -> str:
     except Exception as e:
         logger.error("AGYEKUMDATA PRODUCTS ERROR: %s", str(e))
         return fallback
-        
+
+
 def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str) -> dict:
     """
     POST /purchase to Agyekumdata.
@@ -552,9 +578,10 @@ def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str
         if not result.get("success"):
 
             logger.error(
-                "AGYEKUMDATA PURCHASE FAILED: status=%s error=%s",
+                "AGYEKUMDATA PURCHASE FAILED: status=%s error=%s message=%s",
                 res.status_code,
-                result.get("error")
+                result.get("error"),
+                result.get("message")
             )
 
 
@@ -651,7 +678,8 @@ def log_agyekumdata_categories():
     except Exception as e:
         logger.error("AGYEKUMDATA CATEGORIES ERROR: %s", str(e))
         return {"success": False, "error": str(e)}
-        
+
+
 def verify_agyekumdata_signature(body: bytes, signature: str) -> bool:
     """Verify HMAC-SHA256 from the X-AGYEKUMDATA-SIGNATURE webhook header."""
     try:
@@ -1390,12 +1418,14 @@ async def retry_stuck_deposits():
 
         await asyncio.sleep(300)
 
-        
+
 @app.on_event("startup")
 async def startup_event():
     log_agyekumdata_categories()
     asyncio.create_task(retry_stuck_orders())
     asyncio.create_task(retry_stuck_deposits())
+
+
 # =========================
 # SPACEMAIL SMTP
 # =========================
