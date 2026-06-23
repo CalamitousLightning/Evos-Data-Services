@@ -2421,6 +2421,50 @@ def save_agent_pricing(request: Request, payload: dict):
 
 
 # =========================
+# ADMIN: PER-AGENT BASE PRICE OVERRIDES
+# =========================
+@app.get("/admin/agent-prices")
+def admin_get_agent_prices(request: Request, _: None = Depends(require_admin)):
+    try:
+        rows = supabase.table("admin_agent_prices").select("*").order("agent_id").execute()
+        return {"status": "success", "data": rows.data or []}
+    except Exception as e:
+        logger.error("ADMIN AGENT PRICES GET ERROR: %s", str(e))
+        raise HTTPException(500, "Failed to fetch agent prices")
+
+
+@app.post("/admin/agent-prices")
+def admin_set_agent_price(request: Request, payload: dict, _: None = Depends(require_admin)):
+    try:
+        agent_id   = int(payload["agent_id"])
+        network    = str(payload["network"]).strip().upper()
+        bundle     = str(payload["bundle"]).strip()
+        cost_price = float(payload["cost_price"])
+
+        supabase.table("admin_agent_prices").upsert({
+            "agent_id":   agent_id,
+            "network":    network,
+            "bundle":     bundle,
+            "cost_price": cost_price,
+            "updated_at": utc_now().isoformat(),
+        }, on_conflict="agent_id,network,bundle").execute()
+
+        return {"status": "success"}
+    except Exception as e:
+        logger.error("ADMIN AGENT PRICES SET ERROR: %s", str(e))
+        raise HTTPException(500, "Failed to set agent price")
+
+
+@app.delete("/admin/agent-prices/{override_id}")
+def admin_delete_agent_price(override_id: int, request: Request, _: None = Depends(require_admin)):
+    try:
+        supabase.table("admin_agent_prices").delete().eq("id", override_id).execute()
+        return {"status": "deleted"}
+    except Exception as e:
+        logger.error("ADMIN AGENT PRICES DELETE ERROR: %s", str(e))
+        raise HTTPException(500, "Failed to delete")
+        
+# =========================
 # AGENT WALLET DEPOSIT
 # =========================
 @app.post("/agent/deposit/initiate")
@@ -2565,14 +2609,28 @@ async def agent_buy_data(request: Request, payload: AgentBuyDataRequest):
         bundle       = payload.bundle
         phone_number = payload.phone_number
 
-        price_res = supabase.table("base_prices") \
+     
+
+# Check for admin override first, fall back to base_prices
+        override_res = supabase.table("admin_agent_prices") \
             .select("cost_price") \
+            .eq("agent_id", agent_id) \
             .ilike("network", network) \
             .ilike("bundle", bundle) \
             .limit(1) \
             .execute()
-        if not price_res.data:
-            return {"status": "error", "message": "Bundle not found"}
+        
+        if override_res.data:
+            cost_price = float(override_res.data[0]["cost_price"])
+        else:
+            price_res = supabase.table("base_prices") \
+                .select("cost_price") \
+                .ilike("network", network) \
+                .ilike("bundle", bundle) \
+                .limit(1) \
+                .execute()
+            if not price_res.data:
+                return {"status": "error", "message": "Bundle not found"}
 
         cost_price = float(price_res.data[0].get("cost_price", 0))
         if cost_price <= 0:
