@@ -2339,6 +2339,11 @@ async def reject_withdrawal(withdrawal_id: int, _: None = Depends(require_admin)
 
 # =========================
 # AGENT PRICING
+# FIX: Now checks admin_agent_prices first for each bundle — if the admin
+#      has set a unique cost_price for this agent, that is used as base_price.
+#      Falls back to the global base_prices cost_price if no override exists.
+#      This means what the agent sees on their pricing page exactly matches
+#      what they will be charged when they buy — no more silent discrepancy.
 # =========================
 @app.get("/agent/pricing/{agent_id}")
 @limiter.limit("30/minute")
@@ -2346,31 +2351,55 @@ def get_agent_pricing(request: Request, agent_id: int, _: int = Depends(require_
     try:
         base_res     = supabase.table("base_prices").select("*").execute()
         base_prices  = base_res.data or []
+
+        # Fetch any admin overrides for this specific agent
+        override_res = supabase.table("admin_agent_prices") \
+            .select("*") \
+            .eq("agent_id", agent_id) \
+            .execute()
+        override_prices = override_res.data or []
+
+        # Build override lookup: "network-bundle" → cost_price
+        override_map = {}
+        for row in override_prices:
+            if not row:
+                continue
+            key = f"{row.get('network','').strip().lower()}-{row.get('bundle','').strip().lower()}"
+            override_map[key] = float(row.get("cost_price", 0) or 0)
+
+        # Fetch agent's own markups
         agent_res    = supabase.table("agent_prices").select("*").eq("agent_id", agent_id).execute()
         agent_prices = agent_res.data or []
 
-        agent_map = {}
+        markup_map = {}
         for row in agent_prices:
             if not row:
                 continue
             key = f"{row.get('network','').strip().lower()}-{row.get('bundle','').strip().lower()}"
-            agent_map[key] = float(row.get("markup", 0) or 0)
+            markup_map[key] = float(row.get("markup", 0) or 0)
 
         result = []
         for item in base_prices:
             if not item:
                 continue
-            network    = item.get("network", "").strip()
-            bundle     = item.get("bundle", "").strip()
-            base_price = float(item.get("cost_price", 0) or 0)
-            key        = f"{network.lower()}-{bundle.lower()}"
-            markup     = float(agent_map.get(key, 0) or 0)
+            network  = item.get("network", "").strip()
+            bundle   = item.get("bundle", "").strip()
+            key      = f"{network.lower()}-{bundle.lower()}"
+
+            # Use admin override if set for this agent, otherwise fall back to global base price
+            if key in override_map:
+                base_price = override_map[key]
+            else:
+                base_price = float(item.get("cost_price", 0) or 0)
+
+            markup = float(markup_map.get(key, 0) or 0)
             result.append({
-                "network":     network,
-                "bundle":      bundle,
-                "base_price":  base_price,
-                "markup":      markup,
-                "final_price": base_price + markup
+                "network":          network,
+                "bundle":           bundle,
+                "base_price":       base_price,
+                "markup":           markup,
+                "final_price":      round(base_price + markup, 2),
+                "has_override":     key in override_map,
             })
 
         return {"status": "success", "prices": result}
