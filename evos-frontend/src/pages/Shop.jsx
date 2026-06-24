@@ -38,7 +38,7 @@ export default function Shop() {
     loadPrices();
   }, []);
 
-  const OUT_OF_STOCK = [MTN,];
+  const OUT_OF_STOCK = [MTN];
   const isOutOfStock = (name) => OUT_OF_STOCK.includes(name);
 
   const bundles = prices
