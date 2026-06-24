@@ -33,6 +33,40 @@ const bundleAccents = [
 ];
 
 // =========================
+// SESSION HELPERS
+// Save and restore store state so ETATrack "back" returns to exact position
+// =========================
+const SESSION_KEY = "evos_store_state";
+
+function saveStoreSession(agentId, step, network) {
+  try {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify({ agentId, step, network }));
+    // Always keep agentId accessible for ETATrack
+    sessionStorage.setItem("storeAgentId", agentId);
+  } catch (_) {}
+}
+
+function loadStoreSession(agentId) {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const saved = JSON.parse(raw);
+    // Only restore if it's for the same agent
+    if (String(saved.agentId) === String(agentId)) return saved;
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function clearStoreSession() {
+  try {
+    sessionStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem("storeAgentId");
+  } catch (_) {}
+}
+
+// =========================
 // CONFIRMATION MODAL
 // =========================
 function ConfirmModal({ selected, networkLabel, networkCfg, onClose, onConfirm, processing }) {
@@ -112,8 +146,6 @@ function ConfirmModal({ selected, networkLabel, networkCfg, onClose, onConfirm, 
 // MAIN STORE PAGE
 // =========================
 export default function StorePage({ setPage }) {
-  // Extract only the numeric agent ID — ignore the slug segment if present
-  // Handles both /store/1 and /store/1/besah-andy-store
   const agentId = window.location.pathname.split("/store/")[1]?.split("/")[0];
 
   const [loading, setLoading] = useState(true);
@@ -124,8 +156,16 @@ export default function StorePage({ setPage }) {
   const [processing, setProcessing] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
 
+  // On mount: restore previous step/network from session if available
   useEffect(() => {
     if (!agentId) { setLoading(false); return; }
+
+    const saved = loadStoreSession(agentId);
+    if (saved) {
+      if (saved.step) setStep(saved.step);
+      if (saved.network) setNetwork(saved.network);
+    }
+
     const loadStore = async () => {
       try {
         setLoading(true);
@@ -143,6 +183,23 @@ export default function StorePage({ setPage }) {
     loadStore();
   }, [agentId]);
 
+  // Save session whenever step or network changes
+  useEffect(() => {
+    if (agentId) {
+      saveStoreSession(agentId, step, network);
+    }
+  }, [agentId, step, network]);
+
+  const goToStep = (newStep, newNetwork = network) => {
+    setStep(newStep);
+    setNetwork(newNetwork);
+  };
+
+  const handleTrackOrder = () => {
+    // Session is already saved via the useEffect above — just navigate
+    setPage("eta-track");
+  };
+
   const placeOrder = async (phone) => {
     if (!selected) return;
     setProcessing(true);
@@ -159,6 +216,8 @@ export default function StorePage({ setPage }) {
       });
       const data = await res.json();
       if (data.status === "created" && data.payment_url) {
+        // Clear session on successful payment redirect so they start fresh on return
+        clearStoreSession();
         window.location.href = data.payment_url;
         return;
       }
@@ -187,7 +246,6 @@ export default function StorePage({ setPage }) {
 
   const availableNetworks = [...new Set((store.prices || []).map((p) => p.network))];
 
-  // ✅ Sort bundles lowest final_price first
   const bundles = (store.prices || [])
     .filter((p) => p.network === network)
     .sort((a, b) => Number(a.final_price) - Number(b.final_price));
@@ -254,7 +312,7 @@ export default function StorePage({ setPage }) {
                       background: c.bg,
                       border: `1px solid ${c.border}`,
                     }}
-                    onClick={() => { setNetwork(netKey); setStep(2); }}
+                    onClick={() => goToStep(2, netKey)}
                   >
                     {c.tag && (
                       <div style={{
@@ -279,13 +337,7 @@ export default function StorePage({ setPage }) {
               <span style={styles.infoChip}>⚡ Instant Delivery</span>
             </div>
 
-            <button
-              style={styles.trackBtn}
-              onClick={() => {
-                sessionStorage.setItem("storeAgentId", agentId);
-                setPage("eta-track");
-              }}
-            >
+            <button style={styles.trackBtn} onClick={handleTrackOrder}>
               📦 Track My Order
             </button>
           </div>
@@ -294,7 +346,7 @@ export default function StorePage({ setPage }) {
         {/* ============ STEP 2 — BUNDLES ============ */}
         {step === 2 && (
           <div style={styles.box}>
-            <button style={styles.backBtn} onClick={() => setStep(1)}>← Back</button>
+            <button style={styles.backBtn} onClick={() => goToStep(1, "")}>← Back</button>
 
             <p style={styles.stepLabel}>Step 2 of 2 · Pick a Bundle</p>
 
