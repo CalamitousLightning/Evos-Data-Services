@@ -59,6 +59,7 @@ export default function Home({ setPage, theme }) {
       bg: "linear-gradient(135deg, rgba(255,193,7,0.22), rgba(255,193,7,0.07))",
       border: "rgba(255,193,7,0.5)",
       glow: "rgba(255,193,7,0.25)",
+      outOfStock: true,
     },
     {
       name: "TELECEL",
@@ -68,6 +69,7 @@ export default function Home({ setPage, theme }) {
       bg: "linear-gradient(135deg, rgba(239,68,68,0.22), rgba(239,68,68,0.07))",
       border: "rgba(239,68,68,0.5)",
       glow: "rgba(239,68,68,0.25)",
+      outOfStock: false,
     },
     {
       name: "AIRTELTIGO",
@@ -77,11 +79,13 @@ export default function Home({ setPage, theme }) {
       bg: "linear-gradient(135deg, rgba(99,102,241,0.22), rgba(99,102,241,0.07))",
       border: "rgba(99,102,241,0.5)",
       glow: "rgba(99,102,241,0.25)",
+      outOfStock: false,
     },
   ];
 
-  const handleNetworkClick = (networkName) => {
-    localStorage.setItem("selectedNetwork", networkName);
+  const handleNetworkClick = (network) => {
+    if (network.outOfStock) return;
+    localStorage.setItem("selectedNetwork", network.name);
     setPage("shop");
   };
 
@@ -116,17 +120,36 @@ export default function Home({ setPage, theme }) {
                 key={n.name}
                 style={{
                   ...styles.orderNowCard,
-                  background: n.bg,
-                  border: `1.5px solid ${n.border}`,
-                  boxShadow: `0 4px 20px ${n.glow}`,
+                  ...(n.outOfStock
+                    ? styles.orderNowCardDisabled
+                    : {
+                        background: n.bg,
+                        border: `1.5px solid ${n.border}`,
+                        boxShadow: `0 4px 20px ${n.glow}`,
+                      }),
                 }}
-                onClick={() => handleNetworkClick(n.name)}
+                onClick={() => handleNetworkClick(n)}
               >
-                <span style={styles.orderNowEmoji}>{n.emoji}</span>
-                <span style={{ ...styles.orderNowName, color: n.color }}>
+                {n.outOfStock && (
+                  <span style={styles.outOfStockBadge}>Out of Stock</span>
+                )}
+                <span style={{
+                  ...styles.orderNowEmoji,
+                  opacity: n.outOfStock ? 0.35 : 1,
+                }}>
+                  {n.emoji}
+                </span>
+                <span style={{
+                  ...styles.orderNowName,
+                  color: n.outOfStock ? "#475569" : n.color,
+                }}>
                   {n.label}
                 </span>
-                <span style={{ ...styles.orderNowArrow, color: n.color }}>→</span>
+                {n.outOfStock ? (
+                  <span style={styles.outOfStockText}>Unavailable</span>
+                ) : (
+                  <span style={{ ...styles.orderNowArrow, color: n.color }}>→</span>
+                )}
               </div>
             ))}
           </div>
@@ -474,6 +497,36 @@ const styles = {
     borderRadius: 16,
     cursor: "pointer",
     transition: "transform 0.15s, box-shadow 0.15s",
+    position: "relative",
+  },
+  // Out of stock card override
+  orderNowCardDisabled: {
+    background: "rgba(255,255,255,0.03)",
+    border: "1.5px solid rgba(255,255,255,0.07)",
+    boxShadow: "none",
+    cursor: "not-allowed",
+    opacity: 0.6,
+    position: "relative",
+  },
+  outOfStockBadge: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    background: "rgba(239,68,68,0.18)",
+    border: "1px solid rgba(239,68,68,0.4)",
+    color: "#f87171",
+    fontSize: 9,
+    fontWeight: 800,
+    padding: "2px 6px",
+    borderRadius: 50,
+    textTransform: "uppercase",
+    letterSpacing: "0.4px",
+  },
+  outOfStockText: {
+    fontSize: 11,
+    fontWeight: 700,
+    color: "#475569",
+    letterSpacing: "0.3px",
   },
   orderNowEmoji: {
     fontSize: 30,
