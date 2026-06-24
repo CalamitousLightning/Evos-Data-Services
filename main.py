@@ -2463,7 +2463,7 @@ def admin_delete_agent_price(override_id: int, request: Request, _: None = Depen
     except Exception as e:
         logger.error("ADMIN AGENT PRICES DELETE ERROR: %s", str(e))
         raise HTTPException(500, "Failed to delete")
-        
+
 # =========================
 # AGENT WALLET DEPOSIT
 # =========================
@@ -2595,6 +2595,12 @@ async def verify_deposit(request: Request, payload: dict):
 
 # =========================
 # AGENT BUY DATA
+# FIX: cost_price assignment was broken — the override branch set cost_price
+#      correctly but the bare `cost_price = float(price_res.data[0]...)` line
+#      after the if/else unconditionally overwrote it (and crashed with
+#      NameError when override_res.data was truthy, since price_res was never
+#      assigned in that branch). Moved the fallback assignment fully inside
+#      the else block so override takes priority and no NameError can occur.
 # =========================
 @app.post("/agent/buy-data")
 @limiter.limit("10/minute")
@@ -2609,9 +2615,7 @@ async def agent_buy_data(request: Request, payload: AgentBuyDataRequest):
         bundle       = payload.bundle
         phone_number = payload.phone_number
 
-     
-
-# Check for admin override first, fall back to base_prices
+        # Check for admin override first, fall back to base_prices
         override_res = supabase.table("admin_agent_prices") \
             .select("cost_price") \
             .eq("agent_id", agent_id) \
@@ -2619,7 +2623,7 @@ async def agent_buy_data(request: Request, payload: AgentBuyDataRequest):
             .ilike("bundle", bundle) \
             .limit(1) \
             .execute()
-        
+
         if override_res.data:
             cost_price = float(override_res.data[0]["cost_price"])
         else:
@@ -2631,8 +2635,8 @@ async def agent_buy_data(request: Request, payload: AgentBuyDataRequest):
                 .execute()
             if not price_res.data:
                 return {"status": "error", "message": "Bundle not found"}
+            cost_price = float(price_res.data[0].get("cost_price", 0))
 
-        cost_price = float(price_res.data[0].get("cost_price", 0))
         if cost_price <= 0:
             return {"status": "error", "message": "Invalid bundle price"}
 
