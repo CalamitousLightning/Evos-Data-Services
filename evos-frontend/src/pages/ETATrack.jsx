@@ -2,6 +2,8 @@ import { useState } from "react";
 
 const API = "https://api.evosdata.xyz";
 
+const SESSION_KEY = "evos_store_state";
+
 const STATUS_CONFIG = {
   pending_payment: {
     label: "Awaiting Payment",
@@ -57,6 +59,16 @@ function formatDate(dateStr) {
   });
 }
 
+// Read saved store session
+function getStoreSession() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 export default function ETATrack({ setPage, backTo = "home" }) {
   const [phone, setPhone] = useState("");
   const [orders, setOrders] = useState([]);
@@ -65,8 +77,9 @@ export default function ETATrack({ setPage, backTo = "home" }) {
   const [searched, setSearched] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
 
-  // ✅ Read agent ID from sessionStorage (set by StorePage before navigating)
-  const storedAgentId = sessionStorage.getItem("storeAgentId");
+  // Read store session — used to build the correct back label and action
+  const storeSession = getStoreSession();
+  const hasStoreSession = !!storeSession?.agentId;
 
   const search = async () => {
     setError("");
@@ -97,30 +110,33 @@ export default function ETATrack({ setPage, backTo = "home" }) {
     }
   };
 
-  // ✅ Smart back using sessionStorage agent ID
   const handleBack = () => {
-    if (storedAgentId) {
-      window.history.pushState({}, "", `/store/${storedAgentId}`);
+    if (hasStoreSession) {
+      // Restore exact URL and page — StorePage will read the session and restore step/network
+      const { agentId } = storeSession;
+      window.history.pushState({}, "", `/store/${agentId}`);
       setPage("store");
     } else {
-      setPage(backTo);
+      // No store session — fall back to home or whatever backTo says
+      setPage(backTo === "store" ? "home" : backTo);
     }
   };
 
-  const backLabel = storedAgentId
+  // Build a meaningful back label
+  const backLabel = hasStoreSession
     ? "← Back to Store"
-    : {
-        home: "← Back to Home",
-        store: "← Back to Store",
-        dashboard: "← Back to Dashboard",
-      }[backTo] || "← Back";
+    : backTo === "home"
+    ? "← Back to Home"
+    : backTo === "dashboard"
+    ? "← Back to Dashboard"
+    : "← Back";
 
   return (
     <div style={styles.wrap}>
       <h2 style={styles.title}>Track Your Order</h2>
       <p style={styles.sub}>Enter the phone number used during purchase</p>
 
-      {/* ✅ BACK + NEED HELP — above the input */}
+      {/* BACK + NEED HELP */}
       <div style={styles.topActions}>
         {setPage && (
           <button style={styles.backBtnTop} onClick={handleBack}>
@@ -223,7 +239,7 @@ export default function ETATrack({ setPage, backTo = "home" }) {
         );
       })}
 
-      {/* ✅ FLOATING WHATSAPP SUPPORT BUTTON */}
+      {/* FLOATING WHATSAPP SUPPORT */}
       <div style={styles.floatWrap}>
         {chatOpen && (
           <div style={styles.chatPopup}>
@@ -276,8 +292,6 @@ const styles = {
     textAlign: "center",
     marginBottom: 16,
   },
-
-  // ✅ TOP ACTIONS ROW
   topActions: {
     display: "flex",
     justifyContent: "space-between",
@@ -304,7 +318,6 @@ const styles = {
     padding: "6px 12px",
     borderRadius: 8,
   },
-
   searchBox: {
     display: "flex",
     gap: 10,
@@ -378,8 +391,6 @@ const styles = {
   detailVal: { fontSize: 13, fontWeight: 600, color: "#e5e7eb" },
   etaBox: { padding: "10px 14px", borderRadius: 10 },
   etaText: { fontSize: 12, margin: 0, lineHeight: 1.55, fontWeight: 500 },
-
-  // ✅ FLOATING SUPPORT
   floatWrap: {
     position: "fixed",
     bottom: 24,
