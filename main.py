@@ -1646,132 +1646,215 @@ async def paystack_webhook(request: Request):
 
         if not signature or not verify_signature(body, signature, PAYSTACK_SECRET):
             logger.warning("PAYSTACK WEBHOOK: invalid signature from %s", request.client.host)
+            print(f"PAYSTACK WEBHOOK: invalid signature from {request.client.host}")
             return {"status": "invalid signature"}
 
         payload = await request.json()
+        event   = payload.get("event")
 
-        if payload.get("event") != "charge.success":
-            return {"status": "ignored"}
+        # =========================
+        # EVENT: charge.success (existing purchase-dispatch logic, unchanged)
+        # =========================
+        if event == "charge.success":
 
-        reference = payload["data"]["reference"]
+            reference = payload["data"]["reference"]
+            print(f"PAYSTACK WEBHOOK: charge.success received, reference={reference}")
 
-        order_res = supabase.table("orders").select("*").eq("paystack_ref", reference).limit(1).execute()
-        if not order_res.data:
-            return {"status": "not found"}
+            order_res = supabase.table("orders").select("*").eq("paystack_ref", reference).limit(1).execute()
+            if not order_res.data:
+                print(f"PAYSTACK WEBHOOK: no order found for reference={reference}")
+                return {"status": "not found"}
 
-        order = order_res.data[0]
-        if order["status"] != "pending_payment":
-            return {"status": "already processed"}
+            order = order_res.data[0]
+            if order["status"] != "pending_payment":
+                print(f"PAYSTACK WEBHOOK: order {order['id']} already processed (status={order['status']})")
+                return {"status": "already processed"}
 
-        supabase.table("orders").update({"status": "paid"}).eq("paystack_ref", reference).execute()
+            supabase.table("orders").update({"status": "paid"}).eq("paystack_ref", reference).execute()
+            print(f"PAYSTACK WEBHOOK: order {order['id']} marked as paid")
 
-        if order.get("user_id"):
-            increment_user_orders(order["user_id"])
+            if order.get("user_id"):
+                increment_user_orders(order["user_id"])
 
-        provider = get_provider(order["network"])
+            provider = get_provider(order["network"])
+            print(f"PAYSTACK WEBHOOK: resolved provider={provider} for network={order['network']}")
 
-        try:
-            if provider == "DATAMART":
-                dm_response = requests.post(
-                    f"{DATAMART_BASE}/purchase",
-                    headers={"X-API-Key": DATAMART_API_KEY},
-                    json={
-                        "phoneNumber": order["phone_number"],
-                        "network": NETWORK_MAP.get(order["network"]),
-                        "capacity": extract_capacity(order["bundle"]),
-                        "gateway": "wallet"
-                    },
-                    timeout=REQUEST_TIMEOUT
-                )
-                dm = dm_response.json()
-                dm_data = dm.get("data", {})
-                supabase.table("orders").update({
-                    "status": "processing",
-                    "datamart_ref": dm_data.get("orderReference"),
-                    "datamart_order_id": dm_data.get("orderId")
-                }).eq("paystack_ref", reference).execute()
-                process_agent_profit(order["id"], reference)
+            try:
+                if provider == "DATAMART":
+                    dm_response = requests.post(
+                        f"{DATAMART_BASE}/purchase",
+                        headers={"X-API-Key": DATAMART_API_KEY},
+                        json={
+                            "phoneNumber": order["phone_number"],
+                            "network": NETWORK_MAP.get(order["network"]),
+                            "capacity": extract_capacity(order["bundle"]),
+                            "gateway": "wallet"
+                        },
+                        timeout=REQUEST_TIMEOUT
+                    )
+                    dm = dm_response.json()
+                    dm_data = dm.get("data", {})
+                    supabase.table("orders").update({
+                        "status": "processing",
+                        "datamart_ref": dm_data.get("orderReference"),
+                        "datamart_order_id": dm_data.get("orderId")
+                    }).eq("paystack_ref", reference).execute()
+                    process_agent_profit(order["id"], reference)
+                    print(f"PAYSTACK WEBHOOK: order {order['id']} dispatched to DATAMART orderId={dm_data.get('orderId')}")
 
-            elif provider == "BUNDLES_GHANA":
-                BG_NETWORK_MAP = {"MTN": "MTN", "TELECEL": "Telecel", "AIRTELTIGO": "AirtelTigo", "AT": "AirtelTigo"}
-                network_name = BG_NETWORK_MAP.get(order["network"].upper(), order["network"])
-                bg_bundles = call_bundles_ghana(f"/bundles?network={network_name}")
-                if not bg_bundles.get("success"):
-                    raise Exception(f"Bundles Ghana fetch failed: {bg_bundles.get('error')}")
+                elif provider == "BUNDLES_GHANA":
+                    BG_NETWORK_MAP = {"MTN": "MTN", "TELECEL": "Telecel", "AIRTELTIGO": "AirtelTigo", "AT": "AirtelTigo"}
+                    network_name = BG_NETWORK_MAP.get(order["network"].upper(), order["network"])
+                    bg_bundles = call_bundles_ghana(f"/bundles?network={network_name}")
+                    if not bg_bundles.get("success"):
+                        raise Exception(f"Bundles Ghana fetch failed: {bg_bundles.get('error')}")
 
-                bundle_volume = order["bundle"].upper().replace(" ", "")
-                matched = next(
-                    (b for b in bg_bundles.get("bundles", [])
-                     if b.get("volume", "").upper().replace(" ", "") == bundle_volume
-                     and b.get("status") == "active"),
-                    None
-                )
-                if not matched:
-                    raise Exception(f"No active BG bundle for {network_name} {bundle_volume}")
+                    bundle_volume = order["bundle"].upper().replace(" ", "")
+                    matched = next(
+                        (b for b in bg_bundles.get("bundles", [])
+                         if b.get("volume", "").upper().replace(" ", "") == bundle_volume
+                         and b.get("status") == "active"),
+                        None
+                    )
+                    if not matched:
+                        raise Exception(f"No active BG bundle for {network_name} {bundle_volume}")
 
-                bg_order = call_bundles_ghana("/order", method="POST", body={
-                    "bundle_id": matched["id"],
-                    "phone": order["phone_number"],
-                    "webhook_url": "https://api.evosdata.xyz/webhook/bundlesghana"
-                })
-                if not bg_order.get("success"):
-                    raise Exception(f"BG order failed: {bg_order.get('error', bg_order.get('message'))}")
+                    bg_order = call_bundles_ghana("/order", method="POST", body={
+                        "bundle_id": matched["id"],
+                        "phone": order["phone_number"],
+                        "webhook_url": "https://api.evosdata.xyz/webhook/bundlesghana"
+                    })
+                    if not bg_order.get("success"):
+                        raise Exception(f"BG order failed: {bg_order.get('error', bg_order.get('message'))}")
 
-                supabase.table("orders").update({
-                    "status": "processing",
-                    "datamart_ref": bg_order["order"]["reference"],
-                    "datamart_order_id": str(bg_order["order"]["id"])
-                }).eq("paystack_ref", reference).execute()
-                process_agent_profit(order["id"], reference)
+                    supabase.table("orders").update({
+                        "status": "processing",
+                        "datamart_ref": bg_order["order"]["reference"],
+                        "datamart_order_id": str(bg_order["order"]["id"])
+                    }).eq("paystack_ref", reference).execute()
+                    process_agent_profit(order["id"], reference)
+                    print(f"PAYSTACK WEBHOOK: order {order['id']} dispatched to BUNDLES_GHANA orderId={bg_order['order']['id']}")
 
-            elif provider == "SWIFT_DATA_LINK":
-                volume = float(extract_capacity(order["bundle"]) or 0)
-                sdl = call_swift_data_link(network=order["network"], volume=volume, phone=order["phone_number"])
-                if not sdl.get("success"):
-                    raise Exception(f"SDL order failed: {sdl.get('error', sdl)}")
-                supabase.table("orders").update({
-                    "status": "processing",
-                    "datamart_ref": sdl.get("reference"),
-                    "datamart_order_id": sdl.get("orderId"),
-                }).eq("paystack_ref", reference).execute()
-                process_agent_profit(order["id"], reference)
+                elif provider == "SWIFT_DATA_LINK":
+                    volume = float(extract_capacity(order["bundle"]) or 0)
+                    sdl = call_swift_data_link(network=order["network"], volume=volume, phone=order["phone_number"])
+                    if not sdl.get("success"):
+                        raise Exception(f"SDL order failed: {sdl.get('error', sdl)}")
+                    supabase.table("orders").update({
+                        "status": "processing",
+                        "datamart_ref": sdl.get("reference"),
+                        "datamart_order_id": sdl.get("orderId"),
+                    }).eq("paystack_ref", reference).execute()
+                    process_agent_profit(order["id"], reference)
+                    print(f"PAYSTACK WEBHOOK: order {order['id']} dispatched to SWIFT_DATA_LINK orderId={sdl.get('orderId')}")
 
-            elif provider == "AGYEKUMDATA":
-                package_id = get_agyekumdata_package_id(order["network"], order["bundle"])
-                safe_ref   = sanitise_agyekumdata_ref(reference)
-                agd        = call_agyekumdata_purchase(
-                    package_id=package_id,
-                    phone=order["phone_number"],
-                    client_reference=reference,
-                )
-                if not agd.get("success"):
-                    raise Exception(f"AGYEKUMDATA order failed: {agd.get('error', agd)}")
-                agd_data = agd.get("data", {})
-                supabase.table("orders").update({
-                    "status":            "processing",
-                    "datamart_ref":      agd_data.get("clientReference") or safe_ref,
-                    "datamart_order_id": agd_data.get("orderId"),
-                }).eq("paystack_ref", reference).execute()
-                process_agent_profit(order["id"], reference)
-                logger.info(
-                    "PAYSTACK WEBHOOK: order %s dispatched to AGYEKUMDATA orderId=%s ✅",
-                    order['id'], agd_data.get("orderId")
-                )
+                elif provider == "AGYEKUMDATA":
+                    package_id = get_agyekumdata_package_id(order["network"], order["bundle"])
+                    safe_ref   = sanitise_agyekumdata_ref(reference)
+                    agd        = call_agyekumdata_purchase(
+                        package_id=package_id,
+                        phone=order["phone_number"],
+                        client_reference=reference,
+                    )
+                    if not agd.get("success"):
+                        raise Exception(f"AGYEKUMDATA order failed: {agd.get('error', agd)}")
+                    agd_data = agd.get("data", {})
+                    supabase.table("orders").update({
+                        "status":            "processing",
+                        "datamart_ref":      agd_data.get("clientReference") or safe_ref,
+                        "datamart_order_id": agd_data.get("orderId"),
+                    }).eq("paystack_ref", reference).execute()
+                    process_agent_profit(order["id"], reference)
+                    logger.info(
+                        "PAYSTACK WEBHOOK: order %s dispatched to AGYEKUMDATA orderId=%s ✅",
+                        order['id'], agd_data.get("orderId")
+                    )
+                    print(f"PAYSTACK WEBHOOK: order {order['id']} dispatched to AGYEKUMDATA orderId={agd_data.get('orderId')}")
 
+                else:
+                    raise Exception("No provider assigned")
+
+                return {"status": "success"}
+
+            except Exception as e:
+                logger.error("PURCHASE ERROR: %s", str(e))
+                print(f"PURCHASE ERROR: {str(e)}")
+                supabase.table("orders").update({"status": "failed"}).eq("paystack_ref", reference).execute()
+                return {"status": "purchase failed"}
+
+        # =========================
+        # EVENT: transfer.success / transfer.failed / transfer.reversed
+        # (agent withdrawal payout status updates)
+        # =========================
+        elif event in ("transfer.success", "transfer.failed", "transfer.reversed"):
+
+            data      = payload.get("data", {})
+            reference = data.get("reference")
+
+            print(f"PAYSTACK WEBHOOK: {event} received, reference={reference}")
+
+            if not reference:
+                print("PAYSTACK WEBHOOK: transfer event missing reference, ignoring")
+                return {"status": "ignored"}
+
+            wd = supabase.table("agent_withdrawals").select("*").eq("paystack_ref", reference).limit(1).execute()
+            if not wd.data:
+                print(f"PAYSTACK WEBHOOK: no agent_withdrawals row found for reference={reference}")
+                return {"status": "not found"}
+
+            row          = wd.data[0]
+            final_status = "paid" if event == "transfer.success" else "failed"
+
+            if row.get("status") == final_status:
+                print(f"PAYSTACK WEBHOOK: withdrawal {row.get('id')} already marked {final_status}")
+                return {"status": "already processed"}
+
+            supabase.table("agent_withdrawals").update({"status": final_status}).eq("paystack_ref", reference).execute()
+            print(f"PAYSTACK WEBHOOK: withdrawal {row.get('id')} updated to status={final_status}")
+
+            if final_status == "paid":
+                # -------------------------
+                # Record the debit transaction, guarding against duplicate inserts
+                # -------------------------
+                existing_tx = supabase.table("agent_transactions").select("id").eq("reference", reference).limit(1).execute()
+                if not existing_tx.data:
+                    supabase.table("agent_transactions").insert({
+                        "agent_id":  row["agent_id"],
+                        "amount":    -float(row["amount"]),
+                        "type":      "withdrawal",
+                        "reference": reference,
+                    }).execute()
+                    print(f"PAYSTACK WEBHOOK: agent_transactions debit recorded for agent={row['agent_id']} amount=-{row['amount']}")
+                else:
+                    print(f"PAYSTACK WEBHOOK: agent_transactions entry already exists for reference={reference}, skipping insert")
             else:
-                raise Exception("No provider assigned")
+                # -------------------------
+                # Failed or reversed transfer: refund the agent's wallet
+                # -------------------------
+                wlt = supabase.table("agent_wallets").select("balance").eq("agent_id", row["agent_id"]).limit(1).execute()
+                if wlt.data:
+                    new_balance = float(wlt.data[0]["balance"]) + float(row["amount"])
+                    supabase.table("agent_wallets").update({
+                        "balance": new_balance
+                    }).eq("agent_id", row["agent_id"]).execute()
+                    logger.info("PAYSTACK TRANSFER WEBHOOK: refunded GH₵%s to agent %s", row["amount"], row["agent_id"])
+                    print(f"PAYSTACK WEBHOOK: refunded GH₵{row['amount']} to agent {row['agent_id']}, new balance={new_balance}")
+                else:
+                    print(f"PAYSTACK WEBHOOK: no agent_wallets row found for agent={row['agent_id']}, refund skipped")
 
-            return {"status": "success"}
+            return {"status": "processed"}
 
-        except Exception as e:
-            logger.error("PURCHASE ERROR: %s", str(e))
-            supabase.table("orders").update({"status": "failed"}).eq("paystack_ref", reference).execute()
-            return {"status": "purchase failed"}
+        # =========================
+        # EVENT: anything else — ignore
+        # =========================
+        else:
+            print(f"PAYSTACK WEBHOOK: ignored event type={event}")
+            return {"status": "ignored"}
 
     except Exception as e:
         logger.error("PAYSTACK WEBHOOK ERROR: %s", str(e))
+        print(f"PAYSTACK WEBHOOK ERROR: {str(e)}")
         return {"status": "error"}
-
 
 # =========================
 # DATAMART WEBHOOK
