@@ -294,6 +294,7 @@ class WithdrawRequest(BaseModel):
     mobile_number: str = Field(min_length=9, max_length=15)
     network: str = Field(min_length=2, max_length=20)
     account_name: Optional[str] = Field(default="", max_length=80)
+    provider: str = Field(default="paystack")   # "paystack" or "moolre" — chosen on step 1
 
     @validator("mobile_number")
     def phone_clean(cls, v):
@@ -301,6 +302,34 @@ class WithdrawRequest(BaseModel):
         if not re.match(r"^\d{9,15}$", cleaned):
             raise ValueError("Invalid mobile number")
         return cleaned
+
+    @validator("provider")
+    def provider_valid(cls, v):
+        v = (v or "paystack").strip().lower()
+        if v not in ("paystack", "moolre"):
+            raise ValueError("Invalid provider")
+        return v
+
+
+class VerifyAccountRequest(BaseModel):
+    agent_id: int
+    mobile_number: str = Field(min_length=9, max_length=15)
+    network: str = Field(min_length=2, max_length=20)
+    provider: str = Field(default="paystack")
+
+    @validator("mobile_number")
+    def phone_clean(cls, v):
+        cleaned = re.sub(r"[\s\-\(\)]", "", v)
+        if not re.match(r"^\d{9,15}$", cleaned):
+            raise ValueError("Invalid mobile number")
+        return cleaned
+
+    @validator("provider")
+    def provider_valid(cls, v):
+        v = (v or "paystack").strip().lower()
+        if v not in ("paystack", "moolre"):
+            raise ValueError("Invalid provider")
+        return v
 
 
 # =========================
@@ -317,6 +346,12 @@ MOOLRE_CHANNEL_MAP = {
     "MTN": 1,
     "TELECEL": 6,
     "AIRTELTIGO": 7,
+}
+
+PAYSTACK_MOMO_BANK_CODE = {
+    "MTN": "MTN",
+    "TELECEL": "VOD",       # confirm via GET https://api.paystack.co/bank?currency=GHS&type=mobile_money
+    "AIRTELTIGO": "ATL",    # confirm via the same endpoint
 }
 
 SDL_NETWORK_MAP = {
@@ -624,6 +659,65 @@ def call_moolre(endpoint: str, body: dict):
         logger.error("MOOLRE ERROR: %s", str(e))
         return {"status": 0, "message": str(e)}
 
+
+# =========================
+# PAYSTACK TRANSFER HELPERS
+# =========================
+def paystack_create_recipient(name: str, mobile_number: str, network: str) -> dict:
+    bank_code = PAYSTACK_MOMO_BANK_CODE.get(network.upper())
+    if not bank_code:
+        return {"status": False, "message": f"Unsupported network for Paystack transfer: {network}"}
+    try:
+        res = requests.post(
+            "https://api.paystack.co/transferrecipient",
+            headers={"Authorization": f"Bearer {PAYSTACK_SECRET}", "Content-Type": "application/json"},
+            json={
+                "type": "mobile_money",
+                "name": name or "EVOS Agent",
+                "account_number": mobile_number,
+                "bank_code": bank_code,
+                "currency": "GHS",
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        return res.json()
+    except Exception as e:
+        logger.error("PAYSTACK RECIPIENT ERROR: %s", str(e))
+        return {"status": False, "message": str(e)}
+
+
+def paystack_initiate_transfer(amount: float, recipient_code: str, reference: str, reason: str) -> dict:
+    try:
+        res = requests.post(
+            "https://api.paystack.co/transfer",
+            headers={"Authorization": f"Bearer {PAYSTACK_SECRET}", "Content-Type": "application/json"},
+            json={
+                "source": "balance",
+                "amount": int(round(amount * 100)),
+                "recipient": recipient_code,
+                "reference": reference,
+                "reason": reason,
+                "currency": "GHS",
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        return res.json()
+    except Exception as e:
+        logger.error("PAYSTACK TRANSFER ERROR: %s", str(e))
+        return {"status": False, "message": str(e)}
+
+
+def paystack_verify_transfer(reference: str) -> dict:
+    try:
+        res = requests.get(
+            f"https://api.paystack.co/transfer/verify/{reference}",
+            headers={"Authorization": f"Bearer {PAYSTACK_SECRET}"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        return res.json()
+    except Exception as e:
+        logger.error("PAYSTACK VERIFY TRANSFER ERROR: %s", str(e))
+        return {"status": False, "message": str(e)}
 
 # =========================
 # PASSWORD SECURITY
@@ -2039,43 +2133,117 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     agent_id      = payload.agent_id
-    amount        = payload.amount
+    amount        = float(payload.amount)
     mobile_number = payload.mobile_number
-    network       = payload.network
+    network       = payload.network.upper()
     account_name  = payload.account_name or ""
+    provider      = payload.provider  # "paystack" or "moolre", chosen on step 1
 
     wallet = supabase.table("agent_wallets").select("balance").eq("agent_id", agent_id).limit(1).execute()
     if not wallet.data:
         return {"error": "Wallet not found"}
 
     balance = float(wallet.data[0]["balance"])
-    if float(amount) > balance:
+    if amount > balance:
         return {"error": "Insufficient balance"}
-    if float(amount) < 5:
+    if amount < 5:
         return {"error": "Minimum withdrawal is GH₵5"}
 
-    new_balance = balance - float(amount)
+    new_balance = round(balance - amount, 2)
     supabase.table("agent_wallets").update({"balance": new_balance}).eq("agent_id", agent_id).execute()
 
-    channel = MOOLRE_CHANNEL_MAP.get(network) or MOOLRE_CHANNEL_MAP.get(network.upper())
-    if not channel:
+    def refund():
         supabase.table("agent_wallets").update({"balance": balance}).eq("agent_id", agent_id).execute()
+
+    # ── PAYSTACK PATH ───────────────────────────────────────────
+    if provider == "paystack":
+        if network not in PAYSTACK_MOMO_BANK_CODE:
+            refund()
+            return {"error": f"Unsupported network for Paystack: {network}"}
+
+        paystack_ref = f"evos-wd-{agent_id}-{uuid.uuid4().hex[:12]}"
+
+        wd = supabase.table("agent_withdrawals").insert({
+            "agent_id":       agent_id,
+            "amount":         amount,
+            "account_name":   account_name,
+            "account_number": mobile_number,
+            "bank_name":      network,
+            "status":         "processing",
+            "provider":       "paystack",
+            "paystack_ref":   paystack_ref,
+        }).execute()
+
+        if not wd.data:
+            refund()
+            return {"error": "Failed to create withdrawal record"}
+
+        withdrawal_id = wd.data[0]["id"]
+
+        recipient = paystack_create_recipient(account_name or "EVOS Agent", mobile_number, network)
+        if not recipient.get("status"):
+            refund()
+            supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
+            return {"error": recipient.get("message", "Could not create transfer recipient")}
+
+        recipient_code = recipient["data"]["recipient_code"]
+        transfer = paystack_initiate_transfer(
+            amount=amount,
+            recipient_code=recipient_code,
+            reference=paystack_ref,
+            reason=f"EVOS Agent Withdrawal #{withdrawal_id}",
+        )
+
+        if not transfer.get("status"):
+            refund()
+            supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
+            return {"error": transfer.get("message", "Paystack transfer failed")}
+
+        tdata        = transfer.get("data", {})
+        transfer_status = tdata.get("status")
+        final_status = "paid" if transfer_status == "success" else "processing"
+
+        supabase.table("agent_withdrawals").update({
+            "status": final_status,
+            "paystack_transfer_code": tdata.get("transfer_code"),
+        }).eq("id", withdrawal_id).execute()
+
+        supabase.table("agent_transactions").insert({
+            "agent_id":  agent_id,
+            "amount":    -amount,
+            "type":      "withdrawal",
+            "reference": paystack_ref,
+        }).execute()
+
+        return {
+            "status":          "success",
+            "provider":        "paystack",
+            "message":         "Transfer initiated. Funds will arrive shortly.",
+            "withdrawal_id":   withdrawal_id,
+            "transfer_status": final_status,
+        }
+
+    # ── MOOLRE PATH (unchanged behaviour, now explicitly chosen) ──
+    channel = MOOLRE_CHANNEL_MAP.get(network)
+    if not channel:
+        refund()
         return {"error": f"Unsupported network: {network}"}
 
     external_ref = f"EVOS-WD-{agent_id}-{uuid.uuid4().hex[:8].upper()}"
 
     wd = supabase.table("agent_withdrawals").insert({
         "agent_id":       agent_id,
-        "amount":         float(amount),
+        "amount":         amount,
         "account_name":   account_name,
         "account_number": mobile_number,
         "bank_name":      network,
         "status":         "processing",
+        "provider":       "moolre",
         "moolre_ref":     external_ref,
     }).execute()
 
     if not wd.data:
-        supabase.table("agent_wallets").update({"balance": balance}).eq("agent_id", agent_id).execute()
+        refund()
         return {"error": "Failed to create withdrawal record"}
 
     withdrawal_id = wd.data[0]["id"]
@@ -2085,7 +2253,7 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
             "type":          1,
             "channel":       channel,
             "currency":      "GHS",
-            "amount":        str(float(amount)),
+            "amount":        str(amount),
             "receiver":      mobile_number,
             "externalref":   external_ref,
             "reference":     f"EVOS Agent Withdrawal #{withdrawal_id}",
@@ -2093,24 +2261,25 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
         })
 
         if str(moolre_res.get("status")) == "1":
-            tx_data     = moolre_res.get("data", {})
-            tx_status   = tx_data.get("txstatus", 0) if isinstance(tx_data, dict) else 0
+            tx_data      = moolre_res.get("data", {})
+            tx_status    = tx_data.get("txstatus", 0) if isinstance(tx_data, dict) else 0
             final_status = "paid" if tx_status == 1 else "processing"
             supabase.table("agent_withdrawals").update({"status": final_status}).eq("id", withdrawal_id).execute()
             supabase.table("agent_transactions").insert({
                 "agent_id":  agent_id,
-                "amount":    -float(amount),
+                "amount":    -amount,
                 "type":      "withdrawal",
                 "reference": external_ref
             }).execute()
             return {
                 "status":          "success",
+                "provider":        "moolre",
                 "message":         "Transfer initiated. Funds will arrive shortly.",
                 "withdrawal_id":   withdrawal_id,
                 "transfer_status": final_status,
             }
         else:
-            supabase.table("agent_wallets").update({"balance": balance}).eq("agent_id", agent_id).execute()
+            refund()
             supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
             error_msg = moolre_res.get("message", "Transfer failed")
             if isinstance(error_msg, list):
@@ -2119,14 +2288,51 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
 
     except Exception as e:
         logger.error("MOOLRE TRANSFER ERROR: %s", str(e))
-        supabase.table("agent_wallets").update({"balance": balance}).eq("agent_id", agent_id).execute()
+        refund()
         supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
         return {"error": "Transfer service error. Funds refunded to wallet."}
 
+# =========================
+# AGENT WITHDRAW — VERIFY ACCOUNT (resolves name before confirming)
+# =========================
+@app.post("/agent/withdraw/verify-account")
+@limiter.limit("10/minute")
+async def verify_withdraw_account(request: Request, payload: VerifyAccountRequest):
+    token = request.headers.get("X-Agent-Token", "")
+    if not token or not verify_agent_token(token, payload.agent_id):
+        raise HTTPException(status_code=403, detail="Forbidden")
 
-# =========================
-# WITHDRAWAL STATUS CHECK
-# =========================
+    network = payload.network.upper()
+
+    if payload.provider == "paystack":
+        recipient = paystack_create_recipient("EVOS Agent", payload.mobile_number, network)
+        if not recipient.get("status"):
+            error_msg = recipient.get("message", "Could not verify account")
+            return {"status": "error", "message": error_msg}
+
+        rdata = recipient.get("data", {})
+        details = rdata.get("details", {})
+        return {
+            "status": "success",
+            "provider": "paystack",
+            "account_name": details.get("account_name") or "",
+            "recipient_code": rdata.get("recipient_code"),
+            "mobile_number": payload.mobile_number,
+            "network": network,
+        }
+
+    # Moolre has no name-resolution endpoint in this integration —
+    # fall back to whatever name the agent types in on the frontend.
+    return {
+        "status": "success",
+        "provider": "moolre",
+        "account_name": "",
+        "mobile_number": payload.mobile_number,
+        "network": network,
+        "note": "Moolre does not support account name lookup — agent must confirm name manually.",
+    }
+        
+
 @app.get("/agent/withdrawal/status/{withdrawal_id}")
 @limiter.limit("20/minute")
 async def check_withdrawal_status(request: Request, withdrawal_id: int):
@@ -2141,31 +2347,42 @@ async def check_withdrawal_status(request: Request, withdrawal_id: int):
         if not token or not verify_agent_token(token, row["agent_id"]):
             raise HTTPException(status_code=403, detail="Forbidden")
 
-        moolre_ref = row.get("moolre_ref")
-
-        if not moolre_ref or row.get("status") in ["paid", "failed", "rejected"]:
+        if row.get("status") in ["paid", "failed", "rejected"]:
             return {"status": row.get("status"), "withdrawal": row}
 
-        status_res = call_moolre("status", {
-            "type":          1,
-            "idtype":        1,
-            "id":            moolre_ref,
-            "accountnumber": MOOLRE_ACCOUNT_NUMBER,
-        })
-
+        provider = row.get("provider", "moolre")
         final_status = row.get("status")
-        if str(status_res.get("status")) == "1":
-            tx_status    = status_res.get("data", {}).get("txstatus", 0)
-            final_status = "paid" if tx_status == 1 else "failed" if tx_status == 2 else "processing"
 
-            if final_status != row.get("status"):
-                supabase.table("agent_withdrawals").update({"status": final_status}).eq("id", withdrawal_id).execute()
-                if final_status == "failed":
-                    wlt = supabase.table("agent_wallets").select("balance").eq("agent_id", row["agent_id"]).limit(1).execute()
-                    if wlt.data:
-                        supabase.table("agent_wallets").update({
-                            "balance": float(wlt.data[0]["balance"]) + float(row["amount"])
-                        }).eq("agent_id", row["agent_id"]).execute()
+        if provider == "paystack":
+            ref = row.get("paystack_ref")
+            if not ref:
+                return {"status": final_status, "withdrawal": row}
+            result = paystack_verify_transfer(ref)
+            if result.get("status"):
+                t_status = result.get("data", {}).get("status")
+                final_status = "paid" if t_status == "success" else "failed" if t_status == "failed" else "processing"
+        else:
+            moolre_ref = row.get("moolre_ref")
+            if not moolre_ref:
+                return {"status": final_status, "withdrawal": row}
+            status_res = call_moolre("status", {
+                "type":          1,
+                "idtype":        1,
+                "id":            moolre_ref,
+                "accountnumber": MOOLRE_ACCOUNT_NUMBER,
+            })
+            if str(status_res.get("status")) == "1":
+                tx_status    = status_res.get("data", {}).get("txstatus", 0)
+                final_status = "paid" if tx_status == 1 else "failed" if tx_status == 2 else "processing"
+
+        if final_status != row.get("status"):
+            supabase.table("agent_withdrawals").update({"status": final_status}).eq("id", withdrawal_id).execute()
+            if final_status == "failed":
+                wlt = supabase.table("agent_wallets").select("balance").eq("agent_id", row["agent_id"]).limit(1).execute()
+                if wlt.data:
+                    supabase.table("agent_wallets").update({
+                        "balance": float(wlt.data[0]["balance"]) + float(row["amount"])
+                    }).eq("agent_id", row["agent_id"]).execute()
 
         return {"status": final_status, "withdrawal": row}
     except HTTPException:
@@ -2173,7 +2390,6 @@ async def check_withdrawal_status(request: Request, withdrawal_id: int):
     except Exception as e:
         logger.error("WITHDRAWAL STATUS ERROR: %s", str(e))
         return {"error": "Failed to check status"}
-
 
 # =========================
 # MOOLRE WEBHOOK
