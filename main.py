@@ -335,19 +335,6 @@ SDL_OFFER_SLUG = {
 
 # =========================
 # AGYEKUMDATA CATEGORY MAP
-# FIX: Agyekumdata support confirmed only the "Package" category variants
-#      are live/fulfilled on their backend (ResellersHub). The legacy
-#      categories without "Package" (MTN, Telecel, iShare, BigTime) still
-#      appear in /products but purchases against them fail with
-#      "RESSELLERSHUB purchase failed".
-# FIX: "AT" now correctly maps to "iShare package" — it previously pointed
-#      to "iShare Offer" (a legacy/offer-tier category) while "AIRTELTIGO"
-#      pointed to "iShare package". They must be identical since AT and
-#      AIRTELTIGO are the same network, just different aliases used across
-#      the codebase (order requests use AIRTELTIGO/AT interchangeably).
-# NOTE: casing matters and must match their /categories response EXACTLY:
-#       "MTN Package", "Telecel Package", "iShare package" (lowercase
-#       "package"), "BigTime Package".
 # =========================
 AGYEKUMDATA_CATEGORY_MAP = {
     "MTN":        "MTN Package",
@@ -355,6 +342,22 @@ AGYEKUMDATA_CATEGORY_MAP = {
     "AIRTELTIGO": "iShare package",
     "AT":         "iShare package",
 }
+
+# =========================
+# RETRY ESCALATION CONFIG
+# FIX: orders no longer hammer a single provider forever. Each order tracks
+#      retry_attempts (tries on its CURRENT provider) and provider_priority
+#      (which tier of the network's provider chain it's currently on).
+#      After MAX_ATTEMPTS_PER_PROVIDER failed tries, the order escalates to
+#      the next-priority active provider for that network. Only once every
+#      provider in the chain has been exhausted AND the order is >= 3h old
+#      does it get marked "failed".
+#
+#      Requires these columns on the "orders" table (run once in Supabase):
+#        alter table orders add column if not exists retry_attempts int default 0;
+#        alter table orders add column if not exists provider_priority int default 1;
+# =========================
+MAX_ATTEMPTS_PER_PROVIDER = 3
 
 # =========================
 # BUNDLES GHANA HELPER
@@ -412,13 +415,6 @@ def call_swift_data_link(network: str, volume: float, phone: str) -> dict:
 
 # =========================
 # AGYEKUMDATA HELPERS
-# FIX: API key sent as X-API-KEY header (not query param) per their docs.
-#      Single purchase attempt — no shotgun fallbacks needed.
-#      _safe_agyekumdata_json handles empty/non-JSON bodies gracefully.
-#      sanitise_agyekumdata_ref keeps clientReference alphanumeric ≤20 chars.
-#      get_agyekumdata_package_id does live /products lookup with header auth,
-#      filtered strictly to the whitelisted "Package" category so we never
-#      accidentally match a legacy/unfulfillable product again.
 # =========================
 
 def _agyekumdata_headers():
@@ -428,10 +424,6 @@ def _agyekumdata_headers():
     }
 
 def _safe_agyekumdata_json(res: requests.Response, context: str) -> dict:
-    """
-    Parse JSON from an Agyekumdata response safely.
-    Logs the raw body and returns a structured error dict on failure.
-    """
     logger.info(
         "AGYEKUMDATA %s RAW: status=%s body=%s",
         context, res.status_code, res.text[:500]
@@ -446,23 +438,11 @@ def _safe_agyekumdata_json(res: requests.Response, context: str) -> dict:
 
 
 def sanitise_agyekumdata_ref(ref: str) -> str:
-    """
-    Agyekumdata clientReference must be alphanumeric + underscores only,
-    max 20 chars (based on their ORDER_10004 example style).
-    Strips hyphens and any other non-alphanumeric chars.
-    E.g. "EVOS-AGT-1-7AF2440807" → "EVOSAGT17AF2440807"
-    """
     cleaned = re.sub(r"[^A-Z0-9_]", "", ref.upper())
     return cleaned[:20]
 
 
 def get_agyekumdata_package_id(network: str, bundle: str) -> str:
-    """
-    Fetch the exact packageid from Agyekumdata's /products endpoint.
-    FIX: filters strictly to the whitelisted "Package" category for this
-    network (AGYEKUMDATA_CATEGORY_MAP), so we never fall back onto a
-    legacy/unfulfillable category like plain "MTN" or "iShare".
-    """
     category = AGYEKUMDATA_CATEGORY_MAP.get(network.upper(), network)
     bundle_clean = bundle.strip().upper().replace(" ", "")
     fallback = f"{category}-{bundle_clean}"
@@ -476,8 +456,6 @@ def get_agyekumdata_package_id(network: str, bundle: str) -> str:
         data = _safe_agyekumdata_json(res, "PRODUCTS")
         products = data if isinstance(data, list) else data.get("data", [])
 
-        # Filter by the whitelisted category first (exact match, case-sensitive
-        # to match their API exactly — e.g. "iShare package" lowercase "p")
         category_products = [
             p for p in products
             if p.get("category", "").strip() == category
@@ -506,12 +484,6 @@ def get_agyekumdata_package_id(network: str, bundle: str) -> str:
 
 
 def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str) -> dict:
-    """
-    POST /purchase to Agyekumdata.
-    Auth via X-API-KEY header only.
-    """
-
-    # Normalize phone
     phone = phone.strip()
 
     if phone.startswith("233") and len(phone) == 12:
@@ -529,20 +501,13 @@ def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str
 
     url = f"{AGYEKUMDATA_BASE}/purchase"
 
-    logger.info(
-        "AGYEKUMDATA PURCHASE URL: %s",
-        url
-    )
-
+    logger.info("AGYEKUMDATA PURCHASE URL: %s", url)
     logger.info(
         "AGYEKUMDATA PURCHASE: packageId=%s phone=%s ref=%s",
-        package_id,
-        phone,
-        safe_ref
+        package_id, phone, safe_ref
     )
 
     try:
-
         res = requests.post(
             url,
             headers=_agyekumdata_headers(),
@@ -551,80 +516,32 @@ def call_agyekumdata_purchase(package_id: str, phone: str, client_reference: str
             allow_redirects=False,
         )
 
-
-        # Detect wrong endpoint/auth
         if res.status_code in (301, 302, 307, 308):
-
             location = res.headers.get("Location")
+            logger.error("AGYEKUMDATA REDIRECT: %s -> %s", res.status_code, location)
+            return {"success": False, "error": f"API redirected to {location}"}
 
-            logger.error(
-                "AGYEKUMDATA REDIRECT: %s -> %s",
-                res.status_code,
-                location
-            )
-
-            return {
-                "success": False,
-                "error": f"API redirected to {location}"
-            }
-
-
-        result = _safe_agyekumdata_json(
-            res,
-            "PURCHASE"
-        )
-
+        result = _safe_agyekumdata_json(res, "PURCHASE")
 
         if not result.get("success"):
-
             logger.error(
                 "AGYEKUMDATA PURCHASE FAILED: status=%s error=%s message=%s",
-                res.status_code,
-                result.get("error"),
-                result.get("message")
+                res.status_code, result.get("error"), result.get("message")
             )
-
 
         return result
 
-
     except requests.exceptions.Timeout:
-
-        logger.error(
-            "AGYEKUMDATA PURCHASE TIMEOUT ref=%s",
-            safe_ref
-        )
-
-        return {
-            "success": False,
-            "error": "Request timed out"
-        }
-
+        logger.error("AGYEKUMDATA PURCHASE TIMEOUT ref=%s", safe_ref)
+        return {"success": False, "error": "Request timed out"}
 
     except requests.exceptions.ConnectionError as e:
-
-        logger.error(
-            "AGYEKUMDATA CONNECTION ERROR: %s",
-            str(e)
-        )
-
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
+        logger.error("AGYEKUMDATA CONNECTION ERROR: %s", str(e))
+        return {"success": False, "error": str(e)}
 
     except Exception as e:
-
-        logger.error(
-            "AGYEKUMDATA PURCHASE ERROR: %s",
-            str(e)
-        )
-
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        logger.error("AGYEKUMDATA PURCHASE ERROR: %s", str(e))
+        return {"success": False, "error": str(e)}
 
 
 def call_agyekumdata_status(client_reference: str) -> dict:
@@ -633,22 +550,18 @@ def call_agyekumdata_status(client_reference: str) -> dict:
     try:
         res = requests.get(
             f"{AGYEKUMDATA_BASE}/order/status",
-            headers=_agyekumdata_headers(),  # MUST include API KEY
+            headers=_agyekumdata_headers(),
             params={"clientReference": safe_ref},
             timeout=REQUEST_TIMEOUT,
             allow_redirects=False
         )
 
-        # 🔴 IMPORTANT: detect HTML early
         if "text/html" in res.headers.get("Content-Type", "") or res.text.strip().startswith("<!DOCTYPE"):
             logger.error(
                 "AGYEKUMDATA STATUS HTML RESPONSE (likely auth/base URL issue): %s",
                 res.text[:200]
             )
-            return {
-                "success": False,
-                "error": "Invalid API response (HTML instead of JSON)"
-            }
+            return {"success": False, "error": "Invalid API response (HTML instead of JSON)"}
 
         return _safe_agyekumdata_json(res, "STATUS")
 
@@ -661,11 +574,6 @@ def call_agyekumdata_status(client_reference: str) -> dict:
 
 
 def log_agyekumdata_categories():
-    """
-    One-off diagnostic: fetch /categories and log the raw list so we can
-    confirm whether AirtelTigo/iShare is actually a valid purchasable
-    category on this account, or if our category mapping is just wrong.
-    """
     try:
         res = requests.get(
             f"{AGYEKUMDATA_BASE}/categories",
@@ -681,7 +589,6 @@ def log_agyekumdata_categories():
 
 
 def verify_agyekumdata_signature(body: bytes, signature: str) -> bool:
-    """Verify HMAC-SHA256 from the X-AGYEKUMDATA-SIGNATURE webhook header."""
     try:
         if not signature:
             logger.warning("AGYEKUMDATA WEBHOOK: missing signature")
@@ -806,6 +713,8 @@ def verify_signature(body: bytes, signature: str, secret: str) -> bool:
 # NETWORK PROVIDERS
 # =========================
 def get_provider(network: str):
+    """Single highest-priority active provider — used for first dispatch
+    (webhook handlers, agent buy-data, store orders), not for the retry loop."""
     try:
         res = supabase.table("provider_routes") \
             .select("provider") \
@@ -820,6 +729,69 @@ def get_provider(network: str):
     except Exception as e:
         logger.error("PROVIDER LOOKUP ERROR: %s", str(e))
         return None
+
+
+def get_provider_chain(network: str):
+    """Return ALL active providers for a network, ordered by priority asc.
+    Used by the retry job so it can escalate through providers in order."""
+    try:
+        res = supabase.table("provider_routes") \
+            .select("provider") \
+            .eq("network", network.upper()) \
+            .eq("active", True) \
+            .order("priority") \
+            .execute()
+        return [r["provider"] for r in (res.data or [])]
+    except Exception as e:
+        logger.error("PROVIDER CHAIN ERROR: %s", str(e))
+        return []
+
+
+def handle_provider_failure(order: dict, chain: list, current_idx: int, provider: str, reason):
+    """
+    Called whenever a provider rejects an order during the retry job.
+    Escalates to the next provider in the chain after MAX_ATTEMPTS_PER_PROVIDER
+    failed tries on the current one, instead of retrying the same provider
+    forever. Only fails the order outright once every provider in the chain
+    has been exhausted AND the order is at least 3 hours old.
+    """
+    attempts = int(order.get("retry_attempts") or 0) + 1
+    order_id = order["id"]
+
+    if attempts < MAX_ATTEMPTS_PER_PROVIDER:
+        supabase.table("orders").update({"retry_attempts": attempts}).eq("id", order_id).execute()
+        logger.warning(
+            "RETRY JOB: order %s attempt %d/%d on %s failed (%s) — will retry same provider next cycle",
+            order_id, attempts, MAX_ATTEMPTS_PER_PROVIDER, provider, reason
+        )
+        return
+
+    next_idx = current_idx + 1
+    if next_idx < len(chain):
+        supabase.table("orders").update({
+            "provider_priority": next_idx + 1,  # stored 1-indexed
+            "retry_attempts": 0
+        }).eq("id", order_id).execute()
+        logger.warning(
+            "RETRY JOB: order %s exhausted %s after %d attempts (%s) — escalating to %s",
+            order_id, provider, attempts, reason, chain[next_idx]
+        )
+        return
+
+    # All providers in the chain have been exhausted
+    order_age = utc_now() - parse_db_dt(order["created_at"])
+    if order_age >= timedelta(hours=3):
+        supabase.table("orders").update({"status": "failed"}).eq("id", order_id).execute()
+        logger.error(
+            "RETRY JOB: order %s FAILED — exhausted all %d provider(s) in chain, age %s >= 3h",
+            order_id, len(chain), str(order_age).split('.')[0]
+        )
+    else:
+        supabase.table("orders").update({"retry_attempts": attempts}).eq("id", order_id).execute()
+        logger.warning(
+            "RETRY JOB: order %s exhausted all providers, age %s < 3h — retrying last provider (%s)",
+            order_id, str(order_age).split('.')[0], provider
+        )
 
 
 # =========================
@@ -921,6 +893,13 @@ def get_prices(request: Request):
 
 # =========================
 # BACKGROUND: RETRY STUCK ORDERS
+# FIX: retry loop now walks the FULL provider chain for each order's network
+#      instead of using a single fixed provider. Each order tracks how many
+#      times it's been tried on its current provider (retry_attempts) and
+#      which tier of the chain it's on (provider_priority). After
+#      MAX_ATTEMPTS_PER_PROVIDER failures, handle_provider_failure() escalates
+#      to the next-priority provider. Order only gets marked "failed" once
+#      every provider in the chain is exhausted AND it's >= 3h old.
 # =========================
 
 _retry_running = False
@@ -938,16 +917,8 @@ async def retry_stuck_orders():
         try:
             logger.info("RETRY JOB: scanning for stuck orders...")
             now   = utc_now()
-            # Only skip orders newer than 10 minutes (give Paystack webhook time to land)
             floor = (now - timedelta(minutes=10)).isoformat()
 
-            # ── Find orders that are stuck:
-            #    - status is exactly "processing" (not paid, not failed, not successful)
-            #    - has a paystack_ref (Paystack payment was confirmed)
-            #    - BUT has no datamart_ref (was never actually sent to the provider)
-            #    - created more than 10 minutes ago (give webhook time to land first)
-            # NOTE: If an order is "failed" or "successful" we never touch it again.
-            #       No upper time cutoff — we retry every 5 mins until 3h age limit.
             stuck = supabase.table("orders") \
                 .select("*") \
                 .eq("status", "processing") \
@@ -961,12 +932,19 @@ async def retry_stuck_orders():
 
             for order in orders:
                 try:
-                    provider = get_provider(order["network"])
-                    if not provider:
-                        logger.info("RETRY JOB: no provider for order %s", order['id'])
+                    chain = get_provider_chain(order["network"])
+                    if not chain:
+                        logger.info("RETRY JOB: no provider chain for order %s", order['id'])
                         continue
 
-                    logger.info("RETRY JOB: retrying order %s via %s", order['id'], provider)
+                    current_idx = min(int(order.get("provider_priority") or 1) - 1, len(chain) - 1)
+                    provider = chain[current_idx]
+
+                    logger.info(
+                        "RETRY JOB: retrying order %s via %s (tier %d/%d, attempt %d/%d)",
+                        order['id'], provider, current_idx + 1, len(chain),
+                        int(order.get("retry_attempts") or 0) + 1, MAX_ATTEMPTS_PER_PROVIDER
+                    )
 
                     # ── DATAMART ──────────────────────────────────────────
                     if provider == "DATAMART":
@@ -997,19 +975,7 @@ async def retry_stuck_orders():
                             logger.info("RETRY JOB: order %s sent to DATAMART ✅", order['id'])
                         else:
                             logger.warning("RETRY JOB: DATAMART rejected order %s: %s", order['id'], dm)
-                            # Only fail after 3 hours — never fail early
-                            order_age = utc_now() - parse_db_dt(order["created_at"])
-                            if order_age > timedelta(hours=3):
-                                supabase.table("orders") \
-                                    .update({"status": "failed"}) \
-                                    .eq("id", order["id"]) \
-                                    .execute()
-                                logger.info("RETRY JOB: order %s marked failed after 3h DATAMART rejection", order['id'])
-                            else:
-                                logger.info(
-                                    "RETRY JOB: order %s age=%s — will keep retrying",
-                                    order['id'], order_age
-                                )
+                            handle_provider_failure(order, chain, current_idx, provider, dm)
 
                     # ── BUNDLES GHANA ──────────────────────────────────────
                     elif provider == "BUNDLES_GHANA":
@@ -1024,6 +990,7 @@ async def retry_stuck_orders():
 
                         if not bg_bundles.get("success"):
                             logger.warning("RETRY JOB: BG bundle fetch failed for order %s", order['id'])
+                            handle_provider_failure(order, chain, current_idx, provider, bg_bundles)
                             continue
 
                         bundle_volume = order["bundle"].upper().replace(" ", "")
@@ -1036,6 +1003,7 @@ async def retry_stuck_orders():
 
                         if not matched:
                             logger.warning("RETRY JOB: no BG bundle match for order %s", order['id'])
+                            handle_provider_failure(order, chain, current_idx, provider, "no bundle match")
                             continue
 
                         try:
@@ -1050,6 +1018,7 @@ async def retry_stuck_orders():
                             )
                         except Exception as bg_err:
                             logger.error("RETRY JOB: BG call error for order %s: %s", order['id'], str(bg_err))
+                            handle_provider_failure(order, chain, current_idx, provider, str(bg_err))
                             continue
 
                         if bg_order.get("success"):
@@ -1080,19 +1049,7 @@ async def retry_stuck_orders():
                                     continue
 
                             logger.warning("RETRY JOB: BG rejected order %s: %s", order['id'], bg_order)
-                            # Only fail after 3 hours — never fail early
-                            order_age = utc_now() - parse_db_dt(order["created_at"])
-                            if order_age > timedelta(hours=3):
-                                supabase.table("orders") \
-                                    .update({"status": "failed"}) \
-                                    .eq("id", order["id"]) \
-                                    .execute()
-                                logger.info("RETRY JOB: order %s marked failed after 3h BG rejection", order['id'])
-                            else:
-                                logger.info(
-                                    "RETRY JOB: order %s age=%s — will keep retrying",
-                                    order['id'], order_age
-                                )
+                            handle_provider_failure(order, chain, current_idx, provider, bg_order)
 
                     # ── SWIFT DATA LINK ────────────────────────────────────
                     elif provider == "SWIFT_DATA_LINK":
@@ -1116,19 +1073,7 @@ async def retry_stuck_orders():
                             logger.info("RETRY JOB: order %s sent to SWIFT_DATA_LINK ✅", order['id'])
                         else:
                             logger.warning("RETRY JOB: SDL rejected order %s: %s", order['id'], sdl)
-                            # Only fail after 3 hours — never fail early
-                            order_age = utc_now() - parse_db_dt(order["created_at"])
-                            if order_age > timedelta(hours=3):
-                                supabase.table("orders") \
-                                    .update({"status": "failed"}) \
-                                    .eq("id", order["id"]) \
-                                    .execute()
-                                logger.info("RETRY JOB: order %s marked failed after 3h SDL rejection", order['id'])
-                            else:
-                                logger.info(
-                                    "RETRY JOB: order %s age=%s — will keep retrying",
-                                    order['id'], order_age
-                                )
+                            handle_provider_failure(order, chain, current_idx, provider, sdl)
 
                     # ── AGYEKUMDATA ────────────────────────────────────────
                     elif provider == "AGYEKUMDATA":
@@ -1173,30 +1118,12 @@ async def retry_stuck_orders():
                                 )
                                 continue
 
-                            # Only fail after 3 hours — never fail early
-                            order_age = utc_now() - parse_db_dt(order["created_at"])
-                            if order_age > timedelta(hours=3):
-                                supabase.table("orders") \
-                                    .update({"status": "failed"}) \
-                                    .eq("id", order["id"]) \
-                                    .execute()
-                                logger.info(
-                                    "RETRY JOB: order %s marked failed after 3h AGYEKUMDATA rejection",
-                                    order['id']
-                                )
-                            else:
-                                logger.info(
-                                    "RETRY JOB: order %s age=%s — will keep retrying",
-                                    order['id'], order_age
-                                )
+                            handle_provider_failure(order, chain, current_idx, provider, agd)
 
                 except Exception as e:
                     logger.error("RETRY JOB: error on order %s: %s", order.get('id'), str(e))
 
             # ── STATUS SYNC ───────────────────────────────────────────────
-            # Poll processing orders that have a provider ref, up to 3 days old.
-            # Orders older than 3 days are considered stale and ignored.
-            # We stop polling only when the provider confirms success or failure.
             logger.info("STATUS SYNC: scanning for unresolved processing orders...")
             sync_cutoff = (now - timedelta(days=3)).isoformat()
 
@@ -1274,7 +1201,6 @@ async def retry_stuck_orders():
                             .execute()
                         logger.info("STATUS SYNC: order %s → %s ✅", order['id'], final_status)
                     else:
-                        # Status still pending/processing on provider side — keep polling
                         logger.info(
                             "STATUS SYNC: order %s still showing '%s' on provider — will poll again next cycle",
                             order['id'], status
@@ -1309,9 +1235,7 @@ async def retry_stuck_deposits():
             logger.info("DEPOSIT RETRY: scanning for stuck deposits...")
 
             now    = utc_now()
-            # Only pick up deposits older than 5 minutes (give webhook time to fire)
             floor  = (now - timedelta(minutes=5)).isoformat()
-            # Only look back 2 hours — deposits older than that are already handled
             cutoff = (now - timedelta(hours=2)).isoformat()
 
             stuck = supabase.table("wallet_deposits") \
@@ -1351,7 +1275,6 @@ async def retry_stuck_deposits():
                     logger.info("DEPOSIT RETRY: deposit %s — Paystack status: %s", dep_id, paystack_status)
 
                     if paystack_status != "success":
-                        # Fail deposits where Paystack hasn't confirmed within 30 minutes
                         age = utc_now() - parse_db_dt(deposit["created_at"])
                         if age > timedelta(minutes=30):
                             supabase.table("wallet_deposits") \
@@ -1363,7 +1286,6 @@ async def retry_stuck_deposits():
                             logger.info("DEPOSIT RETRY: deposit %s still pending on Paystack — will retry", dep_id)
                         continue
 
-                    # ── Paystack confirmed success — guard against double-credit ──
                     recheck = supabase.table("wallet_deposits") \
                         .select("status") \
                         .eq("id", dep_id) \
@@ -1373,7 +1295,6 @@ async def retry_stuck_deposits():
                         logger.info("DEPOSIT RETRY: deposit %s already credited, skipping", dep_id)
                         continue
 
-                    # ── Credit the agent wallet ───────────────────────────
                     wallet_res = supabase.table("agent_wallets") \
                         .select("balance") \
                         .eq("agent_id", agent_id) \
@@ -1880,8 +1801,6 @@ async def swiftdatalink_webhook(request: Request):
 
 # =========================
 # AGYEKUMDATA WEBHOOK
-# NOTE: Their webhook payload includes orderId but NOT clientReference.
-#       Primary lookup is by datamart_order_id; falls back to datamart_ref.
 # =========================
 @app.post("/webhook/agyekumdata")
 async def agyekumdata_webhook(request: Request):
@@ -2234,6 +2153,7 @@ async def check_withdrawal_status(request: Request, withdrawal_id: int):
             "accountnumber": MOOLRE_ACCOUNT_NUMBER,
         })
 
+        final_status = row.get("status")
         if str(status_res.get("status")) == "1":
             tx_status    = status_res.get("data", {}).get("txstatus", 0)
             final_status = "paid" if tx_status == 1 else "failed" if tx_status == 2 else "processing"
@@ -2339,11 +2259,6 @@ async def reject_withdrawal(withdrawal_id: int, _: None = Depends(require_admin)
 
 # =========================
 # AGENT PRICING
-# FIX: Now checks admin_agent_prices first for each bundle — if the admin
-#      has set a unique cost_price for this agent, that is used as base_price.
-#      Falls back to the global base_prices cost_price if no override exists.
-#      This means what the agent sees on their pricing page exactly matches
-#      what they will be charged when they buy — no more silent discrepancy.
 # =========================
 @app.get("/agent/pricing/{agent_id}")
 @limiter.limit("30/minute")
@@ -2352,14 +2267,12 @@ def get_agent_pricing(request: Request, agent_id: int, _: int = Depends(require_
         base_res     = supabase.table("base_prices").select("*").execute()
         base_prices  = base_res.data or []
 
-        # Fetch any admin overrides for this specific agent
         override_res = supabase.table("admin_agent_prices") \
             .select("*") \
             .eq("agent_id", agent_id) \
             .execute()
         override_prices = override_res.data or []
 
-        # Build override lookup: "network-bundle" → cost_price
         override_map = {}
         for row in override_prices:
             if not row:
@@ -2367,7 +2280,6 @@ def get_agent_pricing(request: Request, agent_id: int, _: int = Depends(require_
             key = f"{row.get('network','').strip().lower()}-{row.get('bundle','').strip().lower()}"
             override_map[key] = float(row.get("cost_price", 0) or 0)
 
-        # Fetch agent's own markups
         agent_res    = supabase.table("agent_prices").select("*").eq("agent_id", agent_id).execute()
         agent_prices = agent_res.data or []
 
@@ -2386,7 +2298,6 @@ def get_agent_pricing(request: Request, agent_id: int, _: int = Depends(require_
             bundle   = item.get("bundle", "").strip()
             key      = f"{network.lower()}-{bundle.lower()}"
 
-            # Use admin override if set for this agent, otherwise fall back to global base price
             if key in override_map:
                 base_price = override_map[key]
             else:
@@ -2624,12 +2535,6 @@ async def verify_deposit(request: Request, payload: dict):
 
 # =========================
 # AGENT BUY DATA
-# FIX: cost_price assignment was broken — the override branch set cost_price
-#      correctly but the bare `cost_price = float(price_res.data[0]...)` line
-#      after the if/else unconditionally overwrote it (and crashed with
-#      NameError when override_res.data was truthy, since price_res was never
-#      assigned in that branch). Moved the fallback assignment fully inside
-#      the else block so override takes priority and no NameError can occur.
 # =========================
 @app.post("/agent/buy-data")
 @limiter.limit("10/minute")
@@ -2644,7 +2549,6 @@ async def agent_buy_data(request: Request, payload: AgentBuyDataRequest):
         bundle       = payload.bundle
         phone_number = payload.phone_number
 
-        # Check for admin override first, fall back to base_prices
         override_res = supabase.table("admin_agent_prices") \
             .select("cost_price") \
             .eq("agent_id", agent_id) \
