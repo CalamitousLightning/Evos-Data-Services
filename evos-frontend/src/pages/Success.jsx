@@ -75,7 +75,7 @@ export default function Success() {
               📦
             </div>
             <h2 style={{ ...s.title, color: "#38bdf8" }}>Order Placed!</h2>
-            <p style={s.sub}>Your data bundle is being processed</p>
+            <p style={s.sub}>Your data bundle is being processed ✅</p>
 
             <div style={s.summaryBox}>
               <div style={{ ...s.summaryRow, borderBottom: "none" }}>
@@ -84,6 +84,24 @@ export default function Success() {
                   ✅ Processing
                 </span>
               </div>
+            </div>
+
+            {/* ── EVOSGPT PROMO BLOCK ── */}
+            <div style={s.promoBox}>
+              <div style={s.promoBadge}>🚀 Bonus Unlocked</div>
+              <p style={s.promoHeadline}>
+                Your EvosData account unlocks more than data.
+              </p>
+              <p style={s.promoBody}>
+                Need help with CVs, business plans, school work, coding, or ideas?
+                Meet <strong style={{ color: "#f1f5f9" }}>EVOSGPT</strong> — your AI assistant.
+              </p>
+              <p style={s.promoSub}>
+                Login with your EvosData details and start for free.
+              </p>
+              <a href="https://evosgpt.xyz" style={s.promoBtn}>
+                Try EVOSGPT →
+              </a>
             </div>
 
             <div style={s.btnGroup}>
@@ -137,6 +155,66 @@ const s = {
   },
   summaryLabel: { fontSize: 13, color: "#64748b", fontWeight: 600 },
   summaryVal: { fontSize: 15, fontWeight: 700, color: "#e5e7eb" },
+
+  /* ── EVOSGPT PROMO BLOCK STYLES ── */
+  promoBox: {
+    background: "linear-gradient(135deg, rgba(124,58,237,0.15), rgba(56,189,248,0.1))",
+    border: "1px solid rgba(124,58,237,0.3)",
+    borderRadius: 18,
+    padding: "20px 18px",
+    marginBottom: 22,
+    textAlign: "center",
+  },
+  promoBadge: {
+    display: "inline-block",
+    fontSize: 11,
+    fontWeight: 800,
+    letterSpacing: 0.5,
+    color: "#c4b5fd",
+    background: "rgba(124,58,237,0.15)",
+    border: "1px solid rgba(124,58,237,0.35)",
+    borderRadius: 999,
+    padding: "4px 12px",
+    marginBottom: 12,
+  },
+  promoHeadline: {
+    fontSize: 15,
+    fontWeight: 800,
+    color: "#f1f5f9",
+    margin: "0 0 8px",
+    lineHeight: 1.4,
+  },
+  promoBody: {
+    fontSize: 13.5,
+    fontWeight: 600,
+    color: "#cbd5e1",
+    margin: "0 0 6px",
+    lineHeight: 1.5,
+  },
+  promoSub: {
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: "#64748b",
+    margin: "0 0 16px",
+    lineHeight: 1.4,
+  },
+  promoBtn: {
+    display: "inline-block",
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "13px",
+    borderRadius: 14,
+    border: "none",
+    background: "linear-gradient(135deg, #7c3aed, #4f46e5)",
+    color: "white",
+    fontWeight: 900,
+    fontSize: 14,
+    cursor: "pointer",
+    boxShadow: "0 4px 16px rgba(124,58,237,0.35)",
+    textDecoration: "none",
+    fontFamily: "inherit",
+  },
+
   btnGroup: { display: "flex", flexDirection: "column", gap: 10 },
   primaryBtn: {
     width: "100%", padding: "13px", borderRadius: 14, border: "none",
