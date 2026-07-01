@@ -43,6 +43,23 @@ export default function AgentWithdraw({ user, setPage }) {
   const say = (text, ok = false) => setMessage({ text, ok });
   const clear = () => setMessage({ text: "", ok: false });
 
+  // ── safe fetch helper: never throws on non-2xx, always returns parsed data ──
+  const safeFetch = async (url, options = {}) => {
+    const res = await fetch(url, options);
+    const text = await res.text();
+    try {
+      return { ok: res.ok, status: res.status, data: JSON.parse(text) };
+    } catch {
+      // backend returned HTML (500 page) or empty body
+      console.error("Non-JSON response from", url, "→", text.slice(0, 200));
+      return {
+        ok: false,
+        status: res.status,
+        data: { error: `Server error (${res.status}) — check Supabase migration & backend deploy.` },
+      };
+    }
+  };
+
   // ── step validators ────────────────────────────────────────────────
   const validateStep1 = () => {
     if (!provider) { say("Choose a withdrawal method to continue."); return false; }
@@ -67,11 +84,21 @@ export default function AgentWithdraw({ user, setPage }) {
   // ── step 3 → 4: verify account name ───────────────────────────────
   const verifyAccount = async () => {
     if (!validateStep3()) return;
+
+    // Moolre has no name-lookup — skip directly to confirm
+    if (provider === "moolre") {
+      setResolvedName("");
+      setRecipientCode("");
+      setStep(4);
+      clear();
+      return;
+    }
+
     setVerifying(true);
     clear();
     try {
       const token = sessionStorage.getItem("agentToken");
-      const res = await fetch(`${API_BASE}/agent/withdraw/verify-account`, {
+      const { data } = await safeFetch(`${API_BASE}/agent/withdraw/verify-account`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Agent-Token": token },
         body: JSON.stringify({
@@ -81,17 +108,22 @@ export default function AgentWithdraw({ user, setPage }) {
           provider,
         }),
       });
-      const data = await res.json();
+
       if (data.status !== "success") {
-        say(data.message || "Could not verify account. Check the number and try again.");
+        // If Paystack can't verify, still let agent proceed — they accepted the risk warning
+        setResolvedName("");
+        setRecipientCode("");
+        setStep(4);
+        say(data.message || "Account name could not be verified. Confirm only if you are sure the number is correct.");
       } else {
         setResolvedName(data.account_name || "");
         setRecipientCode(data.recipient_code || "");
         setStep(4);
         clear();
       }
-    } catch {
-      say("Network error. Please try again.");
+    } catch (err) {
+      console.error("verifyAccount error:", err);
+      say("Could not reach the server. Check your connection and try again.");
     } finally {
       setVerifying(false);
     }
@@ -103,7 +135,7 @@ export default function AgentWithdraw({ user, setPage }) {
     clear();
     try {
       const token = sessionStorage.getItem("agentToken");
-      const res = await fetch(`${API_BASE}/agent/withdraw`, {
+      const { ok, status, data } = await safeFetch(`${API_BASE}/agent/withdraw`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Agent-Token": token },
         body: JSON.stringify({
@@ -115,16 +147,20 @@ export default function AgentWithdraw({ user, setPage }) {
           provider,
         }),
       });
-      const data = await res.json();
+
       if (data.status === "success") {
         setWallet((p) => p - Number(amount));
         setDone(true);
         say(data.message || "Transfer initiated. Funds will arrive shortly.", true);
       } else {
-        say(data.error || "Withdrawal failed. Please try again.");
+        // Show the real error so the agent knows exactly what went wrong
+        const errText = data.error || data.message || data.detail || `Request failed (HTTP ${status})`;
+        say(errText);
+        console.error("Withdraw API error:", status, data);
       }
-    } catch {
-      say("Network error. Please try again.");
+    } catch (err) {
+      console.error("Withdraw fetch error:", err);
+      say("Could not reach the server. Check your connection and try again.");
     } finally {
       setLoading(false);
     }
