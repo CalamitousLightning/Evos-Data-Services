@@ -5,8 +5,20 @@ export default function Home({ setPage, theme }) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [promoVisible, setPromoVisible] = useState(false);
 
-  useEffect(() => {}, []);
+  // Show EVOSGPT promo notification after 2s, only once per session
+  useEffect(() => {
+    const dismissed = sessionStorage.getItem("evosGptPromoDismissed");
+    if (dismissed) return;
+    const timer = setTimeout(() => setPromoVisible(true), 2000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const dismissPromo = () => {
+    setPromoVisible(false);
+    sessionStorage.setItem("evosGptPromoDismissed", "1");
+  };
 
   const features = [
     {
@@ -91,6 +103,50 @@ export default function Home({ setPage, theme }) {
 
   return (
     <div style={styles.container}>
+
+      {/* ===================== EVOSGPT PROMO NOTIFICATION ===================== */}
+      <div style={{
+        ...styles.promoNotif,
+        opacity: promoVisible ? 1 : 0,
+        transform: promoVisible ? "translateY(0)" : "translateY(20px)",
+        pointerEvents: promoVisible ? "auto" : "none",
+      }}>
+        {/* Top row */}
+        <div style={styles.promoNotifHeader}>
+          <div style={styles.promoNotifBadge}>🚀 From Evoxera Technology</div>
+          <button style={styles.promoNotifClose} onClick={dismissPromo}>✕</button>
+        </div>
+
+        {/* Body */}
+        <p style={styles.promoNotifTitle}>
+          Meet <span style={styles.promoNotifBrand}>EVOSGPT</span> — Your AI Assistant
+        </p>
+        <p style={styles.promoNotifBody}>
+          Need help with CVs, business plans, school work, coding, or ideas?
+          EVOSGPT is part of the EVOS Business HUB family — and your EvosData account already unlocks it.
+        </p>
+
+        {/* CTA */}
+        <div style={styles.promoNotifBtns}>
+          <a
+            href="https://evosgpt.xyz"
+            target="_blank"
+            rel="noreferrer"
+            style={styles.promoNotifCta}
+          >
+            Try EVOSGPT Free →
+          </a>
+          <button style={styles.promoNotifSkip} onClick={dismissPromo}>
+            Maybe later
+          </button>
+        </div>
+
+        {/* Footer brand line */}
+        <p style={styles.promoNotifFooter}>
+          EvosData · EVOSGPT · EVOS Business HUB — all under{" "}
+          <span style={{ color: "#a78bfa" }}>Evoxera Technology</span>
+        </p>
+      </div>
 
       {/* ===================== HERO ===================== */}
       <section style={styles.hero}>
@@ -312,6 +368,9 @@ export default function Home({ setPage, theme }) {
           <div>
             <h3 style={styles.footerBrand}>EVOS HUB</h3>
             <p style={styles.footerMuted}>Secure automated telecom services for Ghana.</p>
+            <p style={{ ...styles.footerMuted, marginTop: 6, fontSize: 11 }}>
+              A product of EVOS Business HUB · Powered by Evoxera Technology
+            </p>
           </div>
           <div>
             <h3 style={styles.footerHead}>Other Products</h3>
@@ -395,7 +454,7 @@ export default function Home({ setPage, theme }) {
           <div style={styles.modal}>
             <h2 style={styles.modalTitle}>About EVOSDATA</h2>
             <p style={styles.modalText}>EVOSDATA is a secure digital platform for automated mobile data purchases in Ghana.</p>
-            <p style={styles.modalText}>Powered by EVOS Business HUB infrastructure.</p>
+            <p style={styles.modalText}>Powered by EVOS Business HUB infrastructure and built by Evoxera Technology.</p>
             <button style={styles.closeBtn} onClick={() => setAboutOpen(false)}>Close</button>
           </div>
         </>
@@ -419,6 +478,101 @@ export default function Home({ setPage, theme }) {
 
 const styles = {
   container: { fontFamily: "ui-sans-serif, system-ui, Arial", color: "#e5e7eb" },
+
+  // ===================== EVOSGPT PROMO NOTIFICATION =====================
+  promoNotif: {
+    position: "fixed",
+    bottom: 90,           // sits above the floating WhatsApp button
+    right: 20,
+    zIndex: 9998,
+    width: 300,
+    background: "linear-gradient(145deg, #0f172a, #1e1040)",
+    border: "1px solid rgba(124,58,237,0.45)",
+    borderRadius: 20,
+    padding: "18px 16px 14px",
+    boxShadow: "0 12px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(124,58,237,0.15)",
+    transition: "opacity 0.4s ease, transform 0.4s ease",
+  },
+  promoNotifHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  promoNotifBadge: {
+    fontSize: 10,
+    fontWeight: 800,
+    letterSpacing: 0.4,
+    color: "#c4b5fd",
+    background: "rgba(124,58,237,0.18)",
+    border: "1px solid rgba(124,58,237,0.35)",
+    borderRadius: 999,
+    padding: "3px 10px",
+  },
+  promoNotifClose: {
+    background: "none",
+    border: "none",
+    color: "#475569",
+    cursor: "pointer",
+    fontSize: 13,
+    lineHeight: 1,
+    padding: 2,
+  },
+  promoNotifTitle: {
+    fontSize: 14,
+    fontWeight: 900,
+    color: "#f1f5f9",
+    margin: "0 0 7px",
+    lineHeight: 1.4,
+  },
+  promoNotifBrand: {
+    background: "linear-gradient(135deg, #a78bfa, #38bdf8)",
+    WebkitBackgroundClip: "text",
+    WebkitTextFillColor: "transparent",
+    backgroundClip: "text",
+  },
+  promoNotifBody: {
+    fontSize: 12.5,
+    color: "#94a3b8",
+    lineHeight: 1.55,
+    margin: "0 0 14px",
+  },
+  promoNotifBtns: {
+    display: "flex",
+    gap: 8,
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  promoNotifCta: {
+    flex: 1,
+    display: "inline-block",
+    padding: "9px 0",
+    borderRadius: 10,
+    background: "linear-gradient(135deg, #7c3aed, #4f46e5)",
+    color: "white",
+    fontWeight: 900,
+    fontSize: 12,
+    textAlign: "center",
+    textDecoration: "none",
+    boxShadow: "0 3px 12px rgba(124,58,237,0.4)",
+    fontFamily: "inherit",
+  },
+  promoNotifSkip: {
+    background: "none",
+    border: "none",
+    color: "#475569",
+    fontSize: 12,
+    cursor: "pointer",
+    padding: "9px 4px",
+    fontFamily: "inherit",
+  },
+  promoNotifFooter: {
+    fontSize: 10.5,
+    color: "#334155",
+    margin: 0,
+    textAlign: "center",
+    lineHeight: 1.4,
+  },
 
   // HERO
   hero: {
@@ -464,7 +618,7 @@ const styles = {
     lineHeight: 1.65,
   },
 
-  // PLACE ORDER NOW — network cards
+  // PLACE ORDER NOW
   orderNowBox: {
     background: "rgba(0,0,0,0.25)",
     border: "1px solid rgba(255,255,255,0.1)",
@@ -499,7 +653,6 @@ const styles = {
     transition: "transform 0.15s, box-shadow 0.15s",
     position: "relative",
   },
-  // Out of stock card override
   orderNowCardDisabled: {
     background: "rgba(255,255,255,0.03)",
     border: "1.5px solid rgba(255,255,255,0.07)",
@@ -528,20 +681,9 @@ const styles = {
     color: "#475569",
     letterSpacing: "0.3px",
   },
-  orderNowEmoji: {
-    fontSize: 30,
-    lineHeight: 1,
-  },
-  orderNowName: {
-    fontSize: 13,
-    fontWeight: 900,
-    letterSpacing: "0.3px",
-  },
-  orderNowArrow: {
-    fontSize: 13,
-    fontWeight: 900,
-    opacity: 0.8,
-  },
+  orderNowEmoji: { fontSize: 30, lineHeight: 1 },
+  orderNowName: { fontSize: 13, fontWeight: 900, letterSpacing: "0.3px" },
+  orderNowArrow: { fontSize: 13, fontWeight: 900, opacity: 0.8 },
 
   heroBtns: {
     display: "flex",
