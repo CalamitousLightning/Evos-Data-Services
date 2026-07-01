@@ -59,7 +59,7 @@ export default function Home({ setPage, theme }) {
       bg: "linear-gradient(135deg, rgba(255,193,7,0.22), rgba(255,193,7,0.07))",
       border: "rgba(255,193,7,0.5)",
       glow: "rgba(255,193,7,0.25)",
-      outOfStock: true,
+      outOfStock: false,
     },
     {
       name: "TELECEL",
