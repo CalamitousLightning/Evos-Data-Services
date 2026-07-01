@@ -6,6 +6,7 @@ export default function Home({ setPage, theme }) {
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [promoVisible, setPromoVisible] = useState(false);
+  const [imgErrors, setImgErrors] = useState({});
 
   // Show EVOSGPT promo notification after 2s, only once per session
   useEffect(() => {
@@ -62,11 +63,16 @@ export default function Home({ setPage, theme }) {
     "During network congestion, some orders may delay.",
   ];
 
+  // ===== Network cards: image with emoji fallback =====
+  // Drop image files into public/images/ as mtn.png, telecel.png, airteltigo.png
+  // (update the extension below if you use .jpg / .jpeg instead).
+  // If an image is missing or fails to load, the emoji design is used automatically.
   const quickNetworks = [
     {
       name: "MTN",
       label: "MTN",
       emoji: "🟡",
+      image: "/images/mtn.png",
       color: "#FFC107",
       bg: "linear-gradient(135deg, rgba(255,193,7,0.22), rgba(255,193,7,0.07))",
       border: "rgba(255,193,7,0.5)",
@@ -77,6 +83,7 @@ export default function Home({ setPage, theme }) {
       name: "TELECEL",
       label: "Telecel",
       emoji: "🔴",
+      image: "/images/telecel.png",
       color: "#ef4444",
       bg: "linear-gradient(135deg, rgba(239,68,68,0.22), rgba(239,68,68,0.07))",
       border: "rgba(239,68,68,0.5)",
@@ -87,6 +94,7 @@ export default function Home({ setPage, theme }) {
       name: "AIRTELTIGO",
       label: "AirtelTigo",
       emoji: "🔵",
+      image: "/images/airteltigo.png",
       color: "#6366f1",
       bg: "linear-gradient(135deg, rgba(99,102,241,0.22), rgba(99,102,241,0.07))",
       border: "rgba(99,102,241,0.5)",
@@ -99,6 +107,10 @@ export default function Home({ setPage, theme }) {
     if (network.outOfStock) return;
     localStorage.setItem("selectedNetwork", network.name);
     setPage("shop");
+  };
+
+  const handleImgError = (name) => {
+    setImgErrors((prev) => ({ ...prev, [name]: true }));
   };
 
   return (
@@ -189,12 +201,26 @@ export default function Home({ setPage, theme }) {
                 {n.outOfStock && (
                   <span style={styles.outOfStockBadge}>Out of Stock</span>
                 )}
-                <span style={{
-                  ...styles.orderNowEmoji,
-                  opacity: n.outOfStock ? 0.35 : 1,
-                }}>
-                  {n.emoji}
-                </span>
+
+                {n.image && !imgErrors[n.name] ? (
+                  <img
+                    src={n.image}
+                    alt={n.label}
+                    style={{
+                      ...styles.orderNowImg,
+                      opacity: n.outOfStock ? 0.35 : 1,
+                    }}
+                    onError={() => handleImgError(n.name)}
+                  />
+                ) : (
+                  <span style={{
+                    ...styles.orderNowEmoji,
+                    opacity: n.outOfStock ? 0.35 : 1,
+                  }}>
+                    {n.emoji}
+                  </span>
+                )}
+
                 <span style={{
                   ...styles.orderNowName,
                   color: n.outOfStock ? "#475569" : n.color,
@@ -682,6 +708,13 @@ const styles = {
     letterSpacing: "0.3px",
   },
   orderNowEmoji: { fontSize: 30, lineHeight: 1 },
+  orderNowImg: {
+    width: 36,
+    height: 36,
+    objectFit: "contain",
+    borderRadius: 8,
+    marginBottom: 2,
+  },
   orderNowName: { fontSize: 13, fontWeight: 900, letterSpacing: "0.3px" },
   orderNowArrow: { fontSize: 13, fontWeight: 900, opacity: 0.8 },
 
