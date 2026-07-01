@@ -33,6 +33,66 @@ const bundleAccents = [
 ];
 
 // =========================
+// ORDER TRACKING STATUS CONFIG
+// Mirrors ETATrack.jsx status config so tracking behaves identically,
+// just rendered inline inside the store instead of on a separate page.
+// =========================
+const STATUS_CONFIG = {
+  pending_payment: {
+    label: "Awaiting Payment",
+    color: "#f59e0b",
+    bg: "rgba(245,158,11,0.1)",
+    border: "rgba(245,158,11,0.3)",
+    eta: "Complete your payment to proceed.",
+    icon: "⏳",
+  },
+  paid: {
+    label: "Payment Confirmed",
+    color: "#38bdf8",
+    bg: "rgba(56,189,248,0.1)",
+    border: "rgba(56,189,248,0.3)",
+    eta: "Your order is queued for delivery. Usually starts within 1-2 minutes.",
+    icon: "✅",
+  },
+  processing: {
+    label: "Processing",
+    color: "#a78bfa",
+    bg: "rgba(167,139,250,0.1)",
+    border: "rgba(167,139,250,0.3)",
+    eta: "Data bundle is being delivered. Usually arrives within 5-30 minutes.",
+    icon: "📡",
+  },
+  successful: {
+    label: "Delivered",
+    color: "#22c55e",
+    bg: "rgba(34,197,94,0.1)",
+    border: "rgba(34,197,94,0.3)",
+    eta: "Your data bundle has been delivered successfully.",
+    icon: "🎉",
+  },
+  failed: {
+    label: "Failed",
+    color: "#ef4444",
+    bg: "rgba(239,68,68,0.1)",
+    border: "rgba(239,68,68,0.3)",
+    eta: "Delivery attempt failed. The system will automatically retry delivery within 24 hours. No action needed.",
+    icon: "❌",
+  },
+};
+
+function formatDate(dateStr) {
+  if (!dateStr) return "—";
+  const d = new Date(dateStr);
+  return d.toLocaleString("en-GH", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+// =========================
 // SESSION HELPERS
 // Save and restore store state so ETATrack "back" returns to exact position
 // =========================
@@ -143,6 +203,152 @@ function ConfirmModal({ selected, networkLabel, networkCfg, onClose, onConfirm, 
 }
 
 // =========================
+// TRACK ORDER MODAL
+// Inline replacement for the old "eta-track" page redirect.
+// Customer never leaves /store/{agentId} — they stay inside the
+// reseller's own storefront the whole time, no EvosData branding leak.
+// =========================
+function TrackModal({ onClose }) {
+  const [phone, setPhone] = useState("");
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [searched, setSearched] = useState(false);
+
+  const search = async () => {
+    setError("");
+    setOrders([]);
+    setSearched(false);
+
+    const cleaned = phone.trim();
+    if (!cleaned || cleaned.length < 9) {
+      setError("Enter a valid phone number");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/orders/track?phone=${encodeURIComponent(cleaned)}`);
+      const data = await res.json();
+
+      if (data.orders && data.orders.length > 0) {
+        setOrders(data.orders);
+      } else {
+        setError("No orders found for this number.");
+      }
+      setSearched(true);
+    } catch (e) {
+      setError("Network error. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={modal.overlay}>
+      <div style={modal.box}>
+        <div style={modal.header}>
+          <span style={modal.headerLabel}>📦 Track Your Order</span>
+          <button style={modal.closeBtn} onClick={onClose}>✕</button>
+        </div>
+
+        <label style={modal.label}>📱 Phone Number Used During Purchase</label>
+        <div style={trackStyles.searchRow}>
+          <input
+            type="tel"
+            placeholder="e.g. 0244000000"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && search()}
+            style={trackStyles.searchInput}
+          />
+          <button
+            onClick={search}
+            disabled={loading}
+            style={{ ...trackStyles.searchBtn, opacity: loading ? 0.6 : 1 }}
+          >
+            {loading ? "..." : "Track"}
+          </button>
+        </div>
+
+        {error && <div style={trackStyles.errorBox}>{error}</div>}
+
+        <div style={trackStyles.resultsWrap}>
+          {orders.map((order, i) => {
+            const status = order.status || "processing";
+            const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.processing;
+
+            return (
+              <div key={i} style={trackStyles.card}>
+
+                {/* STATUS BADGE */}
+                <div style={{
+                  ...trackStyles.statusBadge,
+                  background: cfg.bg,
+                  border: `1px solid ${cfg.border}`,
+                  color: cfg.color,
+                }}>
+                  <span style={trackStyles.statusIcon}>{cfg.icon}</span>
+                  <span style={trackStyles.statusLabel}>{cfg.label}</span>
+                </div>
+
+                {/* ORDER DETAILS */}
+                <div style={trackStyles.detailGrid}>
+                  <div style={trackStyles.detailRow}>
+                    <span style={trackStyles.detailLabel}>Network</span>
+                    <span style={trackStyles.detailVal}>{order.network}</span>
+                  </div>
+                  <div style={trackStyles.detailRow}>
+                    <span style={trackStyles.detailLabel}>Bundle</span>
+                    <span style={trackStyles.detailVal}>{order.bundle}</span>
+                  </div>
+                  <div style={trackStyles.detailRow}>
+                    <span style={trackStyles.detailLabel}>Amount Paid</span>
+                    <span style={{ ...trackStyles.detailVal, color: "#38bdf8", fontWeight: 800 }}>
+                      GH&#8373; {Number(order.price || 0).toFixed(2)}
+                    </span>
+                  </div>
+                  <div style={trackStyles.detailRow}>
+                    <span style={trackStyles.detailLabel}>Phone</span>
+                    <span style={trackStyles.detailVal}>{order.phone_number}</span>
+                  </div>
+                  <div style={trackStyles.detailRow}>
+                    <span style={trackStyles.detailLabel}>Time Placed</span>
+                    <span style={trackStyles.detailVal}>{formatDate(order.created_at)}</span>
+                  </div>
+                  <div style={{ ...trackStyles.detailRow, borderBottom: "none" }}>
+                    <span style={trackStyles.detailLabel}>Reference</span>
+                    <span style={{ ...trackStyles.detailVal, fontSize: 11, color: "#64748b" }}>
+                      {order.evosdata_ref || order.paystack_ref || "—"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* ETA */}
+                <div style={{
+                  ...trackStyles.etaBox,
+                  background: cfg.bg,
+                  border: `1px solid ${cfg.border}`,
+                }}>
+                  <p style={{ ...trackStyles.etaText, color: cfg.color }}>
+                    {cfg.eta}
+                  </p>
+                </div>
+
+              </div>
+            );
+          })}
+        </div>
+
+        {searched && orders.length === 0 && !error && (
+          <p style={trackStyles.emptyNote}>No orders found for this number.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// =========================
 // MAIN STORE PAGE
 // =========================
 export default function StorePage({ setPage }) {
@@ -155,6 +361,7 @@ export default function StorePage({ setPage }) {
   const [selected, setSelected] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [trackOpen, setTrackOpen] = useState(false);
 
   // On mount: restore previous step/network from session if available
   useEffect(() => {
@@ -196,8 +403,10 @@ export default function StorePage({ setPage }) {
   };
 
   const handleTrackOrder = () => {
-    // Session is already saved via the useEffect above — just navigate
-    setPage("eta-track");
+    // Previously: setPage("eta-track") which navigated away to EvosData's
+    // own tracking page. Now opens an inline modal so the customer never
+    // leaves the reseller's storefront URL / branding.
+    setTrackOpen(true);
   };
 
   const placeOrder = async (phone) => {
@@ -401,6 +610,11 @@ export default function StorePage({ setPage }) {
         />
       )}
 
+      {/* TRACK ORDER MODAL — replaces the old redirect to /eta-track */}
+      {trackOpen && (
+        <TrackModal onClose={() => setTrackOpen(false)} />
+      )}
+
       {/* FLOATING SUPPORT */}
       <div style={styles.floatWrap}>
         {chatOpen && (
@@ -478,7 +692,7 @@ const styles = {
 
 const modal = {
   overlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 1000 },
-  box: { width: "100%", maxWidth: 480, background: "#0f172a", borderRadius: "24px 24px 0 0", padding: "22px 20px 36px", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 -8px 40px rgba(0,0,0,0.5)", fontFamily: "ui-sans-serif, system-ui, Arial" },
+  box: { width: "100%", maxWidth: 480, background: "#0f172a", borderRadius: "24px 24px 0 0", padding: "22px 20px 36px", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 -8px 40px rgba(0,0,0,0.5)", fontFamily: "ui-sans-serif, system-ui, Arial", maxHeight: "88vh", overflowY: "auto" },
   header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 },
   headerLabel: { fontWeight: 900, fontSize: 16, color: "#f1f5f9" },
   closeBtn: { background: "rgba(255,255,255,0.08)", border: "none", color: "#94a3b8", fontSize: 13, cursor: "pointer", padding: "6px 10px", borderRadius: 50, fontWeight: 800 },
@@ -493,4 +707,46 @@ const modal = {
   checkText: { fontSize: 12, color: "#94a3b8", lineHeight: 1.55, fontWeight: 600 },
   buyBtn: { width: "100%", padding: 15, borderRadius: 16, border: "none", background: "linear-gradient(135deg, #22c55e, #16a34a)", color: "white", fontWeight: 900, fontSize: 15, cursor: "pointer", boxShadow: "0 6px 24px rgba(34,197,94,0.3)", marginBottom: 10 },
   secureNote: { textAlign: "center", fontSize: 12, color: "#475569", margin: 0, fontWeight: 600 },
+};
+
+// =========================
+// TRACK MODAL STYLES
+// =========================
+const trackStyles = {
+  searchRow: { display: "flex", gap: 10, marginBottom: 14 },
+  searchInput: {
+    flex: 1, padding: "13px 14px", borderRadius: 14,
+    border: "1px solid rgba(255,255,255,0.08)", background: "rgba(2,6,23,0.75)",
+    color: "#fff", fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none",
+  },
+  searchBtn: {
+    padding: "13px 20px", borderRadius: 14, border: "none",
+    background: "linear-gradient(135deg,#38bdf8,#0ea5e9)", color: "#000",
+    fontWeight: 900, fontSize: 14, cursor: "pointer", flexShrink: 0,
+  },
+  errorBox: {
+    background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)",
+    color: "#f87171", padding: "12px 14px", borderRadius: 10, fontSize: 13, marginBottom: 14,
+  },
+  resultsWrap: { display: "flex", flexDirection: "column", gap: 14 },
+  card: {
+    background: "rgba(2,6,23,0.6)", borderRadius: 18, padding: "18px 16px",
+    border: "1px solid rgba(255,255,255,0.07)",
+  },
+  statusBadge: { display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderRadius: 10, marginBottom: 16 },
+  statusIcon: { fontSize: 18 },
+  statusLabel: { fontWeight: 800, fontSize: 14 },
+  detailGrid: {
+    background: "rgba(15,23,42,0.6)", borderRadius: 12, padding: "4px 14px",
+    marginBottom: 14, border: "1px solid rgba(255,255,255,0.05)",
+  },
+  detailRow: {
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,0.05)",
+  },
+  detailLabel: { fontSize: 12, color: "#64748b" },
+  detailVal: { fontSize: 13, fontWeight: 600, color: "#e5e7eb" },
+  etaBox: { padding: "10px 14px", borderRadius: 10 },
+  etaText: { fontSize: 12, margin: 0, lineHeight: 1.55, fontWeight: 500 },
+  emptyNote: { textAlign: "center", color: "#475569", fontSize: 13, fontWeight: 600, margin: "10px 0 0" },
 };
