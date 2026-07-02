@@ -268,7 +268,7 @@ export default function AgentWithdraw({ user, setPage }) {
           border: "2px solid rgba(255,255,255,0.05)",
           background: "rgba(15,23,42,0.4)",
           opacity: 0.45,
-          cursor: "not-allowed",
+          cursor: "allowed",
           position: "relative",
         }}
       >
