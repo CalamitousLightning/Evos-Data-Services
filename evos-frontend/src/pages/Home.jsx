@@ -61,6 +61,7 @@ export default function Home({ setPage, theme }) {
     "No refund for successful delivery to wrong numbers entered by customer.",
     "Refunds apply only to failed or undelivered orders after review.",
     "During network congestion, some orders may delay.",
+    "If order is not delivered within 30 minutes contact support.",
   ];
 
   // ===== Network cards: image with emoji fallback =====
