@@ -7,7 +7,6 @@ export default function Home({ setPage, theme }) {
   const [chatOpen, setChatOpen] = useState(false);
   const [promoVisible, setPromoVisible] = useState(false);
   const [imgErrors, setImgErrors] = useState({});
-  const [mtnNoticeOpen, setMtnNoticeOpen] = useState(false);
 
   // Show EVOSGPT promo notification after 2s, only once per session
   useEffect(() => {
@@ -16,19 +15,6 @@ export default function Home({ setPage, theme }) {
     const timer = setTimeout(() => setPromoVisible(true), 2000);
     return () => clearTimeout(timer);
   }, []);
-
-  // ===== MTN MAINTENANCE NOTICE =====
-  // Big, hard-to-miss modal shown once per session until dismissed with "I Know".
-  useEffect(() => {
-    const dismissed = sessionStorage.getItem("mtnMaintenanceNoticeDismissed");
-    if (dismissed) return;
-    setMtnNoticeOpen(true);
-  }, []);
-
-  const dismissMtnNotice = () => {
-    setMtnNoticeOpen(false);
-    sessionStorage.setItem("mtnMaintenanceNoticeDismissed", "1");
-  };
 
   const dismissPromo = () => {
     setPromoVisible(false);
@@ -129,30 +115,6 @@ export default function Home({ setPage, theme }) {
 
   return (
     <div style={styles.container}>
-
-      {/* ===================== MTN MAINTENANCE NOTICE ===================== */}
-      {mtnNoticeOpen && (
-        <>
-          <div style={styles.mtnOverlay} onClick={dismissMtnNotice} />
-          <div style={styles.mtnModal}>
-            <div style={styles.mtnIconCircle}>🛠️</div>
-            <div style={styles.mtnBadge}>MTN Network Notice</div>
-            <h2 style={styles.mtnTitle}>MTN is Currently Under Maintenance</h2>
-            <p style={styles.mtnBody}>
-              MTN's network is temporarily undergoing maintenance on their end.
-              Please note that <strong style={{ color: "#f1f5f9" }}>all orders placed are 100% secured</strong> and
-              will be delivered automatically as soon as delivery resumes.
-            </p>
-            <p style={styles.mtnSubBody}>
-              No action is needed on your part — your data bundle is safely queued and
-              will reach your number the moment MTN's systems are back up.
-            </p>
-            <button style={styles.mtnBtn} onClick={dismissMtnNotice}>
-              I Know
-            </button>
-          </div>
-        </>
-      )}
 
       {/* ===================== EVOSGPT PROMO NOTIFICATION ===================== */}
       <div style={{
@@ -542,95 +504,6 @@ export default function Home({ setPage, theme }) {
 
 const styles = {
   container: { fontFamily: "ui-sans-serif, system-ui, Arial", color: "#e5e7eb" },
-
-  // ===================== MTN MAINTENANCE NOTICE =====================
-  mtnOverlay: {
-    position: "fixed",
-    inset: 0,
-    background: "rgba(0,0,0,0.75)",
-    backdropFilter: "blur(4px)",
-    zIndex: 2000,
-  },
-  mtnModal: {
-    position: "fixed",
-    left: "50%",
-    top: "50%",
-    transform: "translate(-50%, -50%)",
-    width: "90%",
-    maxWidth: 560,
-    minHeight: "70vh",
-    maxHeight: "88vh",
-    overflowY: "auto",
-    background: "linear-gradient(160deg, #0f172a, #1a1030)",
-    border: "1px solid rgba(255,193,7,0.35)",
-    borderRadius: 28,
-    padding: "40px 30px 32px",
-    zIndex: 2100,
-    boxShadow: "0 30px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,193,7,0.1)",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    textAlign: "center",
-  },
-  mtnIconCircle: {
-    width: 84,
-    height: 84,
-    borderRadius: "50%",
-    background: "rgba(255,193,7,0.15)",
-    border: "2px solid rgba(255,193,7,0.35)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: 40,
-    marginBottom: 20,
-  },
-  mtnBadge: {
-    display: "inline-block",
-    padding: "6px 18px",
-    borderRadius: 50,
-    background: "rgba(255,193,7,0.15)",
-    border: "1px solid rgba(255,193,7,0.4)",
-    color: "#FFC107",
-    fontSize: 12,
-    fontWeight: 800,
-    letterSpacing: "0.5px",
-    textTransform: "uppercase",
-    marginBottom: 18,
-  },
-  mtnTitle: {
-    fontSize: "clamp(20px, 4vw, 28px)",
-    fontWeight: 900,
-    color: "#f1f5f9",
-    margin: "0 0 18px",
-    lineHeight: 1.3,
-  },
-  mtnBody: {
-    fontSize: 15,
-    color: "#cbd5e1",
-    lineHeight: 1.7,
-    margin: "0 0 14px",
-    maxWidth: 440,
-  },
-  mtnSubBody: {
-    fontSize: 13.5,
-    color: "#94a3b8",
-    lineHeight: 1.65,
-    margin: "0 0 30px",
-    maxWidth: 420,
-  },
-  mtnBtn: {
-    padding: "15px 48px",
-    borderRadius: 16,
-    border: "none",
-    background: "linear-gradient(135deg, #FFC107, #f59e0b)",
-    color: "#000",
-    fontWeight: 900,
-    fontSize: 16,
-    cursor: "pointer",
-    boxShadow: "0 6px 24px rgba(245,158,11,0.4)",
-    fontFamily: "inherit",
-  },
 
   // ===================== EVOSGPT PROMO NOTIFICATION =====================
   promoNotif: {
