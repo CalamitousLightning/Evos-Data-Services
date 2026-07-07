@@ -255,73 +255,60 @@ export default function AgentWithdraw({ user, setPage }) {
         </div>
       )}
 
-{/* ── STEP 1: choose provider ─────────────────────────────────── */}
-{step === 1 && (
-  <div>
-    <p style={S.stepHeading}>How would you like to withdraw?</p>
-    <div style={S.providerGrid}>
+      {/* ── STEP 1: choose provider ─────────────────────────────────── */}
+      {step === 1 && (
+        <div>
+          <p style={S.stepHeading}>How would you like to withdraw?</p>
+          <div style={S.providerGrid}>
+            <div
+              onClick={() => { setProvider("paystack"); clear(); }}
+              style={{
+                ...S.providerCard,
+                border: provider === "paystack"
+                  ? "2px solid #38bdf8"
+                  : "2px solid rgba(255,255,255,0.07)",
+                background: provider === "paystack"
+                  ? "rgba(56,189,248,0.08)"
+                  : "rgba(15,23,42,0.7)",
+              }}
+            >
+              <div style={S.providerIcon}>🏦</div>
+              <div style={S.providerName}>Paystack</div>
+              <div style={S.providerDesc}>
+                Faster settlement · resolves account name before sending
+              </div>
+              {provider === "paystack" && <div style={S.providerCheck}>✓</div>}
+            </div>
 
-      {/* PAYSTACK — shown but disabled until account is approved */}
-      <div
-        style={{
-          ...S.providerCard,
-          border: "2px solid rgba(255,255,255,0.05)",
-          background: "rgba(15,23,42,0.4)",
-          opacity: 0.45,
-          cursor: "allowed",
-          position: "relative",
-        }}
-      >
-        <div style={S.providerIcon}>🏦</div>
-        <div style={S.providerName}>Paystack</div>
-        <div style={S.providerDesc}>
-          Coming soon — account activation in progress
+            <div
+              onClick={() => { setProvider("moolre"); clear(); }}
+              style={{
+                ...S.providerCard,
+                border: provider === "moolre"
+                  ? "2px solid #a78bfa"
+                  : "2px solid rgba(255,255,255,0.07)",
+                background: provider === "moolre"
+                  ? "rgba(167,139,250,0.08)"
+                  : "rgba(15,23,42,0.7)",
+              }}
+            >
+              <div style={S.providerIcon}>📱</div>
+              <div style={S.providerName}>Moolre</div>
+              <div style={S.providerDesc}>
+                Alternative transfer route · supports all Ghana networks
+              </div>
+              {provider === "moolre" && <div style={{ ...S.providerCheck, color: "#a78bfa" }}>✓</div>}
+            </div>
+          </div>
+
+          <button
+            onClick={() => { if (validateStep1()) { clear(); setStep(2); } }}
+            style={S.primaryBtn}
+          >
+            Continue →
+          </button>
         </div>
-        <div style={{
-          position: "absolute", top: 10, right: 12,
-          fontSize: 10, fontWeight: 800,
-          color: "#f59e0b",
-          background: "rgba(245,158,11,0.12)",
-          border: "1px solid rgba(245,158,11,0.3)",
-          padding: "2px 8px", borderRadius: 20,
-        }}>
-          PENDING
-        </div>
-      </div>
-
-      {/* MOOLRE — active */}
-      <div
-        onClick={() => { setProvider("moolre"); clear(); }}
-        style={{
-          ...S.providerCard,
-          border: provider === "moolre"
-            ? "2px solid #a78bfa"
-            : "2px solid rgba(255,255,255,0.07)",
-          background: provider === "moolre"
-            ? "rgba(167,139,250,0.08)"
-            : "rgba(15,23,42,0.7)",
-        }}
-      >
-        <div style={S.providerIcon}>📱</div>
-        <div style={S.providerName}>Moolre</div>
-        <div style={S.providerDesc}>
-          Instant mobile money transfer · MTN, Telecel, AirtelTigo
-        </div>
-        {provider === "moolre" && (
-          <div style={{ ...S.providerCheck, color: "#a78bfa" }}>✓</div>
-        )}
-      </div>
-
-    </div>
-
-    <button
-      onClick={() => { if (validateStep1()) { clear(); setStep(2); } }}
-      style={S.primaryBtn}
-    >
-      Continue →
-    </button>
-  </div>
-)}
+      )}
 
       {/* ── STEP 2: amount ─────────────────────────────────────────── */}
       {step === 2 && (
