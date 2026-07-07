@@ -333,34 +333,6 @@ class VerifyAccountRequest(BaseModel):
 
 
 # =========================
-# PAYSTACK TRANSFER OTP MODELS
-# FIX: Paystack transfers can require a one-time-PIN before the payout is
-#      actually finalised (Settings -> Preferences -> "Enable OTP for
-#      transfers"). Previously the backend treated a "otp" status the same
-#      as "processing" and told the frontend the withdrawal succeeded, but
-#      the money never actually moved until someone finalised it manually
-#      in the Paystack dashboard. These two models back the new
-#      verify-otp / resend-otp endpoints below.
-# =========================
-class WithdrawOTPRequest(BaseModel):
-    agent_id: int
-    withdrawal_id: int
-    otp: str = Field(min_length=4, max_length=8)
-
-    @validator("otp")
-    def otp_digits_only(cls, v):
-        cleaned = re.sub(r"\s", "", v)
-        if not cleaned.isdigit():
-            raise ValueError("OTP must contain only digits")
-        return cleaned
-
-
-class ResendWithdrawOTPRequest(BaseModel):
-    agent_id: int
-    withdrawal_id: int
-
-
-# =========================
 # HELPERS
 # =========================
 
@@ -421,17 +393,6 @@ AGYEKUMDATA_CATEGORY_MAP = {
 #        alter table orders add column if not exists provider_priority int default 1;
 # =========================
 MAX_ATTEMPTS_PER_PROVIDER = 3
-
-# =========================
-# WITHDRAWAL OTP TIMEOUT CONFIG
-# FIX: withdrawals that hit "otp_required" hold the agent's wallet balance
-#      (already deducted) until the OTP is confirmed. Paystack OTPs expire
-#      after a while, so if an agent never enters the OTP, that money would
-#      be stuck in limbo forever. The background job below auto-refunds
-#      any withdrawal still sitting at "otp_required" after this many
-#      minutes, so the agent isn't permanently short their balance.
-# =========================
-OTP_STALE_MINUTES = 30
 
 # =========================
 # BUNDLES GHANA HELPER
@@ -758,50 +719,6 @@ def paystack_verify_transfer(reference: str) -> dict:
         logger.error("PAYSTACK VERIFY TRANSFER ERROR: %s", str(e))
         return {"status": False, "message": str(e)}
 
-
-# =========================
-# PAYSTACK TRANSFER OTP FINALIZATION HELPERS
-# FIX: when "Enable OTP for transfers" is on in the Paystack dashboard,
-#      POST /transfer comes back with data.status == "otp" instead of
-#      "success". The transfer is only actually sent once we call
-#      /transfer/finalize_transfer with the transfer_code + the OTP the
-#      agent/business received by SMS/email. Until that call succeeds,
-#      no money has moved on Paystack's side.
-#
-# FIX (resend OTP): Paystack's /transfer/resend_otp endpoint only accepts
-#      "resend_otp" or "transfer" as valid values for the reason field.
-#      This code previously defaulted to "resend_otp" as a string that
-#      matched the Paystack docs example, but Paystack's live validation
-#      rejected it with "Reason is invalid. ['disable_otp' or 'transfer']".
-#      The correct accepted value for resending a transfer OTP is
-#      "transfer", so the default has been corrected below.
-# =========================
-def paystack_finalize_transfer(transfer_code: str, otp: str) -> dict:
-    try:
-        res = requests.post(
-            "https://api.paystack.co/transfer/finalize_transfer",
-            headers={"Authorization": f"Bearer {PAYSTACK_SECRET}", "Content-Type": "application/json"},
-            json={"transfer_code": transfer_code, "otp": otp},
-            timeout=REQUEST_TIMEOUT,
-        )
-        return res.json()
-    except Exception as e:
-        logger.error("PAYSTACK FINALIZE TRANSFER ERROR: %s", str(e))
-        return {"status": False, "message": str(e)}
-
-
-def paystack_resend_otp(transfer_code: str, reason: str = "transfer") -> dict:
-    try:
-        res = requests.post(
-            "https://api.paystack.co/transfer/resend_otp",
-            headers={"Authorization": f"Bearer {PAYSTACK_SECRET}", "Content-Type": "application/json"},
-            json={"transfer_code": transfer_code, "reason": reason},
-            timeout=REQUEST_TIMEOUT,
-        )
-        return res.json()
-    except Exception as e:
-        logger.error("PAYSTACK RESEND OTP ERROR: %s", str(e))
-        return {"status": False, "message": str(e)}
 
 # =========================
 # PASSWORD SECURITY
@@ -1518,90 +1435,11 @@ async def retry_stuck_deposits():
         await asyncio.sleep(300)
 
 
-# =========================
-# BACKGROUND: REFUND STALE OTP-PENDING WITHDRAWALS
-# FIX: a withdrawal that hit "otp_required" already had the wallet balance
-#      deducted (held), but the payout has NOT gone out yet on Paystack's
-#      side. If the agent never enters the OTP (loses the SMS, closes the
-#      app, OTP expires, etc.) that money would otherwise be stuck forever.
-#      This job finds withdrawals stuck at "otp_required" for longer than
-#      OTP_STALE_MINUTES, marks them "failed", and refunds the wallet.
-# =========================
-
-_otp_cleanup_running = False
-
-async def retry_stale_withdrawal_otps():
-    global _otp_cleanup_running
-    if _otp_cleanup_running:
-        logger.info("OTP CLEANUP: already running, skipping duplicate")
-        return
-
-    _otp_cleanup_running = True
-    await asyncio.sleep(120)
-
-    while True:
-        try:
-            logger.info("OTP CLEANUP: scanning for stale otp_required withdrawals...")
-            now    = utc_now()
-            cutoff = (now - timedelta(minutes=OTP_STALE_MINUTES)).isoformat()
-
-            stale = supabase.table("agent_withdrawals") \
-                .select("*") \
-                .eq("status", "otp_required") \
-                .lte("created_at", cutoff) \
-                .execute()
-
-            rows = stale.data or []
-            logger.info("OTP CLEANUP: %d stale otp_required withdrawal(s) found", len(rows))
-
-            for row in rows:
-                try:
-                    withdrawal_id = row["id"]
-                    agent_id      = row["agent_id"]
-                    amount        = float(row["amount"])
-
-                    supabase.table("agent_withdrawals") \
-                        .update({"status": "failed"}) \
-                        .eq("id", withdrawal_id) \
-                        .execute()
-
-                    wlt = supabase.table("agent_wallets") \
-                        .select("balance") \
-                        .eq("agent_id", agent_id) \
-                        .limit(1) \
-                        .execute()
-
-                    if wlt.data:
-                        new_balance = float(wlt.data[0]["balance"]) + amount
-                        supabase.table("agent_wallets") \
-                            .update({"balance": new_balance}) \
-                            .eq("agent_id", agent_id) \
-                            .execute()
-                        logger.info(
-                            "OTP CLEANUP: withdrawal %s expired — refunded GH₵%s to agent %s (new balance GH₵%s)",
-                            withdrawal_id, amount, agent_id, new_balance
-                        )
-                    else:
-                        logger.warning(
-                            "OTP CLEANUP: withdrawal %s expired but no wallet row found for agent %s — refund skipped",
-                            withdrawal_id, agent_id
-                        )
-
-                except Exception as e:
-                    logger.error("OTP CLEANUP: error on withdrawal %s: %s", row.get("id"), str(e))
-
-        except Exception as e:
-            logger.error("OTP CLEANUP ERROR: %s", str(e))
-
-        await asyncio.sleep(300)
-
-
 @app.on_event("startup")
 async def startup_event():
     log_agyekumdata_categories()
     asyncio.create_task(retry_stuck_orders())
     asyncio.create_task(retry_stuck_deposits())
-    asyncio.create_task(retry_stale_withdrawal_otps())
 
 
 # =========================
@@ -2370,12 +2208,13 @@ async def agent_sales(request: Request, agent_id: int, _: int = Depends(require_
 
 # =========================
 # AGENT WITHDRAW
-# FIX: the Paystack branch now checks the transfer's returned status. If
-#      Paystack requires an OTP before releasing funds (data.status ==
-#      "otp"), the withdrawal is parked at "otp_required" instead of being
-#      reported to the frontend as a completed transfer. The wallet stays
-#      deducted (held) until /agent/withdraw/verify-otp confirms it, or the
-#      stale-OTP cleanup job (see retry_stale_withdrawal_otps) refunds it.
+# NOTE: "Enable OTP for transfers" must be OFF in the Paystack dashboard
+#       (Settings -> Preferences) for this flow to work correctly. That
+#       setting sends the OTP to the phone/email registered on the
+#       business's Paystack account — NOT to the agent or the transfer
+#       recipient — so agents have no way to receive or enter it. With
+#       OTP disabled, /transfer returns "success" or "pending" directly
+#       and the payout completes without any manual step.
 # =========================
 @app.post("/agent/withdraw")
 @limiter.limit("5/minute")
@@ -2452,27 +2291,22 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
             return {"error": transfer.get("message", "Paystack transfer failed")}
 
         tdata           = transfer.get("data", {})
-        transfer_status = tdata.get("status")   # "success" | "otp" | "pending" | ...
-        transfer_code   = tdata.get("transfer_code")
+        transfer_status = tdata.get("status")   # expected "success" | "pending" with OTP disabled
 
-        supabase.table("agent_withdrawals").update({
-            "paystack_transfer_code": transfer_code,
-        }).eq("id", withdrawal_id).execute()
-
-        # ── OTP REQUIRED ─────────────────────────────────────────
-        # The transfer has NOT gone out yet. Do NOT mark paid/processing
-        # and do NOT record the debit transaction — that only happens once
-        # verify-otp successfully finalizes the transfer. The wallet stays
-        # deducted (held) in the meantime.
+        # Safety net: if OTP somehow gets re-enabled on the Paystack dashboard
+        # and a transfer comes back requiring it, we can't ask the agent for
+        # a code they'll never receive — fail safely and refund instead of
+        # silently holding their balance forever.
         if transfer_status == "otp":
-            supabase.table("agent_withdrawals").update({"status": "otp_required"}).eq("id", withdrawal_id).execute()
-            logger.info("PAYSTACK WITHDRAW: OTP required for withdrawal %s", withdrawal_id)
-            print(f"PAYSTACK WITHDRAW: OTP required for withdrawal {withdrawal_id}")
+            refund()
+            supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
+            logger.error(
+                "PAYSTACK WITHDRAW: transfer %s came back requiring OTP — is 'Enable OTP for "
+                "transfers' still on in the Paystack dashboard? Refunding agent %s.",
+                withdrawal_id, agent_id
+            )
             return {
-                "status":        "otp_required",
-                "provider":      "paystack",
-                "message":       "Enter the OTP sent to your phone/email to confirm this transfer.",
-                "withdrawal_id": withdrawal_id,
+                "error": "Withdrawals are temporarily unavailable. Please contact support.",
             }
 
         final_status = "paid" if transfer_status == "success" else "processing"
@@ -2606,114 +2440,6 @@ async def verify_withdraw_account(request: Request, payload: VerifyAccountReques
     }
 
 
-# =========================
-# AGENT WITHDRAW — VERIFY OTP
-# FIX: finalizes a Paystack transfer that came back with status "otp".
-#      Only after this succeeds does the debit transaction get recorded —
-#      before this call, the wallet balance was deducted but no money had
-#      actually left the business's Paystack balance.
-# =========================
-@app.post("/agent/withdraw/verify-otp")
-@limiter.limit("5/minute")
-async def verify_withdraw_otp(request: Request, payload: WithdrawOTPRequest):
-    token = request.headers.get("X-Agent-Token", "")
-    if not token or not verify_agent_token(token, payload.agent_id):
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-    wd = supabase.table("agent_withdrawals") \
-        .select("*") \
-        .eq("id", payload.withdrawal_id) \
-        .eq("agent_id", payload.agent_id) \
-        .limit(1) \
-        .execute()
-    if not wd.data:
-        return {"error": "Withdrawal not found"}
-
-    row = wd.data[0]
-
-    if row.get("status") != "otp_required":
-        return {"error": f"This withdrawal is not awaiting OTP (status={row.get('status')})"}
-
-    transfer_code = row.get("paystack_transfer_code")
-    if not transfer_code:
-        return {"error": "No transfer code on record for this withdrawal"}
-
-    result = paystack_finalize_transfer(transfer_code, payload.otp)
-
-    if not result.get("status"):
-        error_msg = result.get("message", "OTP verification failed")
-        logger.warning("PAYSTACK OTP FINALIZE FAILED: withdrawal=%s error=%s", row["id"], error_msg)
-        print(f"PAYSTACK OTP FINALIZE FAILED: withdrawal={row['id']} error={error_msg}")
-        return {"error": error_msg}
-
-    tdata        = result.get("data", {})
-    t_status     = tdata.get("status")
-    final_status = "paid" if t_status == "success" else "processing"
-
-    supabase.table("agent_withdrawals").update({"status": final_status}).eq("id", row["id"]).execute()
-
-    # Guard against double-recording the debit if the transfer.success
-    # webhook also arrives for this same reference.
-    existing_tx = supabase.table("agent_transactions").select("id").eq("reference", row["paystack_ref"]).limit(1).execute()
-    if not existing_tx.data:
-        supabase.table("agent_transactions").insert({
-            "agent_id":  row["agent_id"],
-            "amount":    -float(row["amount"]),
-            "type":      "withdrawal",
-            "reference": row["paystack_ref"],
-        }).execute()
-
-    logger.info("PAYSTACK OTP FINALIZE: withdrawal %s → %s", row["id"], final_status)
-    print(f"PAYSTACK OTP FINALIZE: withdrawal {row['id']} → {final_status}")
-
-    return {
-        "status":          "success",
-        "transfer_status": final_status,
-        "message": (
-            "Transfer confirmed. Funds are on their way."
-            if final_status == "paid"
-            else "OTP verified. Transfer is processing."
-        ),
-    }
-
-
-# =========================
-# AGENT WITHDRAW — RESEND OTP
-# =========================
-@app.post("/agent/withdraw/resend-otp")
-@limiter.limit("3/minute")
-async def resend_withdraw_otp(request: Request, payload: ResendWithdrawOTPRequest):
-    token = request.headers.get("X-Agent-Token", "")
-    if not token or not verify_agent_token(token, payload.agent_id):
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-    wd = supabase.table("agent_withdrawals") \
-        .select("*") \
-        .eq("id", payload.withdrawal_id) \
-        .eq("agent_id", payload.agent_id) \
-        .limit(1) \
-        .execute()
-    if not wd.data:
-        return {"error": "Withdrawal not found"}
-
-    row = wd.data[0]
-    if row.get("status") != "otp_required":
-        return {"error": "This withdrawal is not awaiting OTP"}
-
-    transfer_code = row.get("paystack_transfer_code")
-    if not transfer_code:
-        return {"error": "No transfer code on record"}
-
-    result = paystack_resend_otp(transfer_code)
-    if not result.get("status"):
-        return {"error": result.get("message", "Could not resend OTP")}
-
-    logger.info("PAYSTACK OTP RESEND: withdrawal %s", row["id"])
-    print(f"PAYSTACK OTP RESEND: withdrawal {row['id']}")
-
-    return {"status": "success", "message": "A new OTP has been sent."}
-
-
 @app.get("/agent/withdrawal/status/{withdrawal_id}")
 @limiter.limit("20/minute")
 async def check_withdrawal_status(request: Request, withdrawal_id: int):
@@ -2730,11 +2456,6 @@ async def check_withdrawal_status(request: Request, withdrawal_id: int):
 
         if row.get("status") in ["paid", "failed", "rejected"]:
             return {"status": row.get("status"), "withdrawal": row}
-
-        # Still waiting on the agent to enter the OTP — don't poll Paystack,
-        # nothing will have changed until finalize_transfer is called.
-        if row.get("status") == "otp_required":
-            return {"status": "otp_required", "withdrawal": row}
 
         provider = row.get("provider", "moolre")
         final_status = row.get("status")
