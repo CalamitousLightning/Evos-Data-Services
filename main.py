@@ -719,7 +719,6 @@ def paystack_verify_transfer(reference: str) -> dict:
         logger.error("PAYSTACK VERIFY TRANSFER ERROR: %s", str(e))
         return {"status": False, "message": str(e)}
 
-
 # =========================
 # PASSWORD SECURITY
 # =========================
@@ -2208,13 +2207,6 @@ async def agent_sales(request: Request, agent_id: int, _: int = Depends(require_
 
 # =========================
 # AGENT WITHDRAW
-# NOTE: "Enable OTP for transfers" must be OFF in the Paystack dashboard
-#       (Settings -> Preferences) for this flow to work correctly. That
-#       setting sends the OTP to the phone/email registered on the
-#       business's Paystack account — NOT to the agent or the transfer
-#       recipient — so agents have no way to receive or enter it. With
-#       OTP disabled, /transfer returns "success" or "pending" directly
-#       and the payout completes without any manual step.
 # =========================
 @app.post("/agent/withdraw")
 @limiter.limit("5/minute")
@@ -2290,29 +2282,13 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
             supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
             return {"error": transfer.get("message", "Paystack transfer failed")}
 
-        tdata           = transfer.get("data", {})
-        transfer_status = tdata.get("status")   # expected "success" | "pending" with OTP disabled
-
-        # Safety net: if OTP somehow gets re-enabled on the Paystack dashboard
-        # and a transfer comes back requiring it, we can't ask the agent for
-        # a code they'll never receive — fail safely and refund instead of
-        # silently holding their balance forever.
-        if transfer_status == "otp":
-            refund()
-            supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
-            logger.error(
-                "PAYSTACK WITHDRAW: transfer %s came back requiring OTP — is 'Enable OTP for "
-                "transfers' still on in the Paystack dashboard? Refunding agent %s.",
-                withdrawal_id, agent_id
-            )
-            return {
-                "error": "Withdrawals are temporarily unavailable. Please contact support.",
-            }
-
+        tdata        = transfer.get("data", {})
+        transfer_status = tdata.get("status")
         final_status = "paid" if transfer_status == "success" else "processing"
 
         supabase.table("agent_withdrawals").update({
             "status": final_status,
+            "paystack_transfer_code": tdata.get("transfer_code"),
         }).eq("id", withdrawal_id).execute()
 
         supabase.table("agent_transactions").insert({
@@ -2438,7 +2414,7 @@ async def verify_withdraw_account(request: Request, payload: VerifyAccountReques
         "network": network,
         "note": "Moolre does not support account name lookup — agent must confirm name manually.",
     }
-
+        
 
 @app.get("/agent/withdrawal/status/{withdrawal_id}")
 @limiter.limit("20/minute")
