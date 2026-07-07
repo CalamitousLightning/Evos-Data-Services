@@ -333,7 +333,7 @@ class VerifyAccountRequest(BaseModel):
 
 
 # =========================
-# NEW: PAYSTACK TRANSFER OTP MODELS
+# PAYSTACK TRANSFER OTP MODELS
 # FIX: Paystack transfers can require a one-time-PIN before the payout is
 #      actually finalised (Settings -> Preferences -> "Enable OTP for
 #      transfers"). Previously the backend treated a "otp" status the same
@@ -760,13 +760,21 @@ def paystack_verify_transfer(reference: str) -> dict:
 
 
 # =========================
-# NEW: PAYSTACK TRANSFER OTP FINALIZATION HELPERS
+# PAYSTACK TRANSFER OTP FINALIZATION HELPERS
 # FIX: when "Enable OTP for transfers" is on in the Paystack dashboard,
 #      POST /transfer comes back with data.status == "otp" instead of
 #      "success". The transfer is only actually sent once we call
 #      /transfer/finalize_transfer with the transfer_code + the OTP the
 #      agent/business received by SMS/email. Until that call succeeds,
 #      no money has moved on Paystack's side.
+#
+# FIX (resend OTP): Paystack's /transfer/resend_otp endpoint only accepts
+#      "resend_otp" or "transfer" as valid values for the reason field.
+#      This code previously defaulted to "resend_otp" as a string that
+#      matched the Paystack docs example, but Paystack's live validation
+#      rejected it with "Reason is invalid. ['disable_otp' or 'transfer']".
+#      The correct accepted value for resending a transfer OTP is
+#      "transfer", so the default has been corrected below.
 # =========================
 def paystack_finalize_transfer(transfer_code: str, otp: str) -> dict:
     try:
@@ -782,7 +790,7 @@ def paystack_finalize_transfer(transfer_code: str, otp: str) -> dict:
         return {"status": False, "message": str(e)}
 
 
-def paystack_resend_otp(transfer_code: str, reason: str = "resend_otp") -> dict:
+def paystack_resend_otp(transfer_code: str, reason: str = "transfer") -> dict:
     try:
         res = requests.post(
             "https://api.paystack.co/transfer/resend_otp",
@@ -2599,7 +2607,7 @@ async def verify_withdraw_account(request: Request, payload: VerifyAccountReques
 
 
 # =========================
-# NEW: AGENT WITHDRAW — VERIFY OTP
+# AGENT WITHDRAW — VERIFY OTP
 # FIX: finalizes a Paystack transfer that came back with status "otp".
 #      Only after this succeeds does the debit transaction get recorded —
 #      before this call, the wallet balance was deducted but no money had
@@ -2670,7 +2678,7 @@ async def verify_withdraw_otp(request: Request, payload: WithdrawOTPRequest):
 
 
 # =========================
-# NEW: AGENT WITHDRAW — RESEND OTP
+# AGENT WITHDRAW — RESEND OTP
 # =========================
 @app.post("/agent/withdraw/resend-otp")
 @limiter.limit("3/minute")
