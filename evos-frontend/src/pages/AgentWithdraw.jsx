@@ -5,6 +5,10 @@ const NETWORKS = ["MTN", "TELECEL", "AIRTELTIGO"];
 const NETWORK_LABELS = { MTN: "MTN", TELECEL: "Telecel", AIRTELTIGO: "AirtelTigo" };
 const DEFAULT_FEE_PERCENT = 4; // fallback used only until /agent/withdraw/fee-info loads
 
+// ── temporary provider availability flags ───────────────────────────
+// Moolre is disabled for now — flip this back to true when it's ready.
+const MOOLRE_ENABLED = false;
+
 export default function AgentWithdraw({ user, setPage }) {
   // ── step 1 = provider, 2 = amount, 3 = number+network, 4 = confirm ──
   const [step, setStep] = useState(1);
@@ -212,7 +216,7 @@ export default function AgentWithdraw({ user, setPage }) {
           <h2 style={S.successTitle}>Transfer Initiated</h2>
           <p style={S.successSub}>
             GH₵ {receivedAmount.toFixed(2)} is on its way to {mobileNumber}.
-            Funds typically arrive within a few minutes.
+            Instant transfer — funds typically arrive within minutes.
           </p>
           <div style={S.successMeta}>
             <span style={S.metaLabel}>Withdrawn from wallet</span>
@@ -313,17 +317,25 @@ export default function AgentWithdraw({ user, setPage }) {
               }}
             >
               <div style={S.providerIcon}>🏦</div>
-              <div style={S.providerName}>Paystack</div>
+              <div style={S.providerName}>
+                Paystack <span style={S.instantBadge}>⚡ Instant</span>
+              </div>
               <div style={S.providerDesc}>
-                Faster settlement · resolves account name before sending
+                Instant settlement · resolves account name before sending
               </div>
               {provider === "paystack" && <div style={S.providerCheck}>✓</div>}
             </div>
 
             <div
-              onClick={() => { setProvider("moolre"); clear(); }}
+              onClick={() => {
+                if (!MOOLRE_ENABLED) return;
+                setProvider("moolre"); clear();
+              }}
+              aria-disabled={!MOOLRE_ENABLED}
               style={{
                 ...S.providerCard,
+                cursor: MOOLRE_ENABLED ? "pointer" : "not-allowed",
+                opacity: MOOLRE_ENABLED ? 1 : 0.45,
                 border: provider === "moolre"
                   ? "2px solid #a78bfa"
                   : "2px solid rgba(255,255,255,0.07)",
@@ -337,16 +349,22 @@ export default function AgentWithdraw({ user, setPage }) {
               <div style={S.providerDesc}>
                 Alternative transfer route · supports all Ghana networks
               </div>
-              {provider === "moolre" && <div style={{ ...S.providerCheck, color: "#a78bfa" }}>✓</div>}
+              {!MOOLRE_ENABLED && <div style={S.comingSoonBadge}>Coming soon</div>}
+              {MOOLRE_ENABLED && provider === "moolre" && (
+                <div style={{ ...S.providerCheck, color: "#a78bfa" }}>✓</div>
+              )}
             </div>
           </div>
 
           <div style={S.feeNotice}>
+            ⚡ Withdrawals are instant and fast — funds typically land in your mobile money
+            wallet within minutes.
+            <br />
             ℹ️ A {feePercent}% liquidity fee applies to all withdrawals. It's deducted from
             the payout, not added on top — your wallet is only ever charged what you type in.
-            <p>Liquidity fee (4%) </p>
-            <p>Includes:</p> 
-            <p>Instant Mobile Money + 24/7 Support + No failed transactions</p> 
+            <p>Liquidity fee ({feePercent}%) </p>
+            <p>Includes:</p>
+            <p>Instant Mobile Money + 24/7 Support + No failed transactions</p>
           </div>
 
           <button
@@ -410,7 +428,7 @@ export default function AgentWithdraw({ user, setPage }) {
             </div>
           )}
 
-          <p style={S.hint}>Max: GH₵ {wallet.toFixed(2)} · Min: GH₵ 5</p>
+          <p style={S.hint}>Max: GH₵ {wallet.toFixed(2)} · Min: GH₵ 5 · ⚡ Instant payout</p>
 
           <div style={S.navRow}>
             <button onClick={() => { clear(); setStep(1); }} style={S.ghostBtn}>← Back</button>
@@ -507,7 +525,7 @@ export default function AgentWithdraw({ user, setPage }) {
 
           {resolvedName ? (
             <div style={S.verifiedBadge}>
-              ✅ Account name verified — funds will go to <strong>{resolvedName}</strong>
+              ✅ Account name verified — funds will go to <strong>{resolvedName}</strong>. ⚡ Instant transfer.
             </div>
           ) : (
             <div style={S.warnBadge}>
@@ -655,7 +673,7 @@ const styles = {
     transition: "0.15s",
   },
   providerIcon: { fontSize: 22, marginBottom: 6 },
-  providerName: { fontSize: 15, fontWeight: 800, color: "#e2e8f0", marginBottom: 4 },
+  providerName: { fontSize: 15, fontWeight: 800, color: "#e2e8f0", marginBottom: 4, display: "flex", alignItems: "center", gap: 8 },
   providerDesc: { fontSize: 12, color: "#64748b", lineHeight: 1.5 },
   providerCheck: {
     position: "absolute",
@@ -664,6 +682,29 @@ const styles = {
     fontSize: 16,
     fontWeight: 900,
     color: "#38bdf8",
+  },
+  instantBadge: {
+    fontSize: 10,
+    fontWeight: 800,
+    color: "#facc15",
+    background: "rgba(250,204,21,0.1)",
+    border: "1px solid rgba(250,204,21,0.3)",
+    borderRadius: 20,
+    padding: "2px 8px",
+  },
+  comingSoonBadge: {
+    position: "absolute",
+    top: 14,
+    right: 16,
+    fontSize: 10,
+    fontWeight: 800,
+    color: "#94a3b8",
+    background: "rgba(255,255,255,0.06)",
+    border: "1px solid rgba(255,255,255,0.12)",
+    borderRadius: 20,
+    padding: "3px 10px",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
 
   feeNotice: {
