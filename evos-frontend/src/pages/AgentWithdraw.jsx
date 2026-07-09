@@ -362,9 +362,6 @@ export default function AgentWithdraw({ user, setPage }) {
             <br />
             ℹ️ A {feePercent}% liquidity fee applies to all withdrawals. It's deducted from
             the payout, not added on top — your wallet is only ever charged what you type in.
-            <p>Liquidity fee ({feePercent}%) </p>
-            <p>Includes:</p>
-            <p>Instant Mobile Money + 24/7 Support + No failed transactions</p>
           </div>
 
           <button
