@@ -395,6 +395,28 @@ AGYEKUMDATA_CATEGORY_MAP = {
 MAX_ATTEMPTS_PER_PROVIDER = 3
 
 # =========================
+# WITHDRAWAL LIQUIDITY FEE
+# A flat 4% liquidity fee is charged on every agent withdrawal. The agent's
+# wallet is debited the FULL amount they typed (e.g. GH₵100), but only the
+# amount after the fee is actually sent out (e.g. GH₵96). The fee itself
+# stays with the business.
+#
+#   fee           = amount * WITHDRAWAL_FEE_PERCENT / 100
+#   payout_amount = amount - fee   (this is what actually gets transferred)
+#
+#      Requires these columns on the "agent_withdrawals" table (run once in
+#      Supabase):
+#        alter table agent_withdrawals add column if not exists fee numeric default 0;
+#        alter table agent_withdrawals add column if not exists payout_amount numeric default 0;
+# =========================
+WITHDRAWAL_FEE_PERCENT = 4.0
+
+def calc_withdrawal_fee(amount: float):
+    fee = round(float(amount) * (WITHDRAWAL_FEE_PERCENT / 100), 2)
+    payout_amount = round(float(amount) - fee, 2)
+    return fee, payout_amount
+
+# =========================
 # BUNDLES GHANA HELPER
 # =========================
 def call_bundles_ghana(endpoint: str, method: str = "GET", body: dict = None):
@@ -2207,7 +2229,20 @@ async def agent_sales(request: Request, agent_id: int, _: int = Depends(require_
 
 # =========================
 # AGENT WITHDRAW
+# NOTE: "Enable OTP for transfers" must be OFF in the Paystack dashboard
+#       (Settings -> Preferences) for this flow to work correctly. That
+#       setting sends the OTP to the phone/email registered on the
+#       business's Paystack account — NOT to the agent or the transfer
+#       recipient — so agents have no way to receive or enter it. With
+#       OTP disabled, /transfer returns "success" or "pending" directly
+#       and the payout completes without any manual step.
 # =========================
+@app.get("/agent/withdraw/fee-info")
+@limiter.limit("30/minute")
+def get_withdraw_fee_info(request: Request):
+    return {"fee_percent": WITHDRAWAL_FEE_PERCENT}
+
+
 @app.post("/agent/withdraw")
 @limiter.limit("5/minute")
 async def request_withdrawal(request: Request, payload: WithdrawRequest):
@@ -2238,6 +2273,8 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
     def refund():
         supabase.table("agent_wallets").update({"balance": balance}).eq("agent_id", agent_id).execute()
 
+    fee, payout_amount = calc_withdrawal_fee(amount)
+
     # ── PAYSTACK PATH ───────────────────────────────────────────
     if provider == "paystack":
         if network not in PAYSTACK_MOMO_BANK_CODE:
@@ -2249,6 +2286,8 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
         wd = supabase.table("agent_withdrawals").insert({
             "agent_id":       agent_id,
             "amount":         amount,
+            "fee":            fee,
+            "payout_amount":  payout_amount,
             "account_name":   account_name,
             "account_number": mobile_number,
             "bank_name":      network,
@@ -2270,8 +2309,10 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
             return {"error": recipient.get("message", "Could not create transfer recipient")}
 
         recipient_code = recipient["data"]["recipient_code"]
+        # NOTE: only the post-fee amount is actually transferred. The agent's
+        # wallet was already debited the full `amount` above.
         transfer = paystack_initiate_transfer(
-            amount=amount,
+            amount=payout_amount,
             recipient_code=recipient_code,
             reference=paystack_ref,
             reason=f"EVOS Agent Withdrawal #{withdrawal_id}",
@@ -2282,8 +2323,25 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
             supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
             return {"error": transfer.get("message", "Paystack transfer failed")}
 
-        tdata        = transfer.get("data", {})
-        transfer_status = tdata.get("status")
+        tdata           = transfer.get("data", {})
+        transfer_status = tdata.get("status")   # expected "success" | "pending" with OTP disabled
+
+        # Safety net: if OTP somehow gets re-enabled on the Paystack dashboard
+        # and a transfer comes back requiring it, we can't ask the agent for
+        # a code they'll never receive — fail safely and refund instead of
+        # silently holding their balance forever.
+        if transfer_status == "otp":
+            refund()
+            supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
+            logger.error(
+                "PAYSTACK WITHDRAW: transfer %s came back requiring OTP — is 'Enable OTP for "
+                "transfers' still on in the Paystack dashboard? Refunding agent %s.",
+                withdrawal_id, agent_id
+            )
+            return {
+                "error": "Withdrawals are temporarily unavailable. Please contact support.",
+            }
+
         final_status = "paid" if transfer_status == "success" else "processing"
 
         supabase.table("agent_withdrawals").update({
@@ -2304,6 +2362,9 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
             "message":         "Transfer initiated. Funds will arrive shortly.",
             "withdrawal_id":   withdrawal_id,
             "transfer_status": final_status,
+            "amount":          amount,
+            "fee":             fee,
+            "payout_amount":   payout_amount,
         }
 
     # ── MOOLRE PATH (unchanged behaviour, now explicitly chosen) ──
@@ -2317,6 +2378,8 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
     wd = supabase.table("agent_withdrawals").insert({
         "agent_id":       agent_id,
         "amount":         amount,
+        "fee":            fee,
+        "payout_amount":  payout_amount,
         "account_name":   account_name,
         "account_number": mobile_number,
         "bank_name":      network,
@@ -2332,11 +2395,13 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
     withdrawal_id = wd.data[0]["id"]
 
     try:
+        # NOTE: only the post-fee amount is actually transferred. The agent's
+        # wallet was already debited the full `amount` above.
         moolre_res = call_moolre("transfer", {
             "type":          1,
             "channel":       channel,
             "currency":      "GHS",
-            "amount":        str(amount),
+            "amount":        str(payout_amount),
             "receiver":      mobile_number,
             "externalref":   external_ref,
             "reference":     f"EVOS Agent Withdrawal #{withdrawal_id}",
@@ -2360,6 +2425,9 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
                 "message":         "Transfer initiated. Funds will arrive shortly.",
                 "withdrawal_id":   withdrawal_id,
                 "transfer_status": final_status,
+                "amount":          amount,
+                "fee":             fee,
+                "payout_amount":   payout_amount,
             }
         else:
             refund()
