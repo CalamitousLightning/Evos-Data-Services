@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 const API_BASE = "https://api.evosdata.xyz";
 const NETWORKS = ["MTN", "TELECEL", "AIRTELTIGO"];
 const NETWORK_LABELS = { MTN: "MTN", TELECEL: "Telecel", AIRTELTIGO: "AirtelTigo" };
+const DEFAULT_FEE_PERCENT = 4; // fallback used only until /agent/withdraw/fee-info loads
 
 export default function AgentWithdraw({ user, setPage }) {
   // ── step 1 = provider, 2 = amount, 3 = number+network, 4 = confirm ──
@@ -18,12 +19,22 @@ export default function AgentWithdraw({ user, setPage }) {
   const [recipientCode, setRecipientCode] = useState(""); // returned by verify-account (Paystack)
 
   const [wallet, setWallet] = useState(0);
+  const [feePercent, setFeePercent] = useState(DEFAULT_FEE_PERCENT);
   const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [message, setMessage] = useState({ text: "", ok: false });
   const [done, setDone] = useState(false);
+  const [receivedAmount, setReceivedAmount] = useState(0); // actual payout after fee, set on success
 
-  // ── load wallet ────────────────────────────────────────────────────
+  // ── fee math helper ──────────────────────────────────────────────
+  const feeFor = (amt) => {
+    const a = Number(amt) || 0;
+    const fee = Math.round(a * (feePercent / 100) * 100) / 100;
+    const payout = Math.round((a - fee) * 100) / 100;
+    return { fee, payout };
+  };
+
+  // ── load wallet + fee rate ───────────────────────────────────────
   useEffect(() => {
     if (!user?.id) return;
     (async () => {
@@ -36,6 +47,16 @@ export default function AgentWithdraw({ user, setPage }) {
         setWallet(Number(data.wallet_balance || 0));
       } catch {
         /* silent */
+      }
+    })();
+
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/agent/withdraw/fee-info`);
+        const data = await res.json();
+        if (data?.fee_percent != null) setFeePercent(Number(data.fee_percent));
+      } catch {
+        /* silent — keep DEFAULT_FEE_PERCENT */
       }
     })();
   }, [user]);
@@ -149,7 +170,13 @@ export default function AgentWithdraw({ user, setPage }) {
       });
 
       if (data.status === "success") {
+        // Wallet is always debited the FULL amount the agent typed — the fee
+        // is taken out of what actually gets sent out, not out of the wallet
+        // twice. Prefer the payout_amount the backend computed; fall back to
+        // a local calculation if it's ever missing.
+        const payout = data.payout_amount != null ? Number(data.payout_amount) : feeFor(amount).payout;
         setWallet((p) => p - Number(amount));
+        setReceivedAmount(payout);
         setDone(true);
         say(data.message || "Transfer initiated. Funds will arrive shortly.", true);
       } else {
@@ -169,11 +196,12 @@ export default function AgentWithdraw({ user, setPage }) {
   const reset = () => {
     setStep(1); setProvider(""); setAmount(""); setMobileNumber("");
     setNetwork(""); setResolvedName(""); setRecipientCode("");
-    setDone(false); clear();
+    setDone(false); setReceivedAmount(0); clear();
   };
 
   // ── shared styles ──────────────────────────────────────────────────
   const S = styles;
+  const { fee: previewFee, payout: previewPayout } = feeFor(amount);
 
   // ── success screen ─────────────────────────────────────────────────
   if (done) {
@@ -183,9 +211,21 @@ export default function AgentWithdraw({ user, setPage }) {
           <div style={S.successIcon}>✅</div>
           <h2 style={S.successTitle}>Transfer Initiated</h2>
           <p style={S.successSub}>
-            GH₵ {Number(amount).toFixed(2)} is on its way to {mobileNumber}.
+            GH₵ {receivedAmount.toFixed(2)} is on its way to {mobileNumber}.
             Funds typically arrive within a few minutes.
           </p>
+          <div style={S.successMeta}>
+            <span style={S.metaLabel}>Withdrawn from wallet</span>
+            <span style={S.metaValue}>GH₵ {Number(amount).toFixed(2)}</span>
+          </div>
+          <div style={S.successMeta}>
+            <span style={S.metaLabel}>Liquidity fee ({feePercent}%)</span>
+            <span style={S.metaValue}>GH₵ {(Number(amount) - receivedAmount).toFixed(2)}</span>
+          </div>
+          <div style={S.successMeta}>
+            <span style={S.metaLabel}>You'll receive</span>
+            <span style={{ ...S.metaValue, color: "#4ade80" }}>GH₵ {receivedAmount.toFixed(2)}</span>
+          </div>
           <div style={S.successMeta}>
             <span style={S.metaLabel}>Via</span>
             <span style={S.metaValue}>{provider === "paystack" ? "Paystack" : "Moolre"}</span>
@@ -197,7 +237,7 @@ export default function AgentWithdraw({ user, setPage }) {
             </div>
           ) : null}
           <div style={S.successMeta}>
-            <span style={S.metaLabel}>New balance</span>
+            <span style={S.metaLabel}>New wallet balance</span>
             <span style={S.metaValue}>GH₵ {wallet.toFixed(2)}</span>
           </div>
           <button onClick={reset} style={{ ...S.primaryBtn, marginTop: 20 }}>
@@ -301,6 +341,11 @@ export default function AgentWithdraw({ user, setPage }) {
             </div>
           </div>
 
+          <div style={S.feeNotice}>
+            ℹ️ A {feePercent}% liquidity fee applies to all withdrawals. It's deducted from
+            the payout, not added on top — your wallet is only ever charged what you type in.
+          </div>
+
           <button
             onClick={() => { if (validateStep1()) { clear(); setStep(2); } }}
             style={S.primaryBtn}
@@ -319,7 +364,7 @@ export default function AgentWithdraw({ user, setPage }) {
           <input
             type="number"
             inputMode="decimal"
-            placeholder="e.g. 50"
+            placeholder="e.g. 100"
             value={amount}
             onChange={(e) => { setAmount(e.target.value); clear(); }}
             style={S.input}
@@ -343,6 +388,24 @@ export default function AgentWithdraw({ user, setPage }) {
               </div>
             ))}
           </div>
+
+          {/* live fee breakdown */}
+          {Number(amount) > 0 && (
+            <div style={S.feeBreakdown}>
+              <div style={S.feeRow}>
+                <span style={S.feeLabel}>You're withdrawing</span>
+                <span style={S.feeValue}>GH₵ {Number(amount).toFixed(2)}</span>
+              </div>
+              <div style={S.feeRow}>
+                <span style={S.feeLabel}>Liquidity fee ({feePercent}%)</span>
+                <span style={{ ...S.feeValue, color: "#f87171" }}>− GH₵ {previewFee.toFixed(2)}</span>
+              </div>
+              <div style={{ ...S.feeRow, ...S.feeRowFinal }}>
+                <span style={{ ...S.feeLabel, fontWeight: 800, color: "#cbd5e1" }}>You'll receive</span>
+                <span style={{ ...S.feeValue, fontWeight: 900, color: "#4ade80" }}>GH₵ {previewPayout.toFixed(2)}</span>
+              </div>
+            </div>
+          )}
 
           <p style={S.hint}>Max: GH₵ {wallet.toFixed(2)} · Min: GH₵ 5</p>
 
@@ -424,6 +487,9 @@ export default function AgentWithdraw({ user, setPage }) {
 
           <div style={S.confirmCard}>
             <ConfirmRow label="Amount"   value={`GH₵ ${Number(amount).toFixed(2)}`} highlight />
+            <ConfirmRow label="Liquidity fee" value={`− GH₵ ${previewFee.toFixed(2)} (${feePercent}%)`} warn />
+            <ConfirmRow label="You'll receive" value={`GH₵ ${previewPayout.toFixed(2)}`} verified />
+            <div style={S.confirmDivider} />
             <ConfirmRow label="To"       value={mobileNumber} />
             <ConfirmRow label="Network"  value={NETWORK_LABELS[network] || network} />
             <ConfirmRow label="Via"      value={provider === "paystack" ? "Paystack" : "Moolre"} />
@@ -433,7 +499,7 @@ export default function AgentWithdraw({ user, setPage }) {
               <ConfirmRow label="Account name" value="Not verified — double-check number" warn />
             )}
             <div style={S.confirmDivider} />
-            <ConfirmRow label="Balance after" value={`GH₵ ${(wallet - Number(amount)).toFixed(2)}`} />
+            <ConfirmRow label="Wallet balance after" value={`GH₵ ${(wallet - Number(amount)).toFixed(2)}`} />
           </div>
 
           {resolvedName ? (
@@ -451,7 +517,7 @@ export default function AgentWithdraw({ user, setPage }) {
             disabled={loading}
             style={{ ...S.primaryBtn, background: "linear-gradient(135deg,#22c55e,#16a34a)", opacity: loading ? 0.6 : 1 }}
           >
-            {loading ? "Sending…" : `Confirm & Send GH₵ ${Number(amount).toFixed(2)}`}
+            {loading ? "Sending…" : `Confirm & Send GH₵ ${previewPayout.toFixed(2)}`}
           </button>
 
           <div style={S.navRow}>
@@ -576,7 +642,7 @@ const styles = {
     display: "flex",
     flexDirection: "column",
     gap: 12,
-    marginBottom: 20,
+    marginBottom: 16,
   },
   providerCard: {
     padding: "16px 18px",
@@ -597,11 +663,42 @@ const styles = {
     color: "#38bdf8",
   },
 
+  feeNotice: {
+    background: "rgba(56,189,248,0.08)",
+    border: "1px solid rgba(56,189,248,0.25)",
+    borderRadius: 10,
+    padding: "10px 14px",
+    fontSize: 12,
+    color: "#7dd3fc",
+    marginBottom: 16,
+    lineHeight: 1.5,
+  },
+
+  // fee breakdown (step 2)
+  feeBreakdown: {
+    background: "rgba(15,23,42,0.9)",
+    border: "1px solid rgba(255,255,255,0.07)",
+    borderRadius: 12,
+    padding: "10px 14px 4px",
+    marginBottom: 14,
+  },
+  feeRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    padding: "7px 0",
+  },
+  feeRowFinal: {
+    borderTop: "1px solid rgba(255,255,255,0.07)",
+    marginTop: 2,
+  },
+  feeLabel: { fontSize: 12.5, color: "#94a3b8" },
+  feeValue: { fontSize: 13, fontWeight: 700, color: "#e2e8f0" },
+
   // amount quick picks
   quickRow: {
     display: "flex",
     gap: 8,
-    marginBottom: 10,
+    marginBottom: 14,
   },
   quickChip: {
     flex: 1,
