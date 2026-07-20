@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import API, { verifyNumber } from "../api";
 
 export default function Shop() {
@@ -17,6 +17,8 @@ export default function Shop() {
   const [verifyInfo, setVerifyInfo] = useState(null); // { checked, servable, recommendation, message }
   const [verifying, setVerifying] = useState(false);
   const [verifyTimedOut, setVerifyTimedOut] = useState(false); // watchdog: unblocks Buy if check is slow
+  const [showVerifyResult, setShowVerifyResult] = useState(false); // keeps the popup up briefly to show the outcome
+  const resultTimerRef = useRef(null);
 
   const user = JSON.parse(localStorage.getItem("user") || "{}");
   const user_id = user?.id || null;
@@ -55,9 +57,16 @@ export default function Shop() {
     if (network !== "MTN" || !validPhone(num)) return;
     setVerifying(true);
     setVerifyTimedOut(false);
+    if (resultTimerRef.current) clearTimeout(resultTimerRef.current);
+    setShowVerifyResult(false);
     try {
       const res = await verifyNumber(num, network); // 7s timeout, see api.js
       setVerifyInfo(res.data);
+      // Keep the popup up a moment longer so the result (verified / needs
+      // activation) is actually readable, instead of vanishing the instant
+      // the "checking" state flips off.
+      setShowVerifyResult(true);
+      resultTimerRef.current = setTimeout(() => setShowVerifyResult(false), 2800);
     } catch {
       setVerifyInfo(null);
     } finally {
@@ -335,7 +344,13 @@ export default function Shop() {
               placeholder="e.g. 0244000000"
               value={phone}
               maxLength={10}
-              onChange={(e) => { setPhone(e.target.value); setVerifyInfo(null); setVerifyTimedOut(false); }}
+              onChange={(e) => {
+                setPhone(e.target.value);
+                setVerifyInfo(null);
+                setVerifyTimedOut(false);
+                if (resultTimerRef.current) clearTimeout(resultTimerRef.current);
+                setShowVerifyResult(false);
+              }}
             />
             {phone.length > 0 && !validPhone(phone) && (
               <p style={styles.phoneHint}>⚠️ Must be 10 digits starting with 0</p>
@@ -398,12 +413,31 @@ export default function Shop() {
       </div>
 
       {/* VERIFY NUMBER POPUP */}
-      {checkingBlocking && (
+      {(checkingBlocking || showVerifyResult) && (
         <div style={styles.verifyOverlay}>
           <div style={styles.verifyPopup}>
-            <div style={styles.verifySpinner} />
-            <p style={styles.verifyPopupText}>Checking number...</p>
-            <p style={styles.verifyPopupSub}>Confirming this MTN number is active</p>
+            {checkingBlocking ? (
+              <>
+                <div style={styles.verifySpinner} />
+                <p style={styles.verifyPopupText}>Checking number...</p>
+                <p style={styles.verifyPopupSub}>Confirming this MTN number is active</p>
+              </>
+            ) : verifyInfo?.checked && verifyInfo?.recommendation === "activate_first" ? (
+              <>
+                <p style={styles.verifyPopupText}>⚠️ On hold — activation needed</p>
+                <p style={styles.verifyPopupSub}>{verifyInfo.message}</p>
+              </>
+            ) : verifyInfo?.checked && verifyInfo?.recommendation === "sell_any" ? (
+              <>
+                <p style={styles.verifyPopupText}>✅ Number verified</p>
+                <p style={styles.verifyPopupSub}>Active on MTN — any bundle size will deliver instantly</p>
+              </>
+            ) : (
+              <>
+                <p style={styles.verifyPopupText}>ℹ️ Couldn't confirm status</p>
+                <p style={styles.verifyPopupSub}>You can still continue with your order</p>
+              </>
+            )}
           </div>
         </div>
       )}
