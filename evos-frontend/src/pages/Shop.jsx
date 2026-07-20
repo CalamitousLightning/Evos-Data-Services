@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import API from "../api";
+import API, { verifyNumber } from "../api";
 
 export default function Shop() {
   const [step, setStep] = useState(1);
@@ -14,6 +14,8 @@ export default function Shop() {
   const [pendingMsg, setPendingMsg] = useState(""); // ← new
   const [agree, setAgree] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [verifyInfo, setVerifyInfo] = useState(null); // { checked, servable, recommendation, message }
+  const [verifying, setVerifying] = useState(false);
 
   const user = JSON.parse(localStorage.getItem("user") || "{}");
   const user_id = user?.id || null;
@@ -47,6 +49,20 @@ export default function Shop() {
 
   const validPhone = (num) => /^0\d{9}$/.test(num);
 
+  // Informational-only pre-check — never blocks a purchase, just warns.
+  const checkNumber = async (num) => {
+    if (network !== "MTN" || !validPhone(num)) return;
+    setVerifying(true);
+    try {
+      const res = await verifyNumber(num, network);
+      setVerifyInfo(res.data);
+    } catch {
+      setVerifyInfo(null);
+    } finally {
+      setVerifying(false);
+    }
+  };
+
   const handleBuy = async () => {
     try {
       setError("");
@@ -57,6 +73,17 @@ export default function Shop() {
       if (!agree) { setError("You must confirm the refund policy"); return; }
 
       setLoading(true);
+
+      // Re-check on submit (short timeout, never blocks checkout either way)
+      if (network === "MTN") {
+        try {
+          const vRes = await verifyNumber(phone, network, 5000);
+          setVerifyInfo(vRes.data);
+        } catch {
+          // ignore — purely informational
+        }
+      }
+
       const res = await API.post("/orders/create", {
         user_id, network, bundle, phone,
         email: email || "guest@evoshub.com",
@@ -282,13 +309,23 @@ export default function Shop() {
               placeholder="e.g. 0244000000"
               value={phone}
               maxLength={10}
-              onChange={(e) => setPhone(e.target.value)}
+              onChange={(e) => { setPhone(e.target.value); setVerifyInfo(null); }}
+              onBlur={(e) => checkNumber(e.target.value)}
             />
             {phone.length > 0 && !validPhone(phone) && (
               <p style={styles.phoneHint}>⚠️ Must be 10 digits starting with 0</p>
             )}
             {phone.length > 0 && validPhone(phone) && (
               <p style={styles.phoneHintGood}>✅ Looks good!</p>
+            )}
+            {verifying && network === "MTN" && (
+              <p style={styles.verifyChecking}>🔎 Checking number...</p>
+            )}
+            {!verifying && verifyInfo?.checked && verifyInfo?.recommendation === "activate_first" && (
+              <p style={styles.verifyWarning}>⚠️ {verifyInfo.message}</p>
+            )}
+            {!verifying && verifyInfo?.checked && verifyInfo?.recommendation === "sell_any" && (
+              <p style={styles.phoneHintGood}>✅ Number is active on MTN's network</p>
             )}
 
             <label style={styles.inputLabel}>📧 Email (for receipt)</label>
@@ -480,6 +517,8 @@ const styles = {
   },
   phoneHint: { fontSize: 12, color: "#f87171", margin: "0 0 14px", paddingLeft: 2 },
   phoneHintGood: { fontSize: 12, color: "#22c55e", margin: "0 0 14px", paddingLeft: 2 },
+  verifyChecking: { fontSize: 12, color: "#64748b", margin: "0 0 14px", paddingLeft: 2 },
+  verifyWarning: { fontSize: 12, color: "#f59e0b", margin: "0 0 14px", paddingLeft: 2, lineHeight: 1.5 },
 
   checkWrap: {
     display: "flex", gap: 10, alignItems: "flex-start",
