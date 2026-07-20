@@ -38,10 +38,52 @@ const bundleAccents = [
 function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm, processing }) {
   const [phone, setPhone] = useState("");
   const [accepted, setAccepted] = useState(false);
+  const [verifyInfo, setVerifyInfo] = useState(null);
+  const [verifying, setVerifying] = useState(false);
 
   const cost = Number(bundle.cost_price);
   const hasFunds = walletBalance >= cost;
   const canSubmit = phone.trim().length >= 9 && accepted && !processing && hasFunds;
+
+  // Informational-only MTN pre-check — never blocks the purchase, just warns.
+  const checkNumber = async (num) => {
+    if (network !== "MTN" || num.trim().length < 9) return;
+    setVerifying(true);
+    try {
+      const res = await fetch(`${API}/verify-number`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phoneNumber: num.trim(), network }),
+      });
+      const data = await res.json();
+      setVerifyInfo(data);
+    } catch {
+      setVerifyInfo(null);
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const handleConfirmClick = async () => {
+    if (network === "MTN") {
+      try {
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), 5000);
+        const res = await fetch(`${API}/verify-number`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phoneNumber: phone.trim(), network }),
+          signal: controller.signal,
+        });
+        clearTimeout(t);
+        const data = await res.json();
+        setVerifyInfo(data);
+      } catch {
+        // ignore — purely informational, never blocks the buy
+      }
+    }
+    onConfirm(phone.trim());
+  };
 
   return (
     <div style={modal.overlay}>
@@ -101,10 +143,20 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
           type="tel"
           placeholder="e.g. 0244000000"
           value={phone}
-          onChange={(e) => setPhone(e.target.value)}
+          onChange={(e) => { setPhone(e.target.value); setVerifyInfo(null); }}
+          onBlur={(e) => checkNumber(e.target.value)}
           style={modal.input}
           disabled={processing}
         />
+        {verifying && network === "MTN" && (
+          <p style={modal.verifyChecking}>🔎 Checking number...</p>
+        )}
+        {!verifying && verifyInfo?.checked && verifyInfo?.recommendation === "activate_first" && (
+          <p style={modal.verifyWarning}>⚠️ {verifyInfo.message}</p>
+        )}
+        {!verifying && verifyInfo?.checked && verifyInfo?.recommendation === "sell_any" && (
+          <p style={modal.verifyGood}>✅ Number is active on MTN's network</p>
+        )}
 
         {/* Confirm checkbox */}
         <label style={modal.checkRow}>
@@ -122,7 +174,7 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
         </label>
 
         <button
-          onClick={() => onConfirm(phone.trim())}
+          onClick={handleConfirmClick}
           disabled={!canSubmit}
           style={{
             ...modal.buyBtn,
@@ -555,6 +607,9 @@ const modal = {
   walletRow: { borderRadius: 12, padding: "10px 14px", marginBottom: 16, display: "flex", flexDirection: "column", gap: 4 },
   label: { display: "block", fontSize: 12, color: "#64748b", fontWeight: 800, marginBottom: 6 },
   input: { width: "100%", padding: "13px 14px", borderRadius: 14, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(2,6,23,0.75)", color: "#fff", fontSize: 14, fontWeight: 600, marginBottom: 14, boxSizing: "border-box", outline: "none" },
+  verifyChecking: { fontSize: 12, color: "#64748b", margin: "-8px 0 14px", paddingLeft: 2 },
+  verifyWarning: { fontSize: 12, color: "#f59e0b", margin: "-8px 0 14px", paddingLeft: 2, lineHeight: 1.5 },
+  verifyGood: { fontSize: 12, color: "#22c55e", margin: "-8px 0 14px", paddingLeft: 2 },
   checkRow: { display: "flex", alignItems: "flex-start", background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)", padding: "12px 14px", borderRadius: 14, marginBottom: 18, cursor: "pointer" },
   checkText: { fontSize: 12, color: "#94a3b8", lineHeight: 1.55, fontWeight: 600 },
   buyBtn: { width: "100%", padding: 15, borderRadius: 16, border: "none", color: "white", fontWeight: 900, fontSize: 15, cursor: "pointer", boxShadow: "0 6px 24px rgba(34,197,94,0.25)", marginBottom: 10, transition: "opacity 0.2s" },
