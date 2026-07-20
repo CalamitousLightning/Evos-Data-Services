@@ -53,8 +53,11 @@ export default function Shop() {
   const validPhone = (num) => /^0\d{9}$/.test(num);
 
   // Informational-only pre-check — never blocks a purchase, just warns.
+  // Fired once, on submit (see handleBuy) rather than as-you-type, so the
+  // scarce 2-checks/minute vendor quota is spent on real checkout attempts
+  // instead of being burned by every keystroke.
   const checkNumber = async (num) => {
-    if (network !== "MTN" || !validPhone(num)) return;
+    if (network !== "MTN" || !validPhone(num)) return null;
     setVerifying(true);
     setVerifyTimedOut(false);
     if (resultTimerRef.current) clearTimeout(resultTimerRef.current);
@@ -67,21 +70,14 @@ export default function Shop() {
       // the "checking" state flips off.
       setShowVerifyResult(true);
       resultTimerRef.current = setTimeout(() => setShowVerifyResult(false), 2800);
+      return res.data;
     } catch {
       setVerifyInfo(null);
+      return null;
     } finally {
       setVerifying(false);
     }
   };
-
-  // Auto-run the check the moment a valid MTN number is typed — no need to
-  // wait for blur/tap. Small debounce just guards against re-firing mid-edit.
-  useEffect(() => {
-    if (network !== "MTN" || !validPhone(phone)) return;
-    const t = setTimeout(() => checkNumber(phone), 250);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phone, network]);
 
   // Watchdog: if the check is still running after 6s, stop blocking the UI.
   // The request itself is capped well under 10s (7s frontend / 5s backend),
@@ -104,19 +100,16 @@ export default function Shop() {
       if (!validPhone(phone)) { setError("Phone must be 10 digits and start with 0"); return; }
       if (!agree) { setError("You must confirm the refund policy"); return; }
 
-      setLoading(true);
-
-      // Re-check on submit only if we don't already have a result for this
-      // number (e.g. the earlier auto-check timed out). Short timeout,
-      // never blocks checkout either way.
-      if (network === "MTN" && !verifyInfo?.checked) {
-        try {
-          const vRes = await verifyNumber(phone, network, 5000);
-          setVerifyInfo(vRes.data);
-        } catch {
-          // ignore — purely informational
-        }
+      // Run the verify check right here, on submit, instead of as-you-type.
+      // This is the only place it fires now, so the 2-checks/minute vendor
+      // quota goes toward people actually completing an order rather than
+      // being spent on every keystroke. Purely informational — whatever the
+      // result (or timeout/unavailable), checkout still proceeds.
+      if (network === "MTN") {
+        await checkNumber(phone);
       }
+
+      setLoading(true);
 
       const res = await API.post("/orders/create", {
         user_id, network, bundle, phone,
@@ -434,8 +427,8 @@ export default function Shop() {
               </>
             ) : (
               <>
-                <p style={styles.verifyPopupText}>ℹ️ Couldn't confirm status</p>
-                <p style={styles.verifyPopupSub}>You can still continue with your order</p>
+                <p style={styles.verifyPopupText}>Live check unavailable right now</p>
+                <p style={styles.verifyPopupSub}>You can continue — your order isn't affected</p>
               </>
             )}
           </div>

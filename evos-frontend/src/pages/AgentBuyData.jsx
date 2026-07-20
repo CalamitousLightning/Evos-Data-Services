@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 
 const API = "https://api.evosdata.xyz";
 
@@ -41,6 +41,8 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
   const [verifyInfo, setVerifyInfo] = useState(null);
   const [verifying, setVerifying] = useState(false);
   const [verifyTimedOut, setVerifyTimedOut] = useState(false); // watchdog: unblocks Confirm if check is slow
+  const [showVerifyResult, setShowVerifyResult] = useState(false); // keeps the popup up briefly to show the outcome
+  const resultTimerRef = useRef(null);
 
   const cost = Number(bundle.cost_price);
   const hasFunds = walletBalance >= cost;
@@ -48,11 +50,15 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
 
   // Informational-only MTN pre-check — never blocks the purchase, just warns.
   // Bounded to 7s (backend caps its own DataMart call at 5s) so this can
-  // never hang indefinitely.
+  // never hang indefinitely. Fired once, on Confirm (see handleConfirmClick)
+  // rather than as-you-type, so the scarce 2-checks/minute vendor quota is
+  // spent on real purchase attempts instead of being burned by keystrokes.
   const checkNumber = async (num) => {
-    if (network !== "MTN" || num.trim().length < 9) return;
+    if (network !== "MTN" || num.trim().length < 9) return null;
     setVerifying(true);
     setVerifyTimedOut(false);
+    if (resultTimerRef.current) clearTimeout(resultTimerRef.current);
+    setShowVerifyResult(false);
     try {
       const controller = new AbortController();
       const t = setTimeout(() => controller.abort(), 7000);
@@ -65,20 +71,19 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
       clearTimeout(t);
       const data = await res.json();
       setVerifyInfo(data);
+      // Keep the popup up a moment longer so the result (verified / needs
+      // activation) is actually readable, instead of vanishing the instant
+      // the "checking" state flips off.
+      setShowVerifyResult(true);
+      resultTimerRef.current = setTimeout(() => setShowVerifyResult(false), 2800);
+      return data;
     } catch {
       setVerifyInfo(null);
+      return null;
     } finally {
       setVerifying(false);
     }
   };
-
-  // Auto-run the check the moment a valid MTN number is typed.
-  useEffect(() => {
-    if (network !== "MTN" || phone.trim().length < 9) return;
-    const t = setTimeout(() => checkNumber(phone), 250);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phone, network]);
 
   // Watchdog: if the check is still running after 6s, stop blocking the UI.
   useEffect(() => {
@@ -91,22 +96,8 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
   const checkingBlocking = verifying && !verifyTimedOut;
 
   const handleConfirmClick = async () => {
-    if (network === "MTN" && !verifyInfo?.checked) {
-      try {
-        const controller = new AbortController();
-        const t = setTimeout(() => controller.abort(), 5000);
-        const res = await fetch(`${API}/verify-number`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phoneNumber: phone.trim(), network }),
-          signal: controller.signal,
-        });
-        clearTimeout(t);
-        const data = await res.json();
-        setVerifyInfo(data);
-      } catch {
-        // ignore — purely informational, never blocks the buy
-      }
+    if (network === "MTN") {
+      await checkNumber(phone);
     }
     onConfirm(phone.trim());
   };
@@ -169,7 +160,13 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
           type="tel"
           placeholder="e.g. 0244000000"
           value={phone}
-          onChange={(e) => { setPhone(e.target.value); setVerifyInfo(null); setVerifyTimedOut(false); }}
+          onChange={(e) => {
+            setPhone(e.target.value);
+            setVerifyInfo(null);
+            setVerifyTimedOut(false);
+            if (resultTimerRef.current) clearTimeout(resultTimerRef.current);
+            setShowVerifyResult(false);
+          }}
           style={modal.input}
           disabled={processing}
         />
@@ -229,13 +226,32 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
       </div>
 
       {/* VERIFY NUMBER POPUP */}
-      {checkingBlocking && (
+      {(checkingBlocking || showVerifyResult) && (
         <div style={modal.verifyOverlay}>
           <div style={modal.verifyPopup}>
             <style>{`@keyframes evos-spin { to { transform: rotate(360deg); } }`}</style>
-            <div style={modal.verifySpinner} />
-            <p style={modal.verifyPopupText}>Checking number...</p>
-            <p style={modal.verifyPopupSub}>Confirming this MTN number is active</p>
+            {checkingBlocking ? (
+              <>
+                <div style={modal.verifySpinner} />
+                <p style={modal.verifyPopupText}>Checking number...</p>
+                <p style={modal.verifyPopupSub}>Confirming this MTN number is active</p>
+              </>
+            ) : verifyInfo?.checked && verifyInfo?.recommendation === "activate_first" ? (
+              <>
+                <p style={modal.verifyPopupText}>⚠️ On hold — activation needed</p>
+                <p style={modal.verifyPopupSub}>{verifyInfo.message}</p>
+              </>
+            ) : verifyInfo?.checked && verifyInfo?.recommendation === "sell_any" ? (
+              <>
+                <p style={modal.verifyPopupText}>✅ Number verified</p>
+                <p style={modal.verifyPopupSub}>Active on MTN — any bundle size will deliver instantly</p>
+              </>
+            ) : (
+              <>
+                <p style={modal.verifyPopupText}>Live check unavailable right now</p>
+                <p style={modal.verifyPopupSub}>You can continue — your order isn't affected</p>
+              </>
+            )}
           </div>
         </div>
       )}
