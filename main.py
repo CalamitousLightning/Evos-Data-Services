@@ -31,6 +31,8 @@ import uuid
 import asyncio
 import httpx
 import logging
+import time
+import threading
 
 load_dotenv()
 
@@ -77,6 +79,20 @@ PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET_KEY")
 DATAMART_API_KEY = os.getenv("DATAMART_API_KEY")
 DATAMART_WEBHOOK_SECRET = os.getenv("DATAMART_WEBHOOK_SECRET")
 DATAMART_BASE = "https://api.datamartgh.shop/api/developer"
+
+# DataMart caps real /verify-number checks at 2/minute per API key — that's a
+# shared budget across every visitor on the site, not per-user. _verify_cache
+# avoids repeat lookups for the same number (blur + submit re-check land the
+# same result), and _verify_call_times paces us under DataMart's real cap so
+# concurrent users degrade to "unknown" instead of hammering 429s.
+_verify_cache = {}                # normalized phone -> (timestamp, result dict)
+_verify_cache_lock = threading.Lock()
+VERIFY_CACHE_TTL = 300             # seconds
+
+_verify_call_times = []           # timestamps of real calls made to DataMart
+_verify_call_lock = threading.Lock()
+DATAMART_VERIFY_LIMIT = 2          # per DataMart docs
+DATAMART_VERIFY_WINDOW = 60        # seconds
 
 BUNDLES_GHANA_API_KEY = os.getenv("BUNDLES_GHANA_API_KEY")
 BUNDLES_GHANA_API_SECRET = os.getenv("BUNDLES_GHANA_API_SECRET")
@@ -232,6 +248,18 @@ class CreateOrderRequest(BaseModel):
         return v.upper()
 
     @validator("phone")
+    def phone_clean(cls, v):
+        cleaned = re.sub(r"[\s\-\(\)]", "", v)
+        if not re.match(r"^\d{9,15}$", cleaned):
+            raise ValueError("Invalid phone number")
+        return cleaned
+
+
+class VerifyNumberRequest(BaseModel):
+    phoneNumber: str = Field(min_length=9, max_length=15)
+    network: Optional[str] = None  # informational only — check is MTN-specific
+
+    @validator("phoneNumber")
     def phone_clean(cls, v):
         cleaned = re.sub(r"[\s\-\(\)]", "", v)
         if not re.match(r"^\d{9,15}$", cleaned):
@@ -1005,6 +1033,100 @@ def get_prices(request: Request):
     except Exception as e:
         logger.error("PRICES ERROR: %s", str(e))
         raise HTTPException(status_code=500, detail="Failed to load prices")
+
+
+# =========================
+# VERIFY NUMBER (DataMart pre-check)
+# Informational only — never blocks a purchase. Any failure, timeout, or
+# rate-limit from DataMart just falls back to recommendation "unknown" so
+# the frontend can quietly skip the warning banner and let checkout proceed.
+# =========================
+def _can_call_datamart_verify() -> bool:
+    now = time.time()
+    with _verify_call_lock:
+        global _verify_call_times
+        _verify_call_times = [t for t in _verify_call_times if now - t < DATAMART_VERIFY_WINDOW]
+        if len(_verify_call_times) >= DATAMART_VERIFY_LIMIT:
+            return False
+        _verify_call_times.append(now)
+        return True
+
+
+def _unknown_result(message: str) -> dict:
+    return {
+        "status": "success",
+        "checked": False,
+        "servable": True,
+        "recommendation": "unknown",
+        "message": message,
+    }
+
+
+@app.post("/verify-number")
+@limiter.limit("20/minute")
+def verify_number(request: Request, data: VerifyNumberRequest):
+    phone = data.phoneNumber
+    network = (data.network or "").upper()
+
+    # DataMart's check only exists for MTN — anything else is a no-op pass-through
+    if network and network != "MTN":
+        return _unknown_result("Verification only applies to MTN numbers.")
+
+    now = time.time()
+    with _verify_cache_lock:
+        cached = _verify_cache.get(phone)
+        if cached and now - cached[0] < VERIFY_CACHE_TTL:
+            result = dict(cached[1])
+            result["cached"] = True
+            return result
+
+    if not _can_call_datamart_verify():
+        return _unknown_result("Live check is busy right now — you can still continue.")
+
+    try:
+        resp = requests.post(
+            f"{DATAMART_BASE}/verify-number",
+            headers={"X-API-Key": DATAMART_API_KEY},
+            json={"phoneNumber": phone},
+            timeout=8,
+        )
+    except requests.exceptions.RequestException as e:
+        logger.warning("VERIFY NUMBER: request error: %s", str(e))
+        return _unknown_result("Couldn't reach the verification service — you can still continue.")
+
+    if resp.status_code == 429:
+        return _unknown_result("Live check is busy right now — you can still continue.")
+
+    if resp.status_code == 503:
+        return _unknown_result("Verification network is momentarily unavailable — you can still continue.")
+
+    if resp.status_code != 200:
+        logger.warning("VERIFY NUMBER: DataMart returned %s: %s", resp.status_code, resp.text[:200])
+        return _unknown_result("Couldn't verify right now — you can still continue.")
+
+    try:
+        dm_data = resp.json().get("data", {})
+    except ValueError:
+        return _unknown_result("Couldn't verify right now — you can still continue.")
+
+    result = {
+        "status": "success",
+        "checked": True,
+        "phoneNumber": dm_data.get("phoneNumber", phone),
+        "network": dm_data.get("network", "MTN"),
+        "servable": dm_data.get("servable", True),
+        "recommendation": dm_data.get("recommendation", "unknown"),
+        "message": dm_data.get("message", ""),
+        "cached": False,
+    }
+
+    with _verify_cache_lock:
+        # opportunistically drop stale entries so this dict doesn't grow forever
+        for k in [k for k, v in _verify_cache.items() if now - v[0] > VERIFY_CACHE_TTL]:
+            del _verify_cache[k]
+        _verify_cache[phone] = (now, result)
+
+    return result
 
 
 # =========================
@@ -2949,6 +3071,38 @@ async def agent_buy_data(request: Request, payload: AgentBuyDataRequest):
             .execute()
         if not agent_res.data:
             return {"status": "error", "message": "Agent not found or not approved"}
+
+        # ── DUPLICATE GUARD ─────────────────────────────────────────────
+        # Block the exact same agent+network+bundle+phone combo from being
+        # bought again within 5 minutes (accidental double-click / double-tap,
+        # or a resubmit after a slow response). Looks at recent orders
+        # regardless of status, since even a "failed" one still means the
+        # same request just went through moments ago.
+        dupe_floor = (utc_now() - timedelta(minutes=5)).isoformat()
+        dupe_res = supabase.table("orders") \
+            .select("id, created_at") \
+            .eq("agent_id", agent_id) \
+            .ilike("network", network) \
+            .ilike("bundle", bundle) \
+            .eq("phone_number", phone_number) \
+            .gte("created_at", dupe_floor) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+
+        if dupe_res.data:
+            last_order_at = parse_db_dt(dupe_res.data[0]["created_at"])
+            wait_left = timedelta(minutes=5) - (utc_now() - last_order_at)
+            wait_seconds = max(int(wait_left.total_seconds()), 1)
+            return {
+                "status": "error",
+                "message": (
+                    f"You just bought {bundle} for {phone_number} moments ago. "
+                    f"Please wait {wait_seconds}s before repeating this exact order."
+                ),
+                "duplicate": True,
+                "retry_after_seconds": wait_seconds,
+            }
 
         wallet_res = supabase.table("agent_wallets").select("balance").eq("agent_id", agent_id).limit(1).execute()
         wallet_balance = float(wallet_res.data[0]["balance"]) if wallet_res.data else 0.0
