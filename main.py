@@ -1088,7 +1088,7 @@ def verify_number(request: Request, data: VerifyNumberRequest):
             f"{DATAMART_BASE}/verify-number",
             headers={"X-API-Key": DATAMART_API_KEY},
             json={"phoneNumber": phone},
-            timeout=8,
+            timeout=5,
         )
     except requests.exceptions.RequestException as e:
         logger.warning("VERIFY NUMBER: request error: %s", str(e))

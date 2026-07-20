@@ -64,7 +64,7 @@ export const getOrders = (user_id) =>
 // =========================
 // VERIFY NUMBER (MTN pre-check, informational only)
 // =========================
-export const verifyNumber = (phoneNumber, network, timeout = 8000) =>
+export const verifyNumber = (phoneNumber, network, timeout = 7000) =>
   API.post("/verify-number", { phoneNumber, network }, { timeout });
 
 export default API;

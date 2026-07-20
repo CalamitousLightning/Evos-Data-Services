@@ -16,6 +16,7 @@ export default function Shop() {
   const [chatOpen, setChatOpen] = useState(false);
   const [verifyInfo, setVerifyInfo] = useState(null); // { checked, servable, recommendation, message }
   const [verifying, setVerifying] = useState(false);
+  const [verifyTimedOut, setVerifyTimedOut] = useState(false); // watchdog: unblocks Buy if check is slow
 
   const user = JSON.parse(localStorage.getItem("user") || "{}");
   const user_id = user?.id || null;
@@ -53,8 +54,9 @@ export default function Shop() {
   const checkNumber = async (num) => {
     if (network !== "MTN" || !validPhone(num)) return;
     setVerifying(true);
+    setVerifyTimedOut(false);
     try {
-      const res = await verifyNumber(num, network);
+      const res = await verifyNumber(num, network); // 7s timeout, see api.js
       setVerifyInfo(res.data);
     } catch {
       setVerifyInfo(null);
@@ -62,6 +64,27 @@ export default function Shop() {
       setVerifying(false);
     }
   };
+
+  // Auto-run the check the moment a valid MTN number is typed — no need to
+  // wait for blur/tap. Small debounce just guards against re-firing mid-edit.
+  useEffect(() => {
+    if (network !== "MTN" || !validPhone(phone)) return;
+    const t = setTimeout(() => checkNumber(phone), 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phone, network]);
+
+  // Watchdog: if the check is still running after 6s, stop blocking the UI.
+  // The request itself is capped well under 10s (7s frontend / 5s backend),
+  // this just makes sure a slow network never traps the user on the popup.
+  useEffect(() => {
+    if (!verifying) return;
+    const t = setTimeout(() => setVerifyTimedOut(true), 6000);
+    return () => clearTimeout(t);
+  }, [verifying]);
+
+  // True only while we should keep the Buy button hidden behind the popup.
+  const checkingBlocking = verifying && !verifyTimedOut;
 
   const handleBuy = async () => {
     try {
@@ -74,8 +97,10 @@ export default function Shop() {
 
       setLoading(true);
 
-      // Re-check on submit (short timeout, never blocks checkout either way)
-      if (network === "MTN") {
+      // Re-check on submit only if we don't already have a result for this
+      // number (e.g. the earlier auto-check timed out). Short timeout,
+      // never blocks checkout either way.
+      if (network === "MTN" && !verifyInfo?.checked) {
         try {
           const vRes = await verifyNumber(phone, network, 5000);
           setVerifyInfo(vRes.data);
@@ -147,6 +172,7 @@ export default function Shop() {
 
   return (
     <div style={styles.container}>
+      <style>{`@keyframes evos-spin { to { transform: rotate(360deg); } }`}</style>
 
       {/* HEADER */}
       <div style={styles.header}>
@@ -309,8 +335,7 @@ export default function Shop() {
               placeholder="e.g. 0244000000"
               value={phone}
               maxLength={10}
-              onChange={(e) => { setPhone(e.target.value); setVerifyInfo(null); }}
-              onBlur={(e) => checkNumber(e.target.value)}
+              onChange={(e) => { setPhone(e.target.value); setVerifyInfo(null); setVerifyTimedOut(false); }}
             />
             {phone.length > 0 && !validPhone(phone) && (
               <p style={styles.phoneHint}>⚠️ Must be 10 digits starting with 0</p>
@@ -318,13 +343,13 @@ export default function Shop() {
             {phone.length > 0 && validPhone(phone) && (
               <p style={styles.phoneHintGood}>✅ Looks good!</p>
             )}
-            {verifying && network === "MTN" && (
+            {checkingBlocking && (
               <p style={styles.verifyChecking}>🔎 Checking number...</p>
             )}
-            {!verifying && verifyInfo?.checked && verifyInfo?.recommendation === "activate_first" && (
+            {!checkingBlocking && verifyInfo?.checked && verifyInfo?.recommendation === "activate_first" && (
               <p style={styles.verifyWarning}>⚠️ {verifyInfo.message}</p>
             )}
-            {!verifying && verifyInfo?.checked && verifyInfo?.recommendation === "sell_any" && (
+            {!checkingBlocking && verifyInfo?.checked && verifyInfo?.recommendation === "sell_any" && (
               <p style={styles.phoneHintGood}>✅ Number is active on MTN's network</p>
             )}
 
@@ -351,20 +376,37 @@ export default function Shop() {
               </span>
             </label>
 
-            <button
-              onClick={handleBuy}
-              disabled={loading}
-              style={{ ...styles.buyBtn, opacity: loading ? 0.6 : 1 }}
-            >
-              {loading
-                ? pendingMsg ? "⏳ Redirecting to payment..." : "⏳ Processing..."
-                : `💳 Pay GH₵ ${Number(bundlePrice).toFixed(2)} via Paystack`}
-            </button>
+            {checkingBlocking ? (
+              <button disabled style={{ ...styles.buyBtn, opacity: 0.4, cursor: "not-allowed" }}>
+                🔎 Verifying number...
+              </button>
+            ) : (
+              <button
+                onClick={handleBuy}
+                disabled={loading}
+                style={{ ...styles.buyBtn, opacity: loading ? 0.6 : 1 }}
+              >
+                {loading
+                  ? pendingMsg ? "⏳ Redirecting to payment..." : "⏳ Processing..."
+                  : `💳 Pay GH₵ ${Number(bundlePrice).toFixed(2)} via Paystack`}
+              </button>
+            )}
 
             <p style={styles.secureNote}>🔒 Secured & encrypted via Paystack</p>
           </div>
         )}
       </div>
+
+      {/* VERIFY NUMBER POPUP */}
+      {checkingBlocking && (
+        <div style={styles.verifyOverlay}>
+          <div style={styles.verifyPopup}>
+            <div style={styles.verifySpinner} />
+            <p style={styles.verifyPopupText}>Checking number...</p>
+            <p style={styles.verifyPopupSub}>Confirming this MTN number is active</p>
+          </div>
+        </div>
+      )}
 
       {/* FLOATING SUPPORT */}
       <div style={styles.floatWrap}>
@@ -533,6 +575,24 @@ const styles = {
     boxShadow: "0 4px 20px rgba(34,197,94,0.3)",
   },
   secureNote: { textAlign: "center", fontSize: 12, color: "#475569", margin: 0 },
+
+  verifyOverlay: {
+    position: "fixed", inset: 0, background: "rgba(2,6,23,0.7)",
+    backdropFilter: "blur(2px)", display: "flex",
+    alignItems: "center", justifyContent: "center", zIndex: 2000,
+  },
+  verifyPopup: {
+    background: "#0f172a", border: "1px solid rgba(255,255,255,0.1)",
+    borderRadius: 20, padding: "28px 32px", textAlign: "center",
+    boxShadow: "0 20px 60px rgba(0,0,0,0.5)", maxWidth: 280,
+  },
+  verifySpinner: {
+    width: 34, height: 34, margin: "0 auto 14px", borderRadius: "50%",
+    border: "3px solid rgba(56,189,248,0.2)", borderTopColor: "#38bdf8",
+    animation: "evos-spin 0.8s linear infinite",
+  },
+  verifyPopupText: { fontSize: 15, fontWeight: 800, color: "#f1f5f9", margin: "0 0 4px" },
+  verifyPopupSub: { fontSize: 12, color: "#64748b", margin: 0 },
 
   floatWrap: {
     position: "fixed", bottom: 24, right: 20, zIndex: 9999,

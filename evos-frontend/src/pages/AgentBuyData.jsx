@@ -40,21 +40,29 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
   const [accepted, setAccepted] = useState(false);
   const [verifyInfo, setVerifyInfo] = useState(null);
   const [verifying, setVerifying] = useState(false);
+  const [verifyTimedOut, setVerifyTimedOut] = useState(false); // watchdog: unblocks Confirm if check is slow
 
   const cost = Number(bundle.cost_price);
   const hasFunds = walletBalance >= cost;
   const canSubmit = phone.trim().length >= 9 && accepted && !processing && hasFunds;
 
   // Informational-only MTN pre-check — never blocks the purchase, just warns.
+  // Bounded to 7s (backend caps its own DataMart call at 5s) so this can
+  // never hang indefinitely.
   const checkNumber = async (num) => {
     if (network !== "MTN" || num.trim().length < 9) return;
     setVerifying(true);
+    setVerifyTimedOut(false);
     try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 7000);
       const res = await fetch(`${API}/verify-number`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phoneNumber: num.trim(), network }),
+        signal: controller.signal,
       });
+      clearTimeout(t);
       const data = await res.json();
       setVerifyInfo(data);
     } catch {
@@ -64,8 +72,26 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
     }
   };
 
+  // Auto-run the check the moment a valid MTN number is typed.
+  useEffect(() => {
+    if (network !== "MTN" || phone.trim().length < 9) return;
+    const t = setTimeout(() => checkNumber(phone), 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phone, network]);
+
+  // Watchdog: if the check is still running after 6s, stop blocking the UI.
+  useEffect(() => {
+    if (!verifying) return;
+    const t = setTimeout(() => setVerifyTimedOut(true), 6000);
+    return () => clearTimeout(t);
+  }, [verifying]);
+
+  // True only while the Confirm button should stay hidden behind the popup.
+  const checkingBlocking = verifying && !verifyTimedOut;
+
   const handleConfirmClick = async () => {
-    if (network === "MTN") {
+    if (network === "MTN" && !verifyInfo?.checked) {
       try {
         const controller = new AbortController();
         const t = setTimeout(() => controller.abort(), 5000);
@@ -143,18 +169,17 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
           type="tel"
           placeholder="e.g. 0244000000"
           value={phone}
-          onChange={(e) => { setPhone(e.target.value); setVerifyInfo(null); }}
-          onBlur={(e) => checkNumber(e.target.value)}
+          onChange={(e) => { setPhone(e.target.value); setVerifyInfo(null); setVerifyTimedOut(false); }}
           style={modal.input}
           disabled={processing}
         />
-        {verifying && network === "MTN" && (
+        {checkingBlocking && (
           <p style={modal.verifyChecking}>🔎 Checking number...</p>
         )}
-        {!verifying && verifyInfo?.checked && verifyInfo?.recommendation === "activate_first" && (
+        {!checkingBlocking && verifyInfo?.checked && verifyInfo?.recommendation === "activate_first" && (
           <p style={modal.verifyWarning}>⚠️ {verifyInfo.message}</p>
         )}
-        {!verifying && verifyInfo?.checked && verifyInfo?.recommendation === "sell_any" && (
+        {!checkingBlocking && verifyInfo?.checked && verifyInfo?.recommendation === "sell_any" && (
           <p style={modal.verifyGood}>✅ Number is active on MTN's network</p>
         )}
 
@@ -173,29 +198,47 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
           </span>
         </label>
 
-        <button
-          onClick={handleConfirmClick}
-          disabled={!canSubmit}
-          style={{
-            ...modal.buyBtn,
-            opacity: canSubmit ? 1 : 0.4,
-            cursor: canSubmit ? "pointer" : "not-allowed",
-            background: hasFunds
-              ? "linear-gradient(135deg, #22c55e, #16a34a)"
-              : "linear-gradient(135deg, #ef4444, #b91c1c)",
-          }}
-        >
-          {processing
-            ? "⏳ Processing..."
-            : !hasFunds
-            ? "❌ Insufficient Balance"
-            : `✅ Buy for GH₵ ${cost.toFixed(2)}`}
-        </button>
+        {checkingBlocking ? (
+          <button disabled style={{ ...modal.buyBtn, opacity: 0.4, cursor: "not-allowed", background: "linear-gradient(135deg, #334155, #1e293b)" }}>
+            🔎 Verifying number...
+          </button>
+        ) : (
+          <button
+            onClick={handleConfirmClick}
+            disabled={!canSubmit}
+            style={{
+              ...modal.buyBtn,
+              opacity: canSubmit ? 1 : 0.4,
+              cursor: canSubmit ? "pointer" : "not-allowed",
+              background: hasFunds
+                ? "linear-gradient(135deg, #22c55e, #16a34a)"
+                : "linear-gradient(135deg, #ef4444, #b91c1c)",
+            }}
+          >
+            {processing
+              ? "⏳ Processing..."
+              : !hasFunds
+              ? "❌ Insufficient Balance"
+              : `✅ Buy for GH₵ ${cost.toFixed(2)}`}
+          </button>
+        )}
 
         <p style={modal.note}>
           🔐 Amount deducted instantly from wallet · No Paystack fees
         </p>
       </div>
+
+      {/* VERIFY NUMBER POPUP */}
+      {checkingBlocking && (
+        <div style={modal.verifyOverlay}>
+          <div style={modal.verifyPopup}>
+            <style>{`@keyframes evos-spin { to { transform: rotate(360deg); } }`}</style>
+            <div style={modal.verifySpinner} />
+            <p style={modal.verifyPopupText}>Checking number...</p>
+            <p style={modal.verifyPopupSub}>Confirming this MTN number is active</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -614,4 +657,22 @@ const modal = {
   checkText: { fontSize: 12, color: "#94a3b8", lineHeight: 1.55, fontWeight: 600 },
   buyBtn: { width: "100%", padding: 15, borderRadius: 16, border: "none", color: "white", fontWeight: 900, fontSize: 15, cursor: "pointer", boxShadow: "0 6px 24px rgba(34,197,94,0.25)", marginBottom: 10, transition: "opacity 0.2s" },
   note: { textAlign: "center", fontSize: 11, color: "#475569", margin: 0, fontWeight: 600 },
+
+  verifyOverlay: {
+    position: "fixed", inset: 0, background: "rgba(2,6,23,0.75)",
+    backdropFilter: "blur(2px)", display: "flex",
+    alignItems: "center", justifyContent: "center", zIndex: 2000,
+  },
+  verifyPopup: {
+    background: "#0f172a", border: "1px solid rgba(255,255,255,0.1)",
+    borderRadius: 20, padding: "28px 32px", textAlign: "center",
+    boxShadow: "0 20px 60px rgba(0,0,0,0.5)", maxWidth: 280,
+  },
+  verifySpinner: {
+    width: 34, height: 34, margin: "0 auto 14px", borderRadius: "50%",
+    border: "3px solid rgba(56,189,248,0.2)", borderTopColor: "#38bdf8",
+    animation: "evos-spin 0.8s linear infinite",
+  },
+  verifyPopupText: { fontSize: 15, fontWeight: 800, color: "#f1f5f9", margin: "0 0 4px" },
+  verifyPopupSub: { fontSize: 12, color: "#64748b", margin: 0 },
 };
