@@ -41,7 +41,7 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
   const [verifyInfo, setVerifyInfo] = useState(null);
   const [verifying, setVerifying] = useState(false);
   const [verifyTimedOut, setVerifyTimedOut] = useState(false); // watchdog: unblocks Confirm if check is slow
-  const [showVerifyResult, setShowVerifyResult] = useState(false); // keeps the popup up briefly to show the outcome
+  const [showVerifyResult, setShowVerifyResult] = useState(false); // popup stays up until the user proceeds or cancels
   const resultTimerRef = useRef(null);
 
   const cost = Number(bundle.cost_price);
@@ -71,14 +71,13 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
       clearTimeout(t);
       const data = await res.json();
       setVerifyInfo(data);
-      // Keep the popup up a moment longer so the result (verified / needs
-      // activation) is actually readable, instead of vanishing the instant
-      // the "checking" state flips off.
+      // Keep the result up until the user acts on it (Proceed/Cancel) —
+      // this is no longer a passive toast, it's the gate before purchase.
       setShowVerifyResult(true);
-      resultTimerRef.current = setTimeout(() => setShowVerifyResult(false), 2800);
       return data;
     } catch {
       setVerifyInfo(null);
+      setShowVerifyResult(true);
       return null;
     } finally {
       setVerifying(false);
@@ -95,10 +94,20 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
   // True only while the Confirm button should stay hidden behind the popup.
   const checkingBlocking = verifying && !verifyTimedOut;
 
+  // Confirm tap: for MTN, run the check and stop — the popup shows the
+  // outcome with its own Proceed button so the agent always sees the
+  // status before the purchase actually fires. Other networks skip
+  // straight through since DataMart's check only exists for MTN.
   const handleConfirmClick = async () => {
     if (network === "MTN") {
       await checkNumber(phone);
+      return;
     }
+    onConfirm(phone.trim());
+  };
+
+  const handleProceed = () => {
+    setShowVerifyResult(false);
     onConfirm(phone.trim());
   };
 
@@ -164,7 +173,6 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
             setPhone(e.target.value);
             setVerifyInfo(null);
             setVerifyTimedOut(false);
-            if (resultTimerRef.current) clearTimeout(resultTimerRef.current);
             setShowVerifyResult(false);
           }}
           style={modal.input}
@@ -198,6 +206,10 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
         {checkingBlocking ? (
           <button disabled style={{ ...modal.buyBtn, opacity: 0.4, cursor: "not-allowed", background: "linear-gradient(135deg, #334155, #1e293b)" }}>
             🔎 Verifying number...
+          </button>
+        ) : showVerifyResult ? (
+          <button disabled style={{ ...modal.buyBtn, opacity: 0.4, cursor: "not-allowed", background: "linear-gradient(135deg, #334155, #1e293b)" }}>
+            See popup to continue
           </button>
         ) : (
           <button
@@ -248,9 +260,31 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
               </>
             ) : (
               <>
-                <p style={modal.verifyPopupText}>Live check unavailable right now</p>
-                <p style={modal.verifyPopupSub}>You can continue — your order isn't affected</p>
+                <p style={modal.verifyPopupText}>ℹ️ Couldn't confirm status</p>
+                <p style={modal.verifyPopupSub}>You can still continue with your order</p>
               </>
+            )}
+
+            {showVerifyResult && !checkingBlocking && (
+              <div style={modal.verifyPopupActions}>
+                <button
+                  onClick={() => setShowVerifyResult(false)}
+                  style={modal.verifyPopupCancelBtn}
+                >
+                  Change number
+                </button>
+                <button
+                  onClick={handleProceed}
+                  disabled={processing}
+                  style={{ ...modal.verifyPopupProceedBtn, opacity: processing ? 0.6 : 1 }}
+                >
+                  {processing
+                    ? "⏳ Processing..."
+                    : verifyInfo?.checked && verifyInfo?.recommendation === "activate_first"
+                    ? "Proceed anyway"
+                    : "Proceed with purchase"}
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -691,4 +725,17 @@ const modal = {
   },
   verifyPopupText: { fontSize: 15, fontWeight: 800, color: "#f1f5f9", margin: "0 0 4px" },
   verifyPopupSub: { fontSize: 12, color: "#64748b", margin: 0 },
+  verifyPopupActions: {
+    display: "flex", flexDirection: "column", gap: 8, marginTop: 18,
+  },
+  verifyPopupProceedBtn: {
+    background: "linear-gradient(135deg, #38bdf8, #0ea5e9)", color: "#fff",
+    border: "none", borderRadius: 12, padding: "12px 16px",
+    fontSize: 14, fontWeight: 800, cursor: "pointer",
+  },
+  verifyPopupCancelBtn: {
+    background: "transparent", color: "#94a3b8",
+    border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+    padding: "10px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer",
+  },
 };
