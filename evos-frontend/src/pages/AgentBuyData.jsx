@@ -49,7 +49,8 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
   const canSubmit = phone.trim().length >= 9 && accepted && !processing && hasFunds;
 
   // Informational-only MTN pre-check — never blocks the purchase, just warns.
-  // Bounded to 7s (backend caps its own DataMart call at 5s) so this can
+  // Bounded to 12s (backend caps its own DataMart call at ~9s worst case,
+  // see main.py) so this can
   // never hang indefinitely. Fired once, on Confirm (see handleConfirmClick)
   // rather than as-you-type, so the scarce 2-checks/minute vendor quota is
   // spent on real purchase attempts instead of being burned by keystrokes.
@@ -61,7 +62,9 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
     setShowVerifyResult(false);
     try {
       const controller = new AbortController();
-      const t = setTimeout(() => controller.abort(), 7000);
+      // Backend's own DataMart call can take up to ~9s worst case (see
+      // main.py), so this needs real margin above that.
+      const t = setTimeout(() => controller.abort(), 12000);
       const res = await fetch(`${API}/verify-number`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -84,10 +87,13 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
     }
   };
 
-  // Watchdog: if the check is still running after 6s, stop blocking the UI.
+  // Watchdog: pure safety net in case the request hangs outside fetch's own
+  // control. Set comfortably past the 12s abort above so it never fires
+  // before the real check has a chance to resolve — firing early would
+  // flash the popup away and briefly re-enable Confirm mid-check.
   useEffect(() => {
     if (!verifying) return;
-    const t = setTimeout(() => setVerifyTimedOut(true), 6000);
+    const t = setTimeout(() => setVerifyTimedOut(true), 13000);
     return () => clearTimeout(t);
   }, [verifying]);
 

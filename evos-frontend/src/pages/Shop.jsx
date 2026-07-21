@@ -78,12 +78,13 @@ export default function Shop() {
     }
   };
 
-  // Watchdog: if the check is still running after 6s, stop blocking the UI.
-  // The request itself is capped well under 10s (7s frontend / 5s backend),
-  // this just makes sure a slow network never traps the user on the popup.
+  // Watchdog: pure safety net in case the request hangs outside axios's own
+  // control. Set comfortably past verifyNumber's 12s timeout (see api.js) so
+  // it never fires before the real check has a chance to resolve — firing
+  // early would flash the popup away and briefly re-enable Pay mid-check.
   useEffect(() => {
     if (!verifying) return;
-    const t = setTimeout(() => setVerifyTimedOut(true), 6000);
+    const t = setTimeout(() => setVerifyTimedOut(true), 13000);
     return () => clearTimeout(t);
   }, [verifying]);
 

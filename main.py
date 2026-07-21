@@ -1088,7 +1088,11 @@ def verify_number(request: Request, data: VerifyNumberRequest):
             f"{DATAMART_BASE}/verify-number",
             headers={"X-API-Key": DATAMART_API_KEY},
             json={"phoneNumber": phone},
-            timeout=5,
+            # (connect, read) — a single number here applies to *each* phase
+            # separately, so timeout=5 could actually take up to ~10s total.
+            # Bounding both explicitly keeps the worst case under ~9s, safely
+            # inside the frontend's wait window (see verifyNumber in api.js).
+            timeout=(3, 6),
         )
     except requests.exceptions.RequestException as e:
         logger.warning("VERIFY NUMBER: request error: %s", str(e))

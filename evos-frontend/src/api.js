@@ -63,8 +63,11 @@ export const getOrders = (user_id) =>
 
 // =========================
 // VERIFY NUMBER (MTN pre-check, informational only)
+// Backend's own DataMart call can take up to ~9s worst case (see main.py),
+// so this needs real margin above that or we time out on the frontend
+// while the backend is still legitimately waiting on a real answer.
 // =========================
-export const verifyNumber = (phoneNumber, network, timeout = 7000) =>
+export const verifyNumber = (phoneNumber, network, timeout = 12000) =>
   API.post("/verify-number", { phoneNumber, network }, { timeout });
 
 export default API;
