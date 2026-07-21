@@ -1,29 +1,69 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 // =========================================================================
-// DESIGN TOKENS
+// DESIGN TOKENS — now a palette map instead of a single fixed theme.
 // A deliberate break from the app's default dark-navy/sky-blue look, scoped
-// to this landing page. Ground: near-black forest (not navy). The three
-// accents aren't decorative — they ARE the three networks (gold = MTN,
-// red = Telecel, green = AirtelTigo), reused everywhere else on the page,
-// so the palette is doing structural work, not just styling.
+// to this landing page. Each palette keeps the same network accent colors
+// (gold = MTN, red = Telecel, green = AirtelTigo) so the cards stay
+// recognizable, but changes the overall mood (background/surface/text).
+// The chosen palette is picked at runtime in the Home component below and
+// persisted to localStorage under "evosTheme".
 // =========================================================================
-const T = {
-  bg: "#0A100D",
-  surface: "#121C16",
-  surfaceAlt: "#0E1712",
-  line: "rgba(255,201,51,0.16)",
-  lineSoft: "rgba(244,242,232,0.09)",
-  gold: "#FFC933",   // MTN
-  red: "#E8495A",    // Telecel
-  green: "#17A76A",  // AirtelTigo
-  text: "#F4F2E8",
-  muted: "#9BAA9F",
-  faint: "#5D6B61",
+const FONTS = {
   display: "'Space Grotesk', ui-sans-serif, system-ui, sans-serif",
   body: "'Inter', ui-sans-serif, system-ui, sans-serif",
   mono: "'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace",
 };
+
+const THEMES = {
+  forest: {
+    name: "Forest",
+    swatch: "#17A76A",
+    bg: "#0A100D", surface: "#121C16", surfaceAlt: "#0E1712",
+    line: "rgba(255,201,51,0.16)", lineSoft: "rgba(244,242,232,0.09)", overlay: "244,242,232",
+    gold: "#FFC933", red: "#E8495A", green: "#17A76A",
+    text: "#F4F2E8", muted: "#9BAA9F", faint: "#5D6B61",
+    ...FONTS,
+  },
+  ocean: {
+    name: "Ocean",
+    swatch: "#38BDF8",
+    bg: "#070C14", surface: "#101B2C", surfaceAlt: "#0B1622",
+    line: "rgba(56,189,248,0.18)", lineSoft: "rgba(234,242,250,0.09)", overlay: "234,242,250",
+    gold: "#FFC933", red: "#E8495A", green: "#38BDF8",
+    text: "#EAF2FA", muted: "#8DA3B8", faint: "#4C5F72",
+    ...FONTS,
+  },
+  sunset: {
+    name: "Sunset",
+    swatch: "#F97350",
+    bg: "#150A0A", surface: "#231212", surfaceAlt: "#1A0E0E",
+    line: "rgba(249,115,80,0.18)", lineSoft: "rgba(247,236,236,0.09)", overlay: "247,236,236",
+    gold: "#FFC933", red: "#F97350", green: "#2FBF8F",
+    text: "#F7ECEC", muted: "#B49A97", faint: "#6B5450",
+    ...FONTS,
+  },
+  grape: {
+    name: "Grape",
+    swatch: "#A78BFA",
+    bg: "#0E0B16", surface: "#191325", surfaceAlt: "#130F1D",
+    line: "rgba(167,139,250,0.2)", lineSoft: "rgba(240,237,250,0.09)", overlay: "240,237,250",
+    gold: "#FFC933", red: "#E8495A", green: "#34D399",
+    text: "#F0EDFA", muted: "#A79DBE", faint: "#5F5674",
+    ...FONTS,
+  },
+  slate: {
+    name: "Slate",
+    swatch: "#94A3B8",
+    bg: "#0D0F12", surface: "#171B21", surfaceAlt: "#12151A",
+    line: "rgba(148,163,184,0.18)", lineSoft: "rgba(241,243,245,0.09)", overlay: "241,243,245",
+    gold: "#FFC933", red: "#E8495A", green: "#17A76A",
+    text: "#F1F3F5", muted: "#9AA3AC", faint: "#565C64",
+    ...FONTS,
+  },
+};
+
+const THEME_LIST = Object.entries(THEMES).map(([key, t]) => ({ key, name: t.name, swatch: t.swatch }));
 
 const GHANA_REGIONS = [
   "Greater Accra", "Ashanti", "Western", "Central", "Eastern", "Volta",
@@ -35,7 +75,7 @@ const GHANA_REGIONS = [
 // "strength" is a real, legible metric here — used as step markers below
 // instead of generic 01/02/03 numbering, and as a coverage indicator in
 // the region ticker.
-function SignalBars({ level = 4, size = 18, color = T.gold, dim = "rgba(244,242,232,0.14)" }) {
+function SignalBars({ level = 4, size = 18, color = "#FFC933", dim = "rgba(244,242,232,0.14)" }) {
   const heights = [0.32, 0.55, 0.78, 1];
   return (
     <div style={{ display: "inline-flex", alignItems: "flex-end", gap: Math.max(2, size * 0.13), height: size, flexShrink: 0 }}>
@@ -62,6 +102,25 @@ export default function Home({ setPage, theme }) {
   const [promoVisible, setPromoVisible] = useState(false);
   const [activePromo, setActivePromo] = useState(null);
   const [imgErrors, setImgErrors] = useState({});
+
+  // ===== Site theme (color scheme) picker =====
+  // Defaults to "forest" (the original look), remembers the visitor's
+  // choice across visits via localStorage.
+  const [themeKey, setThemeKey] = useState(() => {
+    try {
+      const saved = localStorage.getItem("evosSiteTheme");
+      return saved && THEMES[saved] ? saved : "forest";
+    } catch {
+      return "forest";
+    }
+  });
+  const [themePanelOpen, setThemePanelOpen] = useState(false);
+  const T = THEMES[themeKey] || THEMES.forest;
+  const styles = useMemo(() => buildStyles(T), [themeKey]);
+
+  useEffect(() => {
+    try { localStorage.setItem("evosSiteTheme", themeKey); } catch { /* ignore */ }
+  }, [themeKey]);
 
   // Two cross-promo notifications from the Evoxera Technology family.
   // Only one is shown per session — picked at random — so the popup
@@ -229,7 +288,7 @@ export default function Home({ setPage, theme }) {
         <div className="evos-rise evos-rise-4" style={styles.orderNowBox}>
           <div style={styles.orderNowLabelRow}>
             <p style={styles.orderNowLabel}>Order now</p>
-            <SignalBars level={4} size={13} />
+            <SignalBars level={4} size={13} color={T.gold} />
           </div>
           <div style={styles.orderNowGrid}>
             {quickNetworks.map((n) => (
@@ -300,7 +359,7 @@ export default function Home({ setPage, theme }) {
           <div className="evos-marquee-track" style={styles.tickerTrack}>
             {[...GHANA_REGIONS, ...GHANA_REGIONS].map((r, i) => (
               <span key={i} style={styles.tickerItem}>
-                <SignalBars level={4} size={11} />
+                <SignalBars level={4} size={11} color={T.gold} />
                 {r}
               </span>
             ))}
@@ -356,7 +415,7 @@ export default function Home({ setPage, theme }) {
         <div style={styles.stepsRow}>
           {steps.map((s, i) => (
             <div key={i} className="evos-step-card" style={styles.stepCard}>
-              <div style={styles.stepBars}><SignalBars level={s.level} size={24} /></div>
+              <div style={styles.stepBars}><SignalBars level={s.level} size={24} color={T.gold} /></div>
               <div style={styles.stepIcon}>{s.icon}</div>
               <h3 style={styles.stepTitle}>{s.title}</h3>
               <p style={styles.stepDesc}>{s.desc}</p>
@@ -471,6 +530,38 @@ export default function Home({ setPage, theme }) {
         </div>
       </footer>
 
+      {/* ===================== THEME SWITCHER ===================== */}
+      <div style={styles.themeFloatWrap}>
+        {themePanelOpen && (
+          <div style={styles.themePanel}>
+            <div style={styles.themePanelHeader}>
+              <span style={styles.themePanelTitle}>🎨 Site color</span>
+              <button style={styles.themePanelClose} onClick={() => setThemePanelOpen(false)}>✕</button>
+            </div>
+            <div style={styles.themeGrid}>
+              {THEME_LIST.map((opt) => (
+                <button
+                  key={opt.key}
+                  style={styles.themeOption(opt.key === themeKey)}
+                  onClick={() => setThemeKey(opt.key)}
+                >
+                  <span style={{ ...styles.themeSwatch, background: opt.swatch }} />
+                  {opt.name}
+                  {opt.key === themeKey && <span style={styles.themeCheck}>✓</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <button
+          style={styles.themeFloatBtn}
+          onClick={() => setThemePanelOpen(!themePanelOpen)}
+          aria-label="Change site color"
+        >
+          {themePanelOpen ? "✕" : "🎨"}
+        </button>
+      </div>
+
       {/* ===================== FLOATING SUPPORT ===================== */}
       <div style={styles.floatWrap}>
         {chatOpen && (
@@ -553,7 +644,8 @@ export default function Home({ setPage, theme }) {
   );
 }
 
-const styles = {
+function buildStyles(T) {
+  return {
   container: { fontFamily: T.body, color: T.text, background: T.bg, borderRadius: 24 },
 
   // ===================== EVOSGPT PROMO NOTIFICATION =====================
@@ -648,7 +740,7 @@ const styles = {
     padding: "16px 10px", borderRadius: 16, cursor: "pointer", position: "relative", outline: "none",
   },
   orderNowCardDisabled: {
-    background: "rgba(244,242,232,0.03)", border: `1.5px solid ${T.lineSoft}`,
+    background: `rgba(${T.overlay},0.03)`, border: `1.5px solid ${T.lineSoft}`,
     boxShadow: "none", cursor: "not-allowed", opacity: 0.6, position: "relative",
   },
   outOfStockBadge: {
@@ -670,7 +762,7 @@ const styles = {
   },
   ghostBtn: {
     padding: "13px 22px", borderRadius: 14, border: `1px solid ${T.lineSoft}`,
-    background: "rgba(244,242,232,0.05)", color: T.text, fontWeight: 700, fontSize: 15,
+    background: `rgba(${T.overlay},0.05)`, color: T.text, fontWeight: 700, fontSize: 15,
     cursor: "pointer", fontFamily: T.display,
   },
   greenBtn: {
@@ -696,7 +788,7 @@ const styles = {
 
   statsRow: { position: "relative", display: "flex", justifyContent: "center", gap: 12, flexWrap: "wrap" },
   statCard: {
-    padding: "14px 22px", borderRadius: 16, background: "rgba(244,242,232,0.04)",
+    padding: "14px 22px", borderRadius: 16, background: `rgba(${T.overlay},0.04)`,
     border: `1px solid ${T.lineSoft}`, textAlign: "center", minWidth: 110,
   },
   statVal: { fontWeight: 700, fontSize: 18, color: T.gold, fontFamily: T.mono },
@@ -723,7 +815,7 @@ const styles = {
   stepsRow: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 },
   stepCard: {
     padding: "26px 18px", borderRadius: 20,
-    background: "rgba(244,242,232,0.035)", border: `1px solid ${T.lineSoft}`, textAlign: "center",
+    background: `rgba(${T.overlay},0.035)`, border: `1px solid ${T.lineSoft}`, textAlign: "center",
   },
   stepBars: { display: "flex", justifyContent: "center", marginBottom: 14 },
   stepIcon: { fontSize: 26, marginBottom: 10 },
@@ -753,7 +845,7 @@ const styles = {
   agentPoints: { display: "flex", flexDirection: "column", gap: 10, marginBottom: 22 },
   agentPoint: {
     fontSize: 14, color: T.text, opacity: 0.9, lineHeight: 1.6, padding: "8px 12px",
-    background: "rgba(244,242,232,0.04)", borderRadius: 10, border: `1px solid ${T.lineSoft}`,
+    background: `rgba(${T.overlay},0.04)`, borderRadius: 10, border: `1px solid ${T.lineSoft}`,
   },
   agentBtns: { display: "flex", gap: 10, flexWrap: "wrap" },
   agentWaBtn: {
@@ -768,7 +860,7 @@ const styles = {
   },
   agentRight: { flex: "0 1 200px", display: "flex", alignItems: "center" },
   agentEarnCard: {
-    background: "rgba(244,242,232,0.05)", border: `1px solid ${T.lineSoft}`,
+    background: `rgba(${T.overlay},0.05)`, border: `1px solid ${T.lineSoft}`,
     borderRadius: 18, padding: 20, textAlign: "center", width: "100%",
   },
   agentEarnLabel: { fontSize: 12, color: T.muted, marginBottom: 4 },
@@ -811,7 +903,7 @@ const styles = {
   chatOptions: { display: "flex", flexDirection: "column", gap: 8 },
   chatOption: {
     padding: "10px 14px", borderRadius: 10, border: `1px solid ${T.lineSoft}`,
-    background: "rgba(244,242,232,0.04)", color: T.text, fontSize: 13, fontWeight: 700,
+    background: `rgba(${T.overlay},0.04)`, color: T.text, fontSize: 13, fontWeight: 700,
     cursor: "pointer", textAlign: "left",
   },
   floatBtn: {
@@ -831,11 +923,36 @@ const styles = {
   modalTitle: { fontSize: 20, fontWeight: 700, color: T.text, marginBottom: 16, fontFamily: T.display },
   modalText: { fontSize: 14, color: T.muted, lineHeight: 1.65, marginBottom: 10 },
   helpCard: {
-    padding: 14, borderRadius: 14, marginTop: 10, background: "rgba(244,242,232,0.04)",
+    padding: 14, borderRadius: 14, marginTop: 10, background: `rgba(${T.overlay},0.04)`,
     border: `1px solid ${T.lineSoft}`, cursor: "pointer", fontSize: 14, color: T.text, fontWeight: 700,
   },
   closeBtn: {
     width: "100%", marginTop: 16, padding: 13, border: "none", borderRadius: 14,
     fontWeight: 800, cursor: "pointer", background: T.gold, color: "#161005", fontSize: 14, fontFamily: T.display,
   },
-};
+
+  // THEME SWITCHER
+  themeFloatWrap: { position: "fixed", bottom: 24, left: 20, zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 10 },
+  themeFloatBtn: {
+    width: 46, height: 46, borderRadius: "50%", border: `1px solid ${T.lineSoft}`,
+    background: T.surfaceAlt, color: T.text, fontSize: 19, cursor: "pointer",
+    boxShadow: "0 4px 18px rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center",
+  },
+  themePanel: {
+    background: T.surfaceAlt, border: `1px solid ${T.lineSoft}`, borderRadius: 18,
+    padding: 16, width: 220, boxShadow: "0 8px 32px rgba(0,0,0,0.5)", fontFamily: T.body,
+  },
+  themePanelHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
+  themePanelTitle: { fontSize: 13, fontWeight: 800, color: T.text, fontFamily: T.display, letterSpacing: 0.2 },
+  themePanelClose: { background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: 14 },
+  themeGrid: { display: "flex", flexDirection: "column", gap: 6 },
+  themeOption: (active) => ({
+    display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10,
+    border: active ? `1.5px solid ${T.gold}` : `1px solid ${T.lineSoft}`,
+    background: active ? T.gold + "14" : `rgba(${T.overlay},0.03)`,
+    cursor: "pointer", fontSize: 13, fontWeight: 700, color: T.text, textAlign: "left", width: "100%",
+  }),
+  themeSwatch: { width: 18, height: 18, borderRadius: "50%", flexShrink: 0, border: "1px solid rgba(0,0,0,0.25)" },
+  themeCheck: { marginLeft: "auto", color: T.gold, fontWeight: 900, fontSize: 13 },
+  };
+}
