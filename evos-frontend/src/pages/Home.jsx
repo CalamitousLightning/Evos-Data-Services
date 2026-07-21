@@ -60,19 +60,48 @@ export default function Home({ setPage, theme }) {
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [promoVisible, setPromoVisible] = useState(false);
+  const [activePromo, setActivePromo] = useState(null);
   const [imgErrors, setImgErrors] = useState({});
 
-  // Show EVOSGPT promo notification after 2s, only once per session
+  // Two cross-promo notifications from the Evoxera Technology family.
+  // Only one is shown per session — picked at random — so the popup
+  // never feels repetitive across visits.
+  const promos = {
+    evosgpt: {
+      key: "evosgpt",
+      badge: "🚀 From Evoxera Technology",
+      accent: T.gold,
+      title: <>Meet <span style={{ color: T.gold }}>EVOSGPT</span> — Your AI Assistant</>,
+      body: "Need help with CVs, business plans, school work, coding, or ideas? EVOSGPT is part of the EVOS Business HUB family — and your EvosData account already unlocks it.",
+      ctaText: "Try EVOSGPT Free →",
+      ctaHref: "https://evosgpt.xyz",
+      footer: <>EvosData · EVOSGPT · EVOS Business HUB — all under{" "}<span style={{ color: T.gold }}>Evoxera Technology</span></>,
+    },
+    evoshub: {
+      key: "evoshub",
+      badge: "🌐 From Evoxera Technology",
+      accent: T.green,
+      title: <>Need a website? <span style={{ color: T.green }}>EVOS Business HUB</span> builds it</>,
+      body: "EVOS Business HUB is the main platform behind EvosData — request a professional website for your business, brand, or side hustle, built and hosted for you.",
+      ctaText: "Get your website →",
+      ctaHref: "https://evoshub.xyz",
+      footer: <>EvosData · EVOSGPT · EVOS Business HUB — all under{" "}<span style={{ color: T.green }}>Evoxera Technology</span></>,
+    },
+  };
+
+  // Show one promo notification after 2s, only once per session
   useEffect(() => {
-    const dismissed = sessionStorage.getItem("evosGptPromoDismissed");
+    const dismissed = sessionStorage.getItem("evosPromoDismissed");
     if (dismissed) return;
+    const choice = Math.random() < 0.5 ? "evosgpt" : "evoshub";
+    setActivePromo(promos[choice]);
     const timer = setTimeout(() => setPromoVisible(true), 2000);
     return () => clearTimeout(timer);
   }, []);
 
   const dismissPromo = () => {
     setPromoVisible(false);
-    sessionStorage.setItem("evosGptPromoDismissed", "1");
+    sessionStorage.setItem("evosPromoDismissed", "1");
   };
 
   const features = [
@@ -139,40 +168,42 @@ export default function Home({ setPage, theme }) {
         }
       `}</style>
 
-      {/* ===================== EVOSGPT PROMO NOTIFICATION ===================== */}
-      <div style={{
-        ...styles.promoNotif,
-        opacity: promoVisible ? 1 : 0,
-        transform: promoVisible ? "translateY(0)" : "translateY(20px)",
-        pointerEvents: promoVisible ? "auto" : "none",
-      }}>
-        <div style={styles.promoNotifHeader}>
-          <div style={styles.promoNotifBadge}>🚀 From Evoxera Technology</div>
-          <button style={styles.promoNotifClose} onClick={dismissPromo}>✕</button>
+      {/* ===================== CROSS-PROMO NOTIFICATION ===================== */}
+      {activePromo && (
+        <div style={{
+          ...styles.promoNotif,
+          borderColor: activePromo.accent + "4d",
+          opacity: promoVisible ? 1 : 0,
+          transform: promoVisible ? "translateY(0)" : "translateY(20px)",
+          pointerEvents: promoVisible ? "auto" : "none",
+        }}>
+          <div style={styles.promoNotifHeader}>
+            <div style={{ ...styles.promoNotifBadge, color: activePromo.accent, background: activePromo.accent + "22", border: `1px solid ${activePromo.accent}59` }}>
+              {activePromo.badge}
+            </div>
+            <button style={styles.promoNotifClose} onClick={dismissPromo}>✕</button>
+          </div>
+
+          <p style={styles.promoNotifTitle}>{activePromo.title}</p>
+          <p style={styles.promoNotifBody}>{activePromo.body}</p>
+
+          <div style={styles.promoNotifBtns}>
+            <a
+              href={activePromo.ctaHref}
+              target="_blank"
+              rel="noreferrer"
+              style={{ ...styles.promoNotifCta, background: activePromo.accent, boxShadow: `0 3px 12px ${activePromo.accent}59` }}
+            >
+              {activePromo.ctaText}
+            </a>
+            <button style={styles.promoNotifSkip} onClick={dismissPromo}>
+              Maybe later
+            </button>
+          </div>
+
+          <p style={styles.promoNotifFooter}>{activePromo.footer}</p>
         </div>
-
-        <p style={styles.promoNotifTitle}>
-          Meet <span style={styles.promoNotifBrand}>EVOSGPT</span> — Your AI Assistant
-        </p>
-        <p style={styles.promoNotifBody}>
-          Need help with CVs, business plans, school work, coding, or ideas?
-          EVOSGPT is part of the EVOS Business HUB family — and your EvosData account already unlocks it.
-        </p>
-
-        <div style={styles.promoNotifBtns}>
-          <a href="https://evosgpt.xyz" target="_blank" rel="noreferrer" style={styles.promoNotifCta}>
-            Try EVOSGPT Free →
-          </a>
-          <button style={styles.promoNotifSkip} onClick={dismissPromo}>
-            Maybe later
-          </button>
-        </div>
-
-        <p style={styles.promoNotifFooter}>
-          EvosData · EVOSGPT · EVOS Business HUB — all under{" "}
-          <span style={{ color: T.gold }}>Evoxera Technology</span>
-        </p>
-      </div>
+      )}
 
       {/* ===================== HERO ===================== */}
       <section style={styles.hero}>
