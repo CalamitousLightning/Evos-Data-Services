@@ -313,7 +313,7 @@ function ConfirmModal({ selected, networkLabel, networkCfg, onClose, onConfirm, 
             ) : (
               <>
                 <p style={modal.verifyPopupText}>ℹ️ Couldn't confirm status</p>
-                <p style={modal.verifyPopupSub}>You can still continue with your order</p>
+                <p style={modal.verifyPopupSub}>{verifyInfo?.message || "You can still continue with your order"}</p>
               </>
             )}
 

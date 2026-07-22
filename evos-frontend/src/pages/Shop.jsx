@@ -437,7 +437,7 @@ export default function Shop() {
             ) : (
               <>
                 <p style={styles.verifyPopupText}>ℹ️ Couldn't confirm status</p>
-                <p style={styles.verifyPopupSub}>You can still continue with your order</p>
+                <p style={styles.verifyPopupSub}>{verifyInfo?.message || "You can still continue with your order"}</p>
               </>
             )}
 
