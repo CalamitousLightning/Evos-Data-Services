@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 
 const API = "https://api.evosdata.xyz";
 
@@ -132,7 +132,80 @@ function clearStoreSession() {
 function ConfirmModal({ selected, networkLabel, networkCfg, onClose, onConfirm, processing }) {
   const [phone, setPhone] = useState("");
   const [accepted, setAccepted] = useState(false);
+  const [verifyInfo, setVerifyInfo] = useState(null);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyTimedOut, setVerifyTimedOut] = useState(false); // watchdog: unblocks Pay if check is slow
+  const [showVerifyResult, setShowVerifyResult] = useState(false); // popup stays up until the user proceeds or cancels
+  const resultTimerRef = useRef(null);
   const canSubmit = phone.trim().length >= 9 && accepted && !processing;
+  const network = selected.network;
+
+  // Informational-only MTN pre-check — never blocks the purchase, just warns.
+  // Fired once, on Pay (see handlePayClick) rather than as-you-type, so the
+  // scarce 2-checks/minute vendor quota is spent on real purchase attempts
+  // instead of being burned by keystrokes. Bounded to 12s (backend caps its
+  // own DataMart call at ~9s worst case, see main.py) so this can never
+  // hang indefinitely.
+  const checkNumber = async (num) => {
+    if (network !== "MTN" || num.trim().length < 9) return null;
+    setVerifying(true);
+    setVerifyTimedOut(false);
+    if (resultTimerRef.current) clearTimeout(resultTimerRef.current);
+    setShowVerifyResult(false);
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 12000);
+      const res = await fetch(`${API}/verify-number`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phoneNumber: num.trim(), network }),
+        signal: controller.signal,
+      });
+      clearTimeout(t);
+      const data = await res.json();
+      setVerifyInfo(data);
+      // Keep the result up until the user acts on it (Proceed/Cancel) —
+      // this is no longer a passive toast, it's the gate before payment.
+      setShowVerifyResult(true);
+      return data;
+    } catch {
+      setVerifyInfo(null);
+      setShowVerifyResult(true);
+      return null;
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  // Watchdog: pure safety net in case the request hangs outside fetch's own
+  // control. Set comfortably past the 12s abort above so it never fires
+  // before the real check has a chance to resolve — firing early would
+  // flash the popup away and briefly re-enable Pay mid-check.
+  useEffect(() => {
+    if (!verifying) return;
+    const t = setTimeout(() => setVerifyTimedOut(true), 13000);
+    return () => clearTimeout(t);
+  }, [verifying]);
+
+  // True only while the Pay button should stay hidden behind the popup.
+  const checkingBlocking = verifying && !verifyTimedOut;
+
+  // Pay tap: for MTN, run the check and stop — the popup shows the outcome
+  // with its own Proceed button so the customer always sees the status
+  // before payment actually fires. Other networks skip straight through
+  // since DataMart's check only exists for MTN.
+  const handlePayClick = async () => {
+    if (network === "MTN") {
+      await checkNumber(phone);
+      return;
+    }
+    onConfirm(phone.trim());
+  };
+
+  const handleProceed = () => {
+    setShowVerifyResult(false);
+    onConfirm(phone.trim());
+  };
 
   return (
     <div style={modal.overlay}>
@@ -172,8 +245,14 @@ function ConfirmModal({ selected, networkLabel, networkCfg, onClose, onConfirm, 
           type="tel"
           placeholder="e.g. 0244000000"
           value={phone}
-          onChange={(e) => setPhone(e.target.value)}
+          onChange={(e) => {
+            setPhone(e.target.value);
+            setVerifyInfo(null);
+            setVerifyTimedOut(false);
+            setShowVerifyResult(false);
+          }}
           style={modal.input}
+          disabled={processing}
         />
 
         <label style={modal.checkRow}>
@@ -181,6 +260,7 @@ function ConfirmModal({ selected, networkLabel, networkCfg, onClose, onConfirm, 
             type="checkbox"
             checked={accepted}
             onChange={(e) => setAccepted(e.target.checked)}
+            disabled={processing}
             style={{ marginRight: 8, accentColor: "#38bdf8", width: 15, height: 15, flexShrink: 0, marginTop: 2 }}
           />
           <span style={modal.checkText}>
@@ -189,15 +269,75 @@ function ConfirmModal({ selected, networkLabel, networkCfg, onClose, onConfirm, 
           </span>
         </label>
 
-        <button
-          onClick={() => onConfirm(phone.trim())}
-          disabled={!canSubmit}
-          style={{ ...modal.buyBtn, opacity: canSubmit ? 1 : 0.45, cursor: canSubmit ? "pointer" : "not-allowed" }}
-        >
-          {processing ? "⏳ Processing..." : `💳 Pay GH₵ ${Number(selected.final_price).toFixed(2)} via Paystack`}
-        </button>
+        {checkingBlocking ? (
+          <button disabled style={{ ...modal.buyBtn, opacity: 0.4, cursor: "not-allowed", background: "linear-gradient(135deg, #334155, #1e293b)" }}>
+            🔎 Verifying number...
+          </button>
+        ) : showVerifyResult ? (
+          <button disabled style={{ ...modal.buyBtn, opacity: 0.4, cursor: "not-allowed", background: "linear-gradient(135deg, #334155, #1e293b)" }}>
+            See popup to continue
+          </button>
+        ) : (
+          <button
+            onClick={handlePayClick}
+            disabled={!canSubmit}
+            style={{ ...modal.buyBtn, opacity: canSubmit ? 1 : 0.45, cursor: canSubmit ? "pointer" : "not-allowed" }}
+          >
+            {processing ? "⏳ Processing..." : `💳 Pay GH₵ ${Number(selected.final_price).toFixed(2)} via Paystack`}
+          </button>
+        )}
         <p style={modal.secureNote}>🔒 Secured & encrypted by Paystack</p>
       </div>
+
+      {/* VERIFY NUMBER POPUP */}
+      {(checkingBlocking || showVerifyResult) && (
+        <div style={modal.verifyOverlay}>
+          <div style={modal.verifyPopup}>
+            <style>{`@keyframes evos-spin { to { transform: rotate(360deg); } }`}</style>
+            {checkingBlocking ? (
+              <>
+                <div style={modal.verifySpinner} />
+                <p style={modal.verifyPopupText}>Checking number...</p>
+                <p style={modal.verifyPopupSub}>Confirming this MTN number is active</p>
+              </>
+            ) : verifyInfo?.checked && verifyInfo?.recommendation === "activate_first" ? (
+              <>
+                <p style={modal.verifyPopupText}>⚠️ On hold — activation needed</p>
+                <p style={modal.verifyPopupSub}>{verifyInfo.message}</p>
+              </>
+            ) : verifyInfo?.checked && verifyInfo?.recommendation === "sell_any" ? (
+              <>
+                <p style={modal.verifyPopupText}>✅ Number verified</p>
+                <p style={modal.verifyPopupSub}>Active on MTN — any bundle size will deliver instantly</p>
+              </>
+            ) : (
+              <>
+                <p style={modal.verifyPopupText}>ℹ️ Couldn't confirm status</p>
+                <p style={modal.verifyPopupSub}>You can still continue with your order</p>
+              </>
+            )}
+
+            {showVerifyResult && !checkingBlocking && (
+              <div style={modal.verifyPopupActions}>
+                <button onClick={() => setShowVerifyResult(false)} style={modal.verifyPopupCancelBtn}>
+                  Change number
+                </button>
+                <button
+                  onClick={handleProceed}
+                  disabled={processing}
+                  style={{ ...modal.verifyPopupProceedBtn, opacity: processing ? 0.6 : 1 }}
+                >
+                  {processing
+                    ? "⏳ Processing..."
+                    : verifyInfo?.checked && verifyInfo?.recommendation === "activate_first"
+                    ? "Proceed anyway"
+                    : "Proceed to payment"}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -707,6 +847,37 @@ const modal = {
   checkText: { fontSize: 12, color: "#94a3b8", lineHeight: 1.55, fontWeight: 600 },
   buyBtn: { width: "100%", padding: 15, borderRadius: 16, border: "none", background: "linear-gradient(135deg, #22c55e, #16a34a)", color: "white", fontWeight: 900, fontSize: 15, cursor: "pointer", boxShadow: "0 6px 24px rgba(34,197,94,0.3)", marginBottom: 10 },
   secureNote: { textAlign: "center", fontSize: 12, color: "#475569", margin: 0, fontWeight: 600 },
+
+  verifyOverlay: {
+    position: "fixed", inset: 0, background: "rgba(2,6,23,0.75)",
+    backdropFilter: "blur(2px)", display: "flex",
+    alignItems: "center", justifyContent: "center", zIndex: 2000,
+  },
+  verifyPopup: {
+    background: "#0f172a", border: "1px solid rgba(255,255,255,0.1)",
+    borderRadius: 20, padding: "28px 32px", textAlign: "center",
+    boxShadow: "0 20px 60px rgba(0,0,0,0.5)", maxWidth: 280,
+  },
+  verifySpinner: {
+    width: 34, height: 34, margin: "0 auto 14px", borderRadius: "50%",
+    border: "3px solid rgba(56,189,248,0.2)", borderTopColor: "#38bdf8",
+    animation: "evos-spin 0.8s linear infinite",
+  },
+  verifyPopupText: { fontSize: 15, fontWeight: 800, color: "#f1f5f9", margin: "0 0 4px" },
+  verifyPopupSub: { fontSize: 12, color: "#64748b", margin: 0 },
+  verifyPopupActions: {
+    display: "flex", flexDirection: "column", gap: 8, marginTop: 18,
+  },
+  verifyPopupProceedBtn: {
+    background: "linear-gradient(135deg, #38bdf8, #0ea5e9)", color: "#fff",
+    border: "none", borderRadius: 12, padding: "12px 16px",
+    fontSize: 14, fontWeight: 800, cursor: "pointer",
+  },
+  verifyPopupCancelBtn: {
+    background: "transparent", color: "#94a3b8",
+    border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+    padding: "10px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer",
+  },
 };
 
 // =========================
