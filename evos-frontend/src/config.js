@@ -4,8 +4,8 @@ import axios from "axios";
 // SINGLE SOURCE OF TRUTH
 // =========================
 // Change hosts here — every page/component picks it up automatically.
-export const PRIMARY_BASE = "https://api.evosdata.xyz";       // main (Render, behind custom domain)
-export const FALLBACK_BASE = "https://evos-data-services.fly.dev"; // used only if primary is unreachable
+export const PRIMARY_BASE = "https://evos-data-services.fly.dev";       // main (Render, behind custom domain)
+export const FALLBACK_BASE = "https://api.evosdata.xyz"; // used only if primary is unreachable
 
 // Separate service, unrelated to the failover pair above
 export const BUSINESS_HUB_API_BASE = "https://evos-business-hub.onrender.com";
