@@ -57,6 +57,7 @@ ALLOWED_ORIGINS = [
     "https://evosdata.netlify.app",
     "https://evosdata.xyz",
     "https://www.evosdata.xyz"
+    "https://evos-data-services.fly.dev"
 ]
 
 app.add_middleware(
