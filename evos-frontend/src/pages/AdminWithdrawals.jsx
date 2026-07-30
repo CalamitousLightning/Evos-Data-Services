@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-const API_BASE = "https://api.evosdata.xyz";
+import { smartFetch } from "../config";
 
 const STATUS_CONFIG = {
   pending:  { color: "#f59e0b", bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.3)", label: "⏳ Pending"  },
@@ -19,7 +19,7 @@ export default function AdminWithdrawals() {
     try {
       setLoading(true);
       setError("");
-      const res = await fetch(`${API_BASE}/admin/withdrawals`);
+      const res = await smartFetch(`/admin/withdrawals`);
       const data = await res.json();
       setWithdrawals(data.withdrawals || []);
     } catch (err) {
@@ -35,7 +35,7 @@ export default function AdminWithdrawals() {
   const markPaid = async (id) => {
     setProcessingId(id);
     try {
-      const res = await fetch(`${API_BASE}/admin/withdrawals/${id}/paid`, { method: "POST" });
+      const res = await smartFetch(`/admin/withdrawals/${id}/paid`, { method: "POST" });
       const data = await res.json();
       if (data.status === "paid") {
         setWithdrawals((prev) => prev.map((w) => w.id === id ? { ...w, status: "paid" } : w));
@@ -47,7 +47,7 @@ export default function AdminWithdrawals() {
   const reject = async (id) => {
     setProcessingId(id);
     try {
-      const res = await fetch(`${API_BASE}/admin/withdrawals/${id}/reject`, { method: "POST" });
+      const res = await smartFetch(`/admin/withdrawals/${id}/reject`, { method: "POST" });
       const data = await res.json();
       if (data.status === "rejected") {
         setWithdrawals((prev) => prev.map((w) => w.id === id ? { ...w, status: "rejected" } : w));

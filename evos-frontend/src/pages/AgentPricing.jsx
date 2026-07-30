@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-const API = "https://api.evosdata.xyz";
+import { smartFetch } from "../config";
 
 const agentHeaders = () => ({
   "Content-Type": "application/json",
@@ -41,7 +41,7 @@ export default function AgentPricing({ user, setPage }) {
     if (!user?.id) return;
     try {
       setLoading(true);
-      const res = await fetch(`${API}/agent/pricing/${user.id}`, {
+      const res = await smartFetch(`/agent/pricing/${user.id}`, {
         headers: agentHeaders(),
       });
       if (!res.ok) throw new Error("Failed to fetch pricing");
@@ -75,7 +75,7 @@ export default function AgentPricing({ user, setPage }) {
     const item = rows[index];
     try {
       setSavingIndex(index);
-      const res = await fetch(`${API}/agent/pricing/save`, {
+      const res = await smartFetch(`/agent/pricing/save`, {
         method: "POST",
         headers: agentHeaders(),
         body: JSON.stringify({ agent_id: user.id, prices: [item] }),
@@ -94,7 +94,7 @@ export default function AgentPricing({ user, setPage }) {
   const saveAll = async () => {
     try {
       setSavingAll(true);
-      const res = await fetch(`${API}/agent/pricing/save`, {
+      const res = await smartFetch(`/agent/pricing/save`, {
         method: "POST",
         headers: agentHeaders(),
         body: JSON.stringify({ agent_id: user.id, prices: rows }),

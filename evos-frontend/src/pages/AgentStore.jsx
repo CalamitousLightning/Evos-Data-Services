@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-const API = "https://api.evosdata.xyz";
+import { smartFetch } from "../config";
 
 const OUT_OF_STOCK = [];
 
@@ -45,7 +45,7 @@ export default function AgentStore({ setPage }) {
 
     const load = async () => {
       try {
-        const res = await fetch(`${API}/store/${agentId}`);
+        const res = await smartFetch(`/store/${agentId}`);
         const data = await res.json();
         setStore(data);
       } catch (e) {
@@ -83,7 +83,7 @@ export default function AgentStore({ setPage }) {
 
     setProcessing(true);
     try {
-      const res = await fetch(`${API}/store/order`, {
+      const res = await smartFetch(`/store/order`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

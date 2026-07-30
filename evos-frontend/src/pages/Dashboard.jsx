@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { smartFetch } from "../config";
 
 export default function Dashboard({ setPage, user }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -24,7 +25,7 @@ export default function Dashboard({ setPage, user }) {
     if (!user?.id) return;
     const loadDashboard = async () => {
       try {
-        const res = await fetch(`https://api.evosdata.xyz/today/${user.id}`);
+        const res = await smartFetch(`/today/${user.id}`);
         const data = await res.json();
         setStats({
           total_orders: data.global.total_orders || 0,

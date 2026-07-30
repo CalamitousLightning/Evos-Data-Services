@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-const API_BASE = "https://api.evosdata.xyz";
+import { smartFetch } from "../config";
 const NETWORKS = ["MTN", "TELECEL", "AIRTELTIGO"];
 const NETWORK_LABELS = { MTN: "MTN", TELECEL: "Telecel", AIRTELTIGO: "AirtelTigo" };
 const DEFAULT_FEE_PERCENT = 4; // fallback used only until /agent/withdraw/fee-info loads
@@ -44,7 +44,7 @@ export default function AgentWithdraw({ user, setPage }) {
     (async () => {
       try {
         const token = sessionStorage.getItem("agentToken");
-        const res = await fetch(`${API_BASE}/agent/dashboard/${user.id}`, {
+        const res = await smartFetch(`/agent/dashboard/${user.id}`, {
           headers: { "X-Agent-Token": token },
         });
         const data = await res.json();
@@ -56,7 +56,7 @@ export default function AgentWithdraw({ user, setPage }) {
 
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/agent/withdraw/fee-info`);
+        const res = await smartFetch(`/agent/withdraw/fee-info`);
         const data = await res.json();
         if (data?.fee_percent != null) setFeePercent(Number(data.fee_percent));
       } catch {
@@ -69,8 +69,8 @@ export default function AgentWithdraw({ user, setPage }) {
   const clear = () => setMessage({ text: "", ok: false });
 
   // ── safe fetch helper: never throws on non-2xx, always returns parsed data ──
-  const safeFetch = async (url, options = {}) => {
-    const res = await fetch(url, options);
+  const safeFetch = async (path, options = {}) => {
+    const res = await smartFetch(path, options);
     const text = await res.text();
     try {
       return { ok: res.ok, status: res.status, data: JSON.parse(text) };
@@ -123,7 +123,7 @@ export default function AgentWithdraw({ user, setPage }) {
     clear();
     try {
       const token = sessionStorage.getItem("agentToken");
-      const { data } = await safeFetch(`${API_BASE}/agent/withdraw/verify-account`, {
+      const { data } = await safeFetch(`/agent/withdraw/verify-account`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Agent-Token": token },
         body: JSON.stringify({
@@ -160,7 +160,7 @@ export default function AgentWithdraw({ user, setPage }) {
     clear();
     try {
       const token = sessionStorage.getItem("agentToken");
-      const { ok, status, data } = await safeFetch(`${API_BASE}/agent/withdraw`, {
+      const { ok, status, data } = await safeFetch(`/agent/withdraw`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Agent-Token": token },
         body: JSON.stringify({

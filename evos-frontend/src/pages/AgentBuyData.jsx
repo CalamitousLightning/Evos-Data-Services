@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 
-const API = "https://api.evosdata.xyz";
+import { smartFetch } from "../config";
 
 const NETWORK_CONFIG = {
   MTN: {
@@ -65,7 +65,7 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
       // Backend's own DataMart call can take up to ~9s worst case (see
       // main.py), so this needs real margin above that.
       const t = setTimeout(() => controller.abort(), 12000);
-      const res = await fetch(`${API}/verify-number`, {
+      const res = await smartFetch(`/verify-number`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phoneNumber: num.trim(), network }),
@@ -350,10 +350,10 @@ export default function AgentBuyData({ user, setPage, authLoading }) {
         setError("");
         const agentToken = sessionStorage.getItem("agentToken");
         const [pricingRes, dashRes] = await Promise.all([
-          fetch(`${API}/agent/pricing/${user.id}`, {
+          smartFetch(`/agent/pricing/${user.id}`, {
             headers: { "X-Agent-Token": agentToken },
           }),
-          fetch(`${API}/agent/dashboard/${user.id}`, {
+          smartFetch(`/agent/dashboard/${user.id}`, {
             headers: { "X-Agent-Token": agentToken },
           }),
         ]);
@@ -395,7 +395,7 @@ export default function AgentBuyData({ user, setPage, authLoading }) {
     setProcessing(true);
     try {
       const agentToken = sessionStorage.getItem("agentToken");
-      const res = await fetch(`${API}/agent/buy-data`, {
+      const res = await smartFetch(`/agent/buy-data`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -413,7 +413,7 @@ export default function AgentBuyData({ user, setPage, authLoading }) {
         setSelected(null);
         setSuccessMsg(`✅ ${selected.bundle} sent to ${phone}!`);
         // Refresh wallet balance
-        const dashRes = await fetch(`${API}/agent/dashboard/${user.id}`, {
+        const dashRes = await smartFetch(`/agent/dashboard/${user.id}`, {
           headers: { "X-Agent-Token": agentToken },
         });
         const dashData = await dashRes.json();

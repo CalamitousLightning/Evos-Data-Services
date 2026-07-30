@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 
-const API = "https://api.evosdata.xyz";
+import { smartFetch } from "../config";
 
 // Paystack Ghana fee: 1.95% + GH₵ 0.25 (capped at GH₵ 2000)
 // Agent pays the fee on top → they pay: amount + fee
@@ -38,7 +38,7 @@ export default function AgentDeposit({ user, setPage, authLoading }) {
 
     const loadBalance = async () => {
       try {
-        const res = await fetch(`${API}/agent/dashboard/${user.id}`, {
+        const res = await smartFetch(`/agent/dashboard/${user.id}`, {
           headers: { "X-Agent-Token": agentToken },
         });
         const data = await res.json();
@@ -66,7 +66,7 @@ export default function AgentDeposit({ user, setPage, authLoading }) {
     setSubmitting(true);
     setError("");
     try {
-      const res = await fetch(`${API}/agent/deposit/initiate`, {
+      const res = await smartFetch(`/agent/deposit/initiate`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

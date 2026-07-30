@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 
-const API = "https://api.evosdata.xyz";
+import { smartFetch } from "../config";
 
 const NETWORK_CONFIG = {
   MTN: {
@@ -155,7 +155,7 @@ function ConfirmModal({ selected, networkLabel, networkCfg, onClose, onConfirm, 
     try {
       const controller = new AbortController();
       const t = setTimeout(() => controller.abort(), 12000);
-      const res = await fetch(`${API}/verify-number`, {
+      const res = await smartFetch(`/verify-number`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phoneNumber: num.trim(), network }),
@@ -368,7 +368,7 @@ function TrackModal({ onClose }) {
 
     setLoading(true);
     try {
-      const res = await fetch(`${API}/orders/track?phone=${encodeURIComponent(cleaned)}`);
+      const res = await smartFetch(`/orders/track?phone=${encodeURIComponent(cleaned)}`);
       const data = await res.json();
 
       if (data.orders && data.orders.length > 0) {
@@ -516,7 +516,7 @@ export default function StorePage({ setPage }) {
     const loadStore = async () => {
       try {
         setLoading(true);
-        const res = await fetch(`${API}/store/${agentId}`);
+        const res = await smartFetch(`/store/${agentId}`);
         const data = await res.json();
         if (!res.ok || data.status === "error") { setStore(null); }
         else { setStore(data); }
@@ -553,7 +553,7 @@ export default function StorePage({ setPage }) {
     if (!selected) return;
     setProcessing(true);
     try {
-      const res = await fetch(`${API}/store/order`, {
+      const res = await smartFetch(`/store/order`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

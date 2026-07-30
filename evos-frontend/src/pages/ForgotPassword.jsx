@@ -1,7 +1,5 @@
 import { useState } from "react";
-import axios from "axios";
-
-const API = "https://api.evosdata.xyz";
+import { smartPost } from "../config";
 
 export default function ForgotPassword({ setPage }) {
   const [step, setStep] = useState(1); // 1 = email, 2 = otp, 3 = new password
@@ -24,7 +22,7 @@ export default function ForgotPassword({ setPage }) {
     }
     try {
       setLoading(true);
-      const res = await axios.post(`${API}/auth/forgot-password`, {
+      const res = await smartPost(`/auth/forgot-password`, {
         email: email.trim().toLowerCase(),
       });
       if (res.data?.status === "sent") {
@@ -49,7 +47,7 @@ export default function ForgotPassword({ setPage }) {
     }
     try {
       setLoading(true);
-      const res = await axios.post(`${API}/auth/verify-otp`, {
+      const res = await smartPost(`/auth/verify-otp`, {
         email: email.trim().toLowerCase(),
         otp: otp.trim(),
       });
@@ -83,7 +81,7 @@ export default function ForgotPassword({ setPage }) {
     }
     try {
       setLoading(true);
-      const res = await axios.post(`${API}/auth/reset-password`, {
+      const res = await smartPost(`/auth/reset-password`, {
         email: email.trim().toLowerCase(),
         otp: otp.trim(),
         new_password: newPassword,

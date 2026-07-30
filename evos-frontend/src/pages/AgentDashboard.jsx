@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-const API_BASE = "https://api.evosdata.xyz";
+import { smartFetch } from "../config";
 
 const slugify = (name) =>
     name.trim().toLowerCase()
@@ -63,9 +63,9 @@ export default function AgentDashboard({ user, setPage }) {
                 setError("");
                 const headers = agentHeaders();
                 const [dashRes, txRes, nameRes] = await Promise.all([
-                    fetch(`${API_BASE}/agent/dashboard/${user.id}`, { headers }),
-                    fetch(`${API_BASE}/agent/transactions/${user.id}`, { headers }),
-                    fetch(`${API_BASE}/agent/store-name/${user.id}`, { headers }),
+                    smartFetch(`/agent/dashboard/${user.id}`, { headers }),
+                    smartFetch(`/agent/transactions/${user.id}`, { headers }),
+                    smartFetch(`/agent/store-name/${user.id}`, { headers }),
                 ]);
 
                 // FIX: if any request is 403, token is missing — send back to login
@@ -114,7 +114,7 @@ export default function AgentDashboard({ user, setPage }) {
         setStoreNameMsg("");
         setStoreNameSaving(true);
         try {
-            const res = await fetch(`${API_BASE}/agent/store-name`, {
+            const res = await smartFetch(`/agent/store-name`, {
                 method: "POST",
                 headers: agentHeaders(),
                 body: JSON.stringify({ agent_id: user.id, store_name: storeNameInput.trim() }),

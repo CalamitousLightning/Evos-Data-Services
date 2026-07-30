@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-const API = "https://api.evosdata.xyz";
+import { smartFetch } from "../config";
 
 const SESSION_KEY = "evos_store_state";
 
@@ -94,7 +94,7 @@ export default function ETATrack({ setPage, backTo = "home" }) {
 
     setLoading(true);
     try {
-      const res = await fetch(`${API}/orders/track?phone=${encodeURIComponent(cleaned)}`);
+      const res = await smartFetch(`/orders/track?phone=${encodeURIComponent(cleaned)}`);
       const data = await res.json();
 
       if (data.orders && data.orders.length > 0) {

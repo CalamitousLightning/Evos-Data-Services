@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { BUSINESS_HUB_API_BASE } from "../config";
 
 export default function OrderTracking() {
   const [ref, setRef] = useState("");
@@ -12,7 +13,7 @@ export default function OrderTracking() {
 
     try {
       const res = await fetch(
-        `https://evos-business-hub.onrender.com/orders/sync/${ref}`,
+        `${BUSINESS_HUB_API_BASE}/orders/sync/${ref}`,
         {
           method: "POST",
         }

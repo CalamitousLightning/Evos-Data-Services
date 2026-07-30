@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-const API_BASE = "https://api.evosdata.xyz";
+import { smartFetch } from "../config";
 
 export default function Success() {
   const [status, setStatus] = useState("verifying");
@@ -17,7 +17,7 @@ export default function Success() {
 
     if (type === "deposit") {
       // fire-and-forget
-      fetch(`${API_BASE}/agent/deposit/verify`, {
+      smartFetch(`/agent/deposit/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reference }),
@@ -26,7 +26,7 @@ export default function Success() {
       setStatus("deposit_success");
     } else {
       // fire-and-forget
-      fetch(`${API_BASE}/orders/sync/${reference}`, {
+      smartFetch(`/orders/sync/${reference}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       }).catch(console.error);
