@@ -95,6 +95,15 @@ _verify_call_lock = threading.Lock()
 DATAMART_VERIFY_LIMIT = 2          # per DataMart docs
 DATAMART_VERIFY_WINDOW = 60        # seconds
 
+
+DATAMART_CHECKERS_BASE = "https://api.datamartgh.shop/api/checkers"
+# Reuses DATAMART_API_KEY and DATAMART_WEBHOOK_SECRET — same account/wallet as data bundles,
+# just a different base path per DataMart's docs.
+
+CHECKER_PRICE_CACHE_TTL = 300
+_checker_products_cache = {"data": None, "ts": 0}
+_checker_products_lock = threading.Lock()
+
 BUNDLES_GHANA_API_KEY = os.getenv("BUNDLES_GHANA_API_KEY")
 BUNDLES_GHANA_API_SECRET = os.getenv("BUNDLES_GHANA_API_SECRET")
 BUNDLES_GHANA_BASE = "https://evosdata.xyz/.netlify/functions/bundlesProxy"
@@ -361,6 +370,50 @@ class VerifyAccountRequest(BaseModel):
         return v
 
 
+
+
+class CreateCheckerOrderRequest(BaseModel):
+    user_id: Optional[int] = None
+    checker_type: str = Field(min_length=3, max_length=10)
+    phone_number: str = Field(min_length=9, max_length=15)
+    quantity: int = Field(default=1, ge=1, le=20)
+    email: Optional[EmailStr] = None
+
+    @validator("checker_type")
+    def checker_type_valid(cls, v):
+        v = v.strip().upper()
+        if v not in ("WAEC", "BECE"):
+            raise ValueError("Invalid checker type")
+        return v
+
+    @validator("phone_number")
+    def phone_clean(cls, v):
+        cleaned = re.sub(r"[\s\-\(\)]", "", v)
+        if not re.match(r"^\d{9,15}$", cleaned):
+            raise ValueError("Invalid phone number")
+        return cleaned
+
+
+class AgentBuyCheckerRequest(BaseModel):
+    agent_id: int
+    checker_type: str = Field(min_length=3, max_length=10)
+    phone_number: str = Field(min_length=9, max_length=15)
+    quantity: int = Field(default=1, ge=1, le=20)
+
+    @validator("checker_type")
+    def checker_type_valid(cls, v):
+        v = v.strip().upper()
+        if v not in ("WAEC", "BECE"):
+            raise ValueError("Invalid checker type")
+        return v
+
+    @validator("phone_number")
+    def phone_clean(cls, v):
+        cleaned = re.sub(r"[\s\-\(\)]", "", v)
+        if not re.match(r"^\d{9,15}$", cleaned):
+            raise ValueError("Invalid phone number")
+        return cleaned
+        
 # =========================
 # HELPERS
 # =========================
@@ -406,6 +459,151 @@ AGYEKUMDATA_CATEGORY_MAP = {
     "AIRTELTIGO": "iShare package",
     "AT":         "iShare package",
 }
+
+
+
+# =========================
+# DATAMART CHECKERS HELPERS
+# Same X-API-Key, same wallet as data bundles — different base path.
+# =========================
+
+def _datamart_checkers_headers():
+    return {"X-API-Key": DATAMART_API_KEY, "Content-Type": "application/json"}
+
+
+def get_checker_products():
+    """Cached product list — price + stock. TTL keeps us from hitting
+    /api/checkers/products on every single page load."""
+    now = time.time()
+    with _checker_products_lock:
+        if _checker_products_cache["data"] and now - _checker_products_cache["ts"] < CHECKER_PRICE_CACHE_TTL:
+            return _checker_products_cache["data"]
+
+    try:
+        res = requests.get(
+            f"{DATAMART_CHECKERS_BASE}/products",
+            headers=_datamart_checkers_headers(),
+            timeout=REQUEST_TIMEOUT,
+        )
+        data = res.json().get("data", [])
+        with _checker_products_lock:
+            _checker_products_cache["data"] = data
+            _checker_products_cache["ts"] = now
+        return data
+    except Exception as e:
+        logger.error("CHECKER PRODUCTS ERROR: %s", str(e))
+        with _checker_products_lock:
+            return _checker_products_cache["data"] or []
+
+
+def call_checker_purchase(checker_type: str, phone: str, ref: str, webhook_url: str = None, skip_sms: bool = False) -> dict:
+    try:
+        res = requests.post(
+            f"{DATAMART_CHECKERS_BASE}/purchase",
+            headers=_datamart_checkers_headers(),
+            json={
+                "checkerType": checker_type,
+                "phoneNumber": phone,
+                "ref": ref,
+                "webhookUrl": webhook_url or "https://api.evosdata.xyz/webhook/datamart-checkers",
+                "skipSms": skip_sms,
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        return res.json()
+    except Exception as e:
+        logger.error("CHECKER PURCHASE ERROR: %s", str(e))
+        return {"status": "error", "message": str(e)}
+
+
+def call_checker_bulk_purchase(checker_type: str, phone: str, quantity: int, ref: str, webhook_url: str = None, skip_sms: bool = False) -> dict:
+    try:
+        res = requests.post(
+            f"{DATAMART_CHECKERS_BASE}/bulk-purchase",
+            headers=_datamart_checkers_headers(),
+            json={
+                "checkerType": checker_type,
+                "phoneNumber": phone,
+                "quantity": quantity,
+                "ref": ref,
+                "webhookUrl": webhook_url or "https://api.evosdata.xyz/webhook/datamart-checkers",
+                "skipSms": skip_sms,
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        return res.json()
+    except Exception as e:
+        logger.error("CHECKER BULK PURCHASE ERROR: %s", str(e))
+        return {"status": "error", "message": str(e)}
+
+
+def call_checker_order_status(reference: str) -> dict:
+    try:
+        res = requests.get(
+            f"{DATAMART_CHECKERS_BASE}/order-status/{reference}",
+            headers=_datamart_checkers_headers(),
+            timeout=REQUEST_TIMEOUT,
+        )
+        return res.json()
+    except Exception as e:
+        logger.error("CHECKER STATUS ERROR: %s", str(e))
+        return {"status": "error", "message": str(e)}
+
+
+def sanitise_checker_ref(ref: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9\-_]", "", ref)
+    return cleaned[:40]
+
+
+
+
+
+
+def dispatch_checker_order(checker: dict):
+    """Called once payment is confirmed (webhook or retry job). Buys the
+    card(s) from DataMart and stores serial/pin. Raises on failure so the
+    caller can decide how to mark the row."""
+    checker_id   = checker["id"]
+    checker_type = checker["checker_type"]
+    phone        = checker["phone_number"]
+    quantity     = checker.get("quantity", 1)
+    raw_ref      = checker.get("evosdata_ref") or checker.get("paystack_ref") or str(checker_id)
+    safe_ref     = sanitise_checker_ref(raw_ref)
+
+    if quantity > 1:
+        result = call_checker_bulk_purchase(checker_type, phone, quantity, safe_ref)
+        if result.get("status") != "success":
+            raise Exception(f"Bulk checker purchase failed: {result.get('message', result)}")
+        data  = result.get("data", {})
+        cards = data.get("cards", [])
+        supabase.table("checkers").update({
+            "status":               "successful",
+            "datamart_ref":         safe_ref,
+            "serial_numbers":       cards,
+        }).eq("id", checker_id).execute()
+        logger.info("CHECKER DISPATCH: order %s bulk-purchased %d %s cards ✅", checker_id, quantity, checker_type)
+
+    else:
+        result = call_checker_purchase(checker_type, phone, safe_ref)
+        if result.get("status") != "success":
+            raise Exception(f"Checker purchase failed: {result.get('message', result)}")
+        data = result.get("data", {})
+        card = {
+            "purchaseId":   data.get("purchaseId"),
+            "reference":    data.get("reference"),
+            "serialNumber": data.get("serialNumber"),
+            "pin":          data.get("pin"),
+            "price":        data.get("price"),
+            "createdAt":    data.get("createdAt"),
+        }
+        supabase.table("checkers").update({
+            "status":               "successful",
+            "datamart_ref":         data.get("reference") or safe_ref,
+            "datamart_purchase_id": data.get("purchaseId"),
+            "serial_numbers":       [card],
+        }).eq("id", checker_id).execute()
+        logger.info("CHECKER DISPATCH: order %s purchased %s card ✅", checker_id, checker_type)
+
 
 # =========================
 # RETRY ESCALATION CONFIG
@@ -1036,6 +1234,184 @@ def get_prices(request: Request):
         raise HTTPException(status_code=500, detail="Failed to load prices")
 
 
+
+@app.post("/checkers/create")
+@limiter.limit("10/minute")
+def create_checker_order(request: Request, data: CreateCheckerOrderRequest):
+    try:
+        products = get_checker_products()
+        product = next((p for p in products if p.get("name", "").upper() == data.checker_type), None)
+        if not product:
+            raise HTTPException(400, "Checker type not available")
+        if not product.get("inStock"):
+            raise HTTPException(400, f"{data.checker_type} checkers are currently out of stock")
+
+        unit_price = float(product.get("price", 0))
+        if unit_price <= 0:
+            raise HTTPException(400, "Invalid checker price")
+
+        total_price = round(unit_price * data.quantity, 2)
+
+        customer_email = None
+        if data.user_id:
+            user_res = supabase.table("users").select("email").eq("id", data.user_id).limit(1).execute()
+            if not user_res.data:
+                raise HTTPException(404, "User not found")
+            customer_email = user_res.data[0]["email"]
+        else:
+            customer_email = data.email or "guest@evoshub.com"
+
+        try:
+            paystack = requests.post(
+                "https://api.paystack.co/transaction/initialize",
+                headers={"Authorization": f"Bearer {PAYSTACK_SECRET}", "Content-Type": "application/json"},
+                json={
+                    "email": customer_email,
+                    "amount": int(total_price * 100),
+                    "callback_url": "https://evosdata.xyz/success",
+                },
+                timeout=REQUEST_TIMEOUT,
+            ).json()
+        except requests.exceptions.RequestException:
+            raise HTTPException(500, "Payment service error")
+
+        if not paystack.get("status"):
+            raise HTTPException(400, "Payment init failed")
+
+        ref      = paystack["data"]["reference"]
+        evos_ref = f"CHK-{uuid.uuid4().hex[:8].upper()}"
+
+        supabase.table("checkers").insert({
+            "user_id":      data.user_id,
+            "guest_email":  None if data.user_id else customer_email,
+            "checker_type": data.checker_type,
+            "phone_number": data.phone_number,
+            "quantity":     data.quantity,
+            "price":        total_price,
+            "paystack_ref": ref,
+            "evosdata_ref": evos_ref,
+            "status":       "pending_payment",
+        }).execute()
+
+        return {"status": True, "payment_url": paystack["data"]["authorization_url"], "reference": ref}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("CREATE CHECKER ORDER ERROR: %s", str(e))
+        raise HTTPException(status_code=500, detail="Server error")
+        
+@app.post("/agent/buy-checker")
+@limiter.limit("10/minute")
+async def agent_buy_checker(request: Request, payload: AgentBuyCheckerRequest):
+    try:
+        token = request.headers.get("X-Agent-Token", "")
+        if not token or not verify_agent_token(token, payload.agent_id):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        agent_id = payload.agent_id
+
+        agent_res = supabase.table("users") \
+            .select("username") \
+            .eq("id", agent_id) \
+            .eq("role", "agent") \
+            .eq("agent_status", "approved") \
+            .limit(1) \
+            .execute()
+        if not agent_res.data:
+            return {"status": "error", "message": "Agent not found or not approved"}
+
+        products = get_checker_products()
+        product = next((p for p in products if p.get("name", "").upper() == payload.checker_type), None)
+        if not product:
+            return {"status": "error", "message": "Checker type not available"}
+        if not product.get("inStock"):
+            return {"status": "error", "message": f"{payload.checker_type} checkers are out of stock"}
+
+        unit_cost   = float(product.get("price", 0))
+        total_cost  = round(unit_cost * payload.quantity, 2)
+        if total_cost <= 0:
+            return {"status": "error", "message": "Invalid checker price"}
+
+        # ── DUPLICATE GUARD — same spirit as agent_buy_data ─────────────
+        dupe_floor = (utc_now() - timedelta(minutes=5)).isoformat()
+        dupe_res = supabase.table("checkers") \
+            .select("id, created_at") \
+            .eq("agent_id", agent_id) \
+            .eq("checker_type", payload.checker_type) \
+            .eq("phone_number", payload.phone_number) \
+            .gte("created_at", dupe_floor) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+        if dupe_res.data:
+            last_order_at = parse_db_dt(dupe_res.data[0]["created_at"])
+            wait_seconds = max(int((timedelta(minutes=5) - (utc_now() - last_order_at)).total_seconds()), 1)
+            return {
+                "status": "error",
+                "message": f"You just bought {payload.checker_type} for {payload.phone_number} moments ago. Please wait {wait_seconds}s.",
+                "duplicate": True,
+                "retry_after_seconds": wait_seconds,
+            }
+
+        wallet_res = supabase.table("agent_wallets").select("balance").eq("agent_id", agent_id).limit(1).execute()
+        wallet_balance = float(wallet_res.data[0]["balance"]) if wallet_res.data else 0.0
+        if wallet_balance < total_cost:
+            return {"status": "error", "message": f"Insufficient wallet balance. Need GH₵ {total_cost:.2f}, have GH₵ {wallet_balance:.2f}"}
+
+        new_balance = round(wallet_balance - total_cost, 2)
+        supabase.table("agent_wallets").update({"balance": new_balance}).eq("agent_id", agent_id).execute()
+
+        reference = f"CHK-AGT-{agent_id}-{uuid.uuid4().hex[:10].upper()}"
+
+        checker_res = supabase.table("checkers").insert({
+            "agent_id":     agent_id,
+            "checker_type": payload.checker_type,
+            "phone_number": payload.phone_number,
+            "quantity":     payload.quantity,
+            "price":        total_cost,
+            "evosdata_ref": reference,
+            "paystack_ref": reference,
+            "status":       "processing",
+        }).execute()
+
+        if not checker_res.data:
+            supabase.table("agent_wallets").update({"balance": wallet_balance}).eq("agent_id", agent_id).execute()
+            return {"status": "error", "message": "Failed to create checker order"}
+
+        checker_id = checker_res.data[0]["id"]
+
+        supabase.table("agent_transactions").insert({
+            "agent_id":  agent_id,
+            "type":      "debit",
+            "amount":    total_cost,
+            "reference": reference,
+            "order_id":  checker_id,
+        }).execute()
+
+        try:
+            fresh = supabase.table("checkers").select("*").eq("id", checker_id).limit(1).execute().data[0]
+            dispatch_checker_order(fresh)
+        except Exception as dispatch_err:
+            logger.error("AGENT BUY CHECKER DISPATCH ERROR: %s", str(dispatch_err))
+            # Payment already taken from wallet — leave as "processing" so the
+            # retry job's checker equivalent can pick it up rather than silently
+            # failing and stranding a paid order. See note below on retry job scope.
+            supabase.table("checkers").update({"status": "processing"}).eq("id", checker_id).execute()
+
+        return {
+            "status":             "success",
+            "message":            f"{payload.quantity}x {payload.checker_type} queued for {payload.phone_number}",
+            "reference":          reference,
+            "checker_id":         checker_id,
+            "new_wallet_balance": new_balance,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("AGENT BUY CHECKER ERROR: %s", str(e))
+        return {"status": "error", "message": "Something went wrong. Please try again."}
+        
 # =========================
 # VERIFY NUMBER (DataMart pre-check)
 # Informational only — never blocks a purchase. Any failure, timeout, or
@@ -1803,12 +2179,101 @@ async def retry_stuck_order_payments():
 
         await asyncio.sleep(300)
 
+
+
+_checker_payment_retry_running = False
+
+async def retry_stuck_checker_payments():
+    global _checker_payment_retry_running
+    if _checker_payment_retry_running:
+        logger.info("CHECKER PAYMENT RETRY: already running, skipping duplicate")
+        return
+
+    _checker_payment_retry_running = True
+    await asyncio.sleep(150)  # stagger vs the other three background jobs
+
+    while True:
+        try:
+            logger.info("CHECKER PAYMENT RETRY: scanning for stuck checker payments...")
+
+            now    = utc_now()
+            floor  = (now - timedelta(minutes=5)).isoformat()
+            cutoff = (now - timedelta(hours=6)).isoformat()
+
+            stuck = supabase.table("checkers") \
+                .select("*") \
+                .in_("status", ["pending_payment", "failed"]) \
+                .not_.is_("paystack_ref", None) \
+                .is_("datamart_ref", None) \
+                .lte("created_at", floor) \
+                .gte("created_at", cutoff) \
+                .execute()
+
+            checkers = stuck.data or []
+            logger.info("CHECKER PAYMENT RETRY: %d checker orders to check", len(checkers))
+
+            for checker in checkers:
+                checker_id = checker.get("id")
+                reference  = checker.get("paystack_ref")
+
+                if not reference or str(reference).startswith("CHK-AGT-"):
+                    continue  # agent-buy checkers are wallet-debited, never touch Paystack
+
+                try:
+                    async with httpx.AsyncClient() as client:
+                        res = await client.get(
+                            f"https://api.paystack.co/transaction/verify/{reference}",
+                            headers={"Authorization": f"Bearer {PAYSTACK_SECRET}"},
+                            timeout=15,
+                        )
+                        data = res.json()
+
+                    paystack_status = data.get("data", {}).get("status", "")
+                    logger.info("CHECKER PAYMENT RETRY: checker %s ref=%s — Paystack status: %s", checker_id, reference, paystack_status)
+
+                    if paystack_status != "success":
+                        if checker["status"] == "pending_payment":
+                            age = utc_now() - parse_db_dt(checker["created_at"])
+                            if age > timedelta(minutes=30):
+                                supabase.table("checkers").update({"status": "failed"}).eq("id", checker_id).execute()
+                                logger.info("CHECKER PAYMENT RETRY: checker %s marked failed — unpaid after 30min", checker_id)
+                        continue
+
+                    recheck = supabase.table("checkers").select("*").eq("id", checker_id).limit(1).execute()
+                    if not recheck.data:
+                        continue
+                    fresh = recheck.data[0]
+                    if fresh["status"] not in ("pending_payment", "failed") or fresh.get("datamart_ref"):
+                        logger.info("CHECKER PAYMENT RETRY: checker %s already advanced, skipping", checker_id)
+                        continue
+
+                    supabase.table("checkers").update({"status": "paid"}).eq("id", checker_id).execute()
+                    logger.info("CHECKER PAYMENT RETRY: checker %s confirmed paid ✅", checker_id)
+
+                    try:
+                        fresh_paid = supabase.table("checkers").select("*").eq("id", checker_id).limit(1).execute().data[0]
+                        dispatch_checker_order(fresh_paid)
+                    except Exception as dispatch_err:
+                        logger.error("CHECKER PAYMENT RETRY: dispatch error for checker %s: %s", checker_id, str(dispatch_err))
+                        supabase.table("checkers").update({"status": "failed"}).eq("id", checker_id).execute()
+
+                except Exception as e:
+                    logger.error("CHECKER PAYMENT RETRY: error verifying checker %s: %s", checker_id, str(e))
+
+        except Exception as e:
+            logger.error("CHECKER PAYMENT RETRY ERROR: %s", str(e))
+
+        await asyncio.sleep(300)
+
+
 @app.on_event("startup")
 async def startup_event():
     log_agyekumdata_categories()
     asyncio.create_task(retry_stuck_orders())
     asyncio.create_task(retry_stuck_deposits())
     asyncio.create_task(retry_stuck_order_payments())
+    asyncio.create_task(retry_stuck_checker_payments())
+
 
 # =========================
 # SPACEMAIL SMTP
@@ -2022,13 +2487,40 @@ async def paystack_webhook(request: Request):
         event   = payload.get("event")
 
         # =========================
-        # EVENT: charge.success (existing purchase-dispatch logic, unchanged)
+        # EVENT: charge.success
         # =========================
         if event == "charge.success":
 
             reference = payload["data"]["reference"]
             print(f"PAYSTACK WEBHOOK: charge.success received, reference={reference}")
 
+            # ── CHECKER ORDER? ───────────────────────────────────────────
+            checker_res = supabase.table("checkers").select("*").eq("paystack_ref", reference).limit(1).execute()
+            if checker_res.data:
+                checker = checker_res.data[0]
+
+                if checker["status"] != "pending_payment":
+                    print(f"PAYSTACK WEBHOOK: checker {checker['id']} already processed (status={checker['status']})")
+                    return {"status": "already processed"}
+
+                supabase.table("checkers").update({"status": "paid"}).eq("paystack_ref", reference).execute()
+                print(f"PAYSTACK WEBHOOK: checker {checker['id']} marked as paid")
+
+                try:
+                    fresh = supabase.table("checkers").select("*").eq("id", checker["id"]).limit(1).execute().data[0]
+                    dispatch_checker_order(fresh)
+                    print(f"PAYSTACK WEBHOOK: checker {checker['id']} dispatched successfully ✅")
+                    return {"status": "success"}
+                except Exception as e:
+                    logger.error("CHECKER DISPATCH ERROR: %s", str(e))
+                    print(f"CHECKER DISPATCH ERROR: {str(e)}")
+                    # Payment already confirmed — mark "failed" (not left as "paid")
+                    # so retry_stuck_checker_payments() picks it up on the next cycle,
+                    # since that job only scans status in ("pending_payment", "failed").
+                    supabase.table("checkers").update({"status": "failed"}).eq("id", checker["id"]).execute()
+                    return {"status": "checker dispatch failed"}
+
+            # ── DATA ORDER (existing logic, unchanged) ────────────────────
             order_res = supabase.table("orders").select("*").eq("paystack_ref", reference).limit(1).execute()
             if not order_res.data:
                 print(f"PAYSTACK WEBHOOK: no order found for reference={reference}")
@@ -2182,9 +2674,6 @@ async def paystack_webhook(request: Request):
             print(f"PAYSTACK WEBHOOK: withdrawal {row.get('id')} updated to status={final_status}")
 
             if final_status == "paid":
-                # -------------------------
-                # Record the debit transaction, guarding against duplicate inserts
-                # -------------------------
                 existing_tx = supabase.table("agent_transactions").select("id").eq("reference", reference).limit(1).execute()
                 if not existing_tx.data:
                     supabase.table("agent_transactions").insert({
@@ -2197,9 +2686,6 @@ async def paystack_webhook(request: Request):
                 else:
                     print(f"PAYSTACK WEBHOOK: agent_transactions entry already exists for reference={reference}, skipping insert")
             else:
-                # -------------------------
-                # Failed or reversed transfer: refund the agent's wallet
-                # -------------------------
                 wlt = supabase.table("agent_wallets").select("balance").eq("agent_id", row["agent_id"]).limit(1).execute()
                 if wlt.data:
                     new_balance = float(wlt.data[0]["balance"]) + float(row["amount"])
@@ -2272,6 +2758,53 @@ async def datamart_webhook(request: Request):
         raise e
     except Exception as e:
         logger.error("DATAMART WEBHOOK ERROR: %s", str(e))
+        return {"received": False}
+
+
+
+@app.post("/webhook/datamart-checkers")
+async def datamart_checkers_webhook(request: Request):
+    try:
+        body      = await request.body()
+        signature = request.headers.get("X-DataMart-Signature")
+
+        if not signature or not verify_datamart_signature(body, signature, DATAMART_WEBHOOK_SECRET):
+            raise HTTPException(401, "Invalid signature")
+
+        payload = await request.json()
+        data    = payload.get("data", {})
+        ref     = data.get("reference")
+
+        if not ref:
+            return {"received": True}
+
+        checker_res = supabase.table("checkers").select("*").eq("datamart_ref", ref).limit(1).execute()
+        if not checker_res.data:
+            return {"received": True}
+
+        checker = checker_res.data[0]
+        card = {
+            "purchaseId":   data.get("purchaseId"),
+            "reference":    ref,
+            "serialNumber": data.get("serialNumber"),
+            "pin":          data.get("pin"),
+            "price":        data.get("price"),
+            "createdAt":    data.get("createdAt"),
+        }
+        existing_cards = checker.get("serial_numbers") or []
+        if not any(c.get("reference") == ref for c in existing_cards):
+            existing_cards.append(card)
+
+        supabase.table("checkers").update({
+            "status":         "successful",
+            "serial_numbers": existing_cards,
+        }).eq("id", checker["id"]).execute()
+
+        return {"received": True}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error("DATAMART CHECKERS WEBHOOK ERROR: %s", str(e))
         return {"received": False}
 
 
