@@ -9,6 +9,17 @@ const DEFAULT_FEE_PERCENT = 4; // fallback used only until /agent/withdraw/fee-i
 // Moolre is disabled for now — flip this back to true when it's ready.
 const MOOLRE_ENABLED = false;
 
+// ── withdrawal day restriction ───────────────────────────────────────
+// Withdrawals are only allowed on Monday (1), Wednesday (3), and Thursday (4).
+// getDay(): Sun=0, Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6
+const ALLOWED_WITHDRAWAL_DAYS = [1, 3, 4];
+const WITHDRAWAL_DAY_LABELS = "Mondays, Wednesdays & Thursdays";
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function isWithdrawalDayAllowed() {
+  return ALLOWED_WITHDRAWAL_DAYS.includes(new Date().getDay());
+}
+
 export default function AgentWithdraw({ user, setPage }) {
   // ── step 1 = provider, 2 = amount, 3 = number+network, 4 = confirm ──
   const [step, setStep] = useState(1);
@@ -29,6 +40,10 @@ export default function AgentWithdraw({ user, setPage }) {
   const [message, setMessage] = useState({ text: "", ok: false });
   const [done, setDone] = useState(false);
   const [receivedAmount, setReceivedAmount] = useState(0); // actual payout after fee, set on success
+  const [showPolicy, setShowPolicy] = useState(false);
+
+  const withdrawalAllowedToday = isWithdrawalDayAllowed();
+  const todayName = DAY_NAMES[new Date().getDay()];
 
   // ── fee math helper ──────────────────────────────────────────────
   const feeFor = (amt) => {
@@ -76,7 +91,7 @@ export default function AgentWithdraw({ user, setPage }) {
       return { ok: res.ok, status: res.status, data: JSON.parse(text) };
     } catch {
       // backend returned HTML (500 page) or empty body
-      console.error("Non-JSON response from", url, "→", text.slice(0, 200));
+      console.error("Non-JSON response from", path, "→", text.slice(0, 200));
       return {
         ok: false,
         status: res.status,
@@ -87,6 +102,10 @@ export default function AgentWithdraw({ user, setPage }) {
 
   // ── step validators ────────────────────────────────────────────────
   const validateStep1 = () => {
+    if (!withdrawalAllowedToday) {
+      say(`Withdrawals are only available on ${WITHDRAWAL_DAY_LABELS}. Please come back on the next available day.`);
+      return false;
+    }
     if (!provider) { say("Choose a withdrawal method to continue."); return false; }
     return true;
   };
@@ -108,6 +127,10 @@ export default function AgentWithdraw({ user, setPage }) {
 
   // ── step 3 → 4: verify account name ───────────────────────────────
   const verifyAccount = async () => {
+    if (!withdrawalAllowedToday) {
+      say(`Withdrawals are only available on ${WITHDRAWAL_DAY_LABELS}.`);
+      return;
+    }
     if (!validateStep3()) return;
 
     // Moolre has no name-lookup — skip directly to confirm
@@ -156,6 +179,10 @@ export default function AgentWithdraw({ user, setPage }) {
 
   // ── final withdraw ─────────────────────────────────────────────────
   const withdraw = async () => {
+    if (!withdrawalAllowedToday) {
+      say(`Withdrawals are only available on ${WITHDRAWAL_DAY_LABELS}.`);
+      return;
+    }
     setLoading(true);
     clear();
     try {
@@ -251,6 +278,43 @@ export default function AgentWithdraw({ user, setPage }) {
             Back to Dashboard
           </button>
         </div>
+        <Footer />
+      </div>
+    );
+  }
+
+  // ── blocked screen: outside allowed withdrawal days ─────────────────
+  if (!withdrawalAllowedToday) {
+    return (
+      <div style={S.container}>
+        <div style={S.header}>
+          <h2 style={S.title}>Withdraw Funds</h2>
+          <div style={S.balancePill}>
+            GH₵ {wallet.toFixed(2)} available
+          </div>
+        </div>
+
+        <div style={S.blockedCard}>
+          <div style={S.blockedIcon}>🗓️</div>
+          <h3 style={S.blockedTitle}>Withdrawals Unavailable Today</h3>
+          <p style={S.blockedSub}>
+            It's {todayName}. Withdrawals can only be made on {WITHDRAWAL_DAY_LABELS}.
+            Please check back on the next available day — your wallet balance is safe
+            and stays exactly as it is until then.
+          </p>
+        </div>
+
+        <div onClick={() => setShowPolicy(true)} style={S.policyLink}>
+          View Withdrawal Policy &amp; Rules
+        </div>
+
+        <button onClick={() => setPage("agent-dashboard")} style={{ ...S.ghostBtn, marginTop: 8 }}>
+          Back to Dashboard
+        </button>
+        <Footer />
+        {showPolicy && (
+          <PolicyModal feePercent={feePercent} onClose={() => setShowPolicy(false)} />
+        )}
       </div>
     );
   }
@@ -362,6 +426,12 @@ export default function AgentWithdraw({ user, setPage }) {
             <br />
             ℹ️ A {feePercent}% liquidity fee applies to all withdrawals. It's deducted from
             the payout, not added on top — your wallet is only ever charged what you type in.
+            <br />
+            📅 Withdrawals are only processed on {WITHDRAWAL_DAY_LABELS}.
+          </div>
+
+          <div onClick={() => setShowPolicy(true)} style={S.policyLink}>
+            View Withdrawal Policy &amp; Rules
           </div>
 
           <button
@@ -552,6 +622,43 @@ export default function AgentWithdraw({ user, setPage }) {
           Back to Dashboard
         </button>
       )}
+
+      <Footer />
+      {showPolicy && (
+        <PolicyModal feePercent={feePercent} onClose={() => setShowPolicy(false)} />
+      )}
+    </div>
+  );
+}
+
+// ── policy modal ────────────────────────────────────────────────────
+function PolicyModal({ feePercent, onClose }) {
+  return (
+    <div style={styles.modalOverlay} onClick={onClose}>
+      <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <span style={styles.modalTitle}>Withdrawal Policy &amp; Rules</span>
+          <span style={styles.modalClose} onClick={onClose}>✕</span>
+        </div>
+        <ul style={styles.modalList}>
+          <li>Withdrawals are processed only on {WITHDRAWAL_DAY_LABELS}.</li>
+          <li>A {feePercent}% liquidity fee applies to all withdrawals, deducted from the payout — your wallet is only ever charged the amount you type in.</li>
+          <li>Minimum withdrawal amount is GH₵ 5.</li>
+          <li>Instant transfers cannot be reversed once sent — always double-check the mobile number and network before confirming.</li>
+        </ul>
+        <button onClick={onClose} style={styles.modalCloseBtn}>Close</button>
+      </div>
+    </div>
+  );
+}
+
+// ── footer component ────────────────────────────────────────────────
+function Footer() {
+  return (
+    <div style={styles.footer}>
+      © 2026 Evosdata Services. Evos Business Hub
+      <br />
+      By Evoxera Technology
     </div>
   );
 }
@@ -714,6 +821,89 @@ const styles = {
     marginBottom: 16,
     lineHeight: 1.5,
   },
+
+  // clickable policy link — plain text, no blue link color
+  policyLink: {
+    fontSize: 12.5,
+    fontWeight: 700,
+    color: "#94a3b8",
+    textDecoration: "underline",
+    textDecorationColor: "rgba(148,163,184,0.4)",
+    textAlign: "center",
+    cursor: "pointer",
+    marginBottom: 16,
+  },
+
+  // policy modal
+  modalOverlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.6)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+    zIndex: 1000,
+  },
+  modalCard: {
+    background: "#0f172a",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 16,
+    padding: "20px 20px 18px",
+    maxWidth: 420,
+    width: "100%",
+    maxHeight: "80vh",
+    overflowY: "auto",
+  },
+  modalHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 14,
+  },
+  modalTitle: {
+    fontSize: 15,
+    fontWeight: 800,
+    color: "#e2e8f0",
+  },
+  modalClose: {
+    fontSize: 14,
+    color: "#64748b",
+    cursor: "pointer",
+    padding: "2px 6px",
+  },
+  modalList: {
+    margin: 0,
+    paddingLeft: 18,
+    fontSize: 13,
+    color: "#cbd5e1",
+    lineHeight: 1.8,
+  },
+  modalCloseBtn: {
+    width: "100%",
+    marginTop: 16,
+    padding: 12,
+    borderRadius: 10,
+    border: "1px solid rgba(255,255,255,0.09)",
+    background: "rgba(255,255,255,0.04)",
+    color: "#e2e8f0",
+    fontWeight: 700,
+    fontSize: 13,
+    cursor: "pointer",
+  },
+
+  // blocked (non-withdrawal day) card
+  blockedCard: {
+    background: "rgba(255,255,255,0.03)",
+    border: "1px solid rgba(255,255,255,0.07)",
+    borderRadius: 14,
+    padding: "28px 20px",
+    textAlign: "center",
+    marginBottom: 16,
+  },
+  blockedIcon: { fontSize: 40, marginBottom: 12 },
+  blockedTitle: { fontSize: 17, fontWeight: 800, color: "#e2e8f0", marginBottom: 10 },
+  blockedSub: { fontSize: 13, color: "#94a3b8", lineHeight: 1.6, margin: 0 },
 
   // fee breakdown (step 2)
   feeBreakdown: {
@@ -888,5 +1078,14 @@ const styles = {
     fontSize: 15,
     boxSizing: "border-box",
     outline: "none",
+  },
+
+  // footer — plain text, no blue/link color
+  footer: {
+    marginTop: 28,
+    textAlign: "center",
+    fontSize: 11,
+    color: "#64748b",
+    lineHeight: 1.7,
   },
 };
