@@ -1583,12 +1583,232 @@ async def retry_stuck_deposits():
         await asyncio.sleep(300)
 
 
+# =========================
+# BACKGROUND: RETRY STUCK ORDER PAYMENTS
+# Orders can get stuck in "pending_payment" if the Paystack webhook never
+# fires (network blip, webhook retries exhausted, etc.), and can land in
+# "failed" if Paystack DID charge the customer but the provider dispatch
+# never actually happened (order failed before reaching a provider). This
+# job never trusts our own stored status — it always re-verifies with
+# Paystack itself before touching anything, exactly like
+# retry_stuck_deposits() does for wallet deposits.
+#
+# Scope: only orders with NO datamart_ref. If datamart_ref is already set,
+# the order already reached a provider and belongs to retry_stuck_orders()'
+# provider-escalation chain instead — re-dispatching here would risk a
+# double-submit to the provider.
+# =========================
+
+_order_payment_retry_running = False
+
+async def retry_stuck_order_payments():
+    global _order_payment_retry_running
+    if _order_payment_retry_running:
+        logger.info("ORDER PAYMENT RETRY: already running, skipping duplicate")
+        return
+
+    _order_payment_retry_running = True
+    await asyncio.sleep(120)  # stagger start vs the other two background jobs
+
+    while True:
+        try:
+            logger.info("ORDER PAYMENT RETRY: scanning for stuck order payments...")
+
+            now    = utc_now()
+            floor  = (now - timedelta(minutes=5)).isoformat()   # give the webhook a head start
+            cutoff = (now - timedelta(hours=6)).isoformat()     # don't dig up ancient rows forever
+
+            stuck = supabase.table("orders") \
+                .select("*") \
+                .in_("status", ["pending_payment", "failed"]) \
+                .not_.is_("paystack_ref", None) \
+                .is_("datamart_ref", None) \
+                .lte("created_at", floor) \
+                .gte("created_at", cutoff) \
+                .execute()
+
+            orders = stuck.data or []
+            logger.info("ORDER PAYMENT RETRY: %d orders to check", len(orders))
+
+            for order in orders:
+                order_id  = order.get("id")
+                reference = order.get("paystack_ref")
+
+                if not reference:
+                    continue
+
+                # Agent buy-data orders are wallet-debited instantly and never
+                # go through Paystack at all — nothing to verify here.
+                if str(reference).startswith("EVOS-AGT-"):
+                    continue
+
+                try:
+                    async with httpx.AsyncClient() as client:
+                        res = await client.get(
+                            f"https://api.paystack.co/transaction/verify/{reference}",
+                            headers={"Authorization": f"Bearer {PAYSTACK_SECRET}"},
+                            timeout=15,
+                        )
+                        data = res.json()
+
+                    paystack_status = data.get("data", {}).get("status", "")
+                    logger.info(
+                        "ORDER PAYMENT RETRY: order %s ref=%s — Paystack status: %s",
+                        order_id, reference, paystack_status
+                    )
+
+                    if paystack_status != "success":
+                        if order["status"] == "pending_payment":
+                            age = utc_now() - parse_db_dt(order["created_at"])
+                            if age > timedelta(minutes=30):
+                                supabase.table("orders").update({"status": "failed"}).eq("id", order_id).execute()
+                                logger.info(
+                                    "ORDER PAYMENT RETRY: order %s marked failed — Paystack unpaid after 30min",
+                                    order_id
+                                )
+                            else:
+                                logger.info(
+                                    "ORDER PAYMENT RETRY: order %s still pending on Paystack — will retry",
+                                    order_id
+                                )
+                        # already "failed" and Paystack still says not-success —
+                        # nothing to do, leave it as is.
+                        continue
+
+                    # Paystack confirms the charge succeeded. Re-fetch the row
+                    # fresh in case the webhook (or a previous cycle) already
+                    # handled it in the meantime.
+                    recheck = supabase.table("orders").select("*").eq("id", order_id).limit(1).execute()
+                    if not recheck.data:
+                        continue
+                    fresh_order = recheck.data[0]
+                    if fresh_order["status"] not in ("pending_payment", "failed") or fresh_order.get("datamart_ref"):
+                        logger.info(
+                            "ORDER PAYMENT RETRY: order %s already advanced (status=%s, datamart_ref=%s), skipping",
+                            order_id, fresh_order["status"], fresh_order.get("datamart_ref")
+                        )
+                        continue
+
+                    supabase.table("orders").update({"status": "paid"}).eq("id", order_id).execute()
+                    logger.info("ORDER PAYMENT RETRY: order %s confirmed paid by Paystack ✅", order_id)
+
+                    if fresh_order.get("user_id"):
+                        increment_user_orders(fresh_order["user_id"])
+
+                    provider = get_provider(fresh_order["network"])
+                    logger.info("ORDER PAYMENT RETRY: resolved provider=%s for order %s", provider, order_id)
+
+                    try:
+                        if provider == "DATAMART":
+                            dm_response = requests.post(
+                                f"{DATAMART_BASE}/purchase",
+                                headers={"X-API-Key": DATAMART_API_KEY},
+                                json={
+                                    "phoneNumber": fresh_order["phone_number"],
+                                    "network":     NETWORK_MAP.get(fresh_order["network"]),
+                                    "capacity":    extract_capacity(fresh_order["bundle"]),
+                                    "gateway":     "wallet"
+                                },
+                                timeout=REQUEST_TIMEOUT
+                            )
+                            dm      = dm_response.json()
+                            dm_data = dm.get("data", {})
+                            supabase.table("orders").update({
+                                "status":            "processing",
+                                "datamart_ref":      dm_data.get("orderReference"),
+                                "datamart_order_id": dm_data.get("orderId")
+                            }).eq("id", order_id).execute()
+                            process_agent_profit(order_id, reference)
+                            logger.info("ORDER PAYMENT RETRY: order %s dispatched to DATAMART ✅", order_id)
+
+                        elif provider == "BUNDLES_GHANA":
+                            BG_NETWORK_MAP = {"MTN": "MTN", "TELECEL": "Telecel", "AIRTELTIGO": "AirtelTigo", "AT": "AirtelTigo"}
+                            network_name = BG_NETWORK_MAP.get(fresh_order["network"].upper(), fresh_order["network"])
+                            bg_bundles   = call_bundles_ghana(f"/bundles?network={network_name}")
+                            if not bg_bundles.get("success"):
+                                raise Exception(f"Bundles Ghana fetch failed: {bg_bundles.get('error')}")
+
+                            bundle_volume = fresh_order["bundle"].upper().replace(" ", "")
+                            matched = next(
+                                (b for b in bg_bundles.get("bundles", [])
+                                 if b.get("volume", "").upper().replace(" ", "") == bundle_volume
+                                 and b.get("status") == "active"),
+                                None
+                            )
+                            if not matched:
+                                raise Exception(f"No active BG bundle for {network_name} {bundle_volume}")
+
+                            bg_order = call_bundles_ghana("/order", method="POST", body={
+                                "bundle_id":   matched["id"],
+                                "phone":       fresh_order["phone_number"],
+                                "webhook_url": "https://api.evosdata.xyz/webhook/bundlesghana"
+                            })
+                            if not bg_order.get("success"):
+                                raise Exception(f"BG order failed: {bg_order.get('error', bg_order.get('message'))}")
+
+                            supabase.table("orders").update({
+                                "status":            "processing",
+                                "datamart_ref":      bg_order["order"]["reference"],
+                                "datamart_order_id": str(bg_order["order"]["id"])
+                            }).eq("id", order_id).execute()
+                            process_agent_profit(order_id, reference)
+                            logger.info("ORDER PAYMENT RETRY: order %s dispatched to BUNDLES_GHANA ✅", order_id)
+
+                        elif provider == "SWIFT_DATA_LINK":
+                            volume = float(extract_capacity(fresh_order["bundle"]) or 0)
+                            sdl = call_swift_data_link(
+                                network=fresh_order["network"], volume=volume, phone=fresh_order["phone_number"]
+                            )
+                            if not sdl.get("success"):
+                                raise Exception(f"SDL order failed: {sdl.get('error', sdl)}")
+                            supabase.table("orders").update({
+                                "status":            "processing",
+                                "datamart_ref":      sdl.get("reference"),
+                                "datamart_order_id": sdl.get("orderId"),
+                            }).eq("id", order_id).execute()
+                            process_agent_profit(order_id, reference)
+                            logger.info("ORDER PAYMENT RETRY: order %s dispatched to SWIFT_DATA_LINK ✅", order_id)
+
+                        elif provider == "AGYEKUMDATA":
+                            package_id = get_agyekumdata_package_id(fresh_order["network"], fresh_order["bundle"])
+                            safe_ref   = sanitise_agyekumdata_ref(reference)
+                            agd        = call_agyekumdata_purchase(
+                                package_id=package_id,
+                                phone=fresh_order["phone_number"],
+                                client_reference=reference,
+                            )
+                            if not agd.get("success"):
+                                raise Exception(f"AGYEKUMDATA order failed: {agd.get('error', agd)}")
+                            agd_data = agd.get("data", {})
+                            supabase.table("orders").update({
+                                "status":            "processing",
+                                "datamart_ref":      agd_data.get("clientReference") or safe_ref,
+                                "datamart_order_id": agd_data.get("orderId"),
+                            }).eq("id", order_id).execute()
+                            process_agent_profit(order_id, reference)
+                            logger.info("ORDER PAYMENT RETRY: order %s dispatched to AGYEKUMDATA ✅", order_id)
+
+                        else:
+                            raise Exception("No provider assigned")
+
+                    except Exception as dispatch_err:
+                        logger.error("ORDER PAYMENT RETRY: dispatch error for order %s: %s", order_id, str(dispatch_err))
+                        supabase.table("orders").update({"status": "failed"}).eq("id", order_id).execute()
+
+                except Exception as e:
+                    logger.error("ORDER PAYMENT RETRY: error verifying order %s: %s", order_id, str(e))
+
+        except Exception as e:
+            logger.error("ORDER PAYMENT RETRY ERROR: %s", str(e))
+
+        await asyncio.sleep(300)
+
 @app.on_event("startup")
 async def startup_event():
     log_agyekumdata_categories()
     asyncio.create_task(retry_stuck_orders())
     asyncio.create_task(retry_stuck_deposits())
-
+    asyncio.create_task(retry_stuck_order_payments())
 
 # =========================
 # SPACEMAIL SMTP
