@@ -33,6 +33,26 @@ const bundleAccents = [
 ];
 
 // =========================
+// CHECKER (WAEC/BECE) CONFIG
+// =========================
+const CHECKER_CONFIG = {
+  WAEC: {
+    label: "WAEC Checker", emoji: "🎓", color: "#a78bfa",
+    bg: "linear-gradient(135deg, rgba(167,139,250,0.18), rgba(167,139,250,0.06))",
+    border: "rgba(167,139,250,0.4)",
+    desc: "Result checker card for WASSCE results",
+  },
+  BECE: {
+    label: "BECE Checker", emoji: "📘", color: "#38bdf8",
+    bg: "linear-gradient(135deg, rgba(56,189,248,0.18), rgba(56,189,248,0.06))",
+    border: "rgba(56,189,248,0.4)",
+    desc: "Result checker card for BECE results",
+  },
+};
+
+const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+// =========================
 // ORDER TRACKING STATUS CONFIG
 // Mirrors ETATrack.jsx status config so tracking behaves identically,
 // just rendered inline inside the store instead of on a separate page.
@@ -343,6 +363,102 @@ function ConfirmModal({ selected, networkLabel, networkCfg, onClose, onConfirm, 
 }
 
 // =========================
+// CHECKER CONFIRMATION MODAL
+// Mirrors ConfirmModal but for WAEC/BECE result checkers — phone + quantity,
+// no MTN-verify step since that check is data-bundle only.
+// =========================
+function CheckerConfirmModal({ selected, checkerCfg, onClose, onConfirm, processing }) {
+  const [phone, setPhone] = useState("");
+  const [quantity, setQuantity] = useState(1);
+  const [accepted, setAccepted] = useState(false);
+  const canSubmit = phone.trim().length >= 9 && accepted && quantity >= 1 && !processing;
+  const total = round2(Number(selected.final_price) * quantity);
+
+  return (
+    <div style={modal.overlay}>
+      <div style={modal.box}>
+        <div style={modal.header}>
+          <span style={modal.headerLabel}>✅ Complete Purchase</span>
+          <button style={modal.closeBtn} onClick={onClose}>✕</button>
+        </div>
+
+        <div style={{
+          ...modal.summary,
+          background: checkerCfg?.bg || "rgba(255,255,255,0.04)",
+          border: `1px solid ${checkerCfg?.border || "rgba(255,255,255,0.08)"}`,
+        }}>
+          <div style={modal.summaryHeader}>
+            <span style={{ fontSize: 18 }}>{checkerCfg?.emoji}</span>
+            <span style={{ fontWeight: 900, fontSize: 14, color: checkerCfg?.color }}>Order Summary</span>
+          </div>
+          <div style={modal.summaryRow}>
+            <span style={modal.summaryLabel}>Checker</span>
+            <span style={{ ...modal.summaryValue, color: checkerCfg?.color, fontWeight: 800 }}>{checkerCfg?.label}</span>
+          </div>
+          <div style={modal.summaryRow}>
+            <span style={modal.summaryLabel}>Unit Price</span>
+            <span style={modal.summaryValue}>GH₵ {Number(selected.final_price).toFixed(2)}</span>
+          </div>
+          <div style={{ ...modal.summaryRow, borderBottom: "none" }}>
+            <span style={modal.summaryLabel}>Amount</span>
+            <span style={{ ...modal.summaryValue, color: "#22c55e", fontSize: 20, fontWeight: 900 }}>
+              GH₵ {total.toFixed(2)}
+            </span>
+          </div>
+        </div>
+
+        <label style={modal.label}>📱 Recipient Phone Number</label>
+        <input
+          type="tel"
+          placeholder="e.g. 0244000000"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          style={modal.input}
+          disabled={processing}
+        />
+
+        <label style={modal.label}>🔢 Quantity</label>
+        <input
+          type="number"
+          min={1}
+          max={20}
+          value={quantity}
+          onChange={(e) => {
+            const v = parseInt(e.target.value, 10);
+            setQuantity(Number.isFinite(v) && v > 0 ? Math.min(v, 20) : 1);
+          }}
+          style={modal.input}
+          disabled={processing}
+        />
+
+        <label style={modal.checkRow}>
+          <input
+            type="checkbox"
+            checked={accepted}
+            onChange={(e) => setAccepted(e.target.checked)}
+            disabled={processing}
+            style={{ marginRight: 8, accentColor: "#38bdf8", width: 15, height: 15, flexShrink: 0, marginTop: 2 }}
+          />
+          <span style={modal.checkText}>
+            I confirm this phone number is correct.{" "}
+            <strong style={{ color: "#f87171" }}>Wrong numbers will NOT be refunded.</strong>
+          </span>
+        </label>
+
+        <button
+          onClick={() => onConfirm(phone.trim(), quantity)}
+          disabled={!canSubmit}
+          style={{ ...modal.buyBtn, opacity: canSubmit ? 1 : 0.45, cursor: canSubmit ? "pointer" : "not-allowed" }}
+        >
+          {processing ? "⏳ Processing..." : `💳 Pay GH₵ ${total.toFixed(2)} via Paystack`}
+        </button>
+        <p style={modal.secureNote}>🔒 Secured & encrypted by Paystack</p>
+      </div>
+    </div>
+  );
+}
+
+// =========================
 // TRACK ORDER MODAL
 // Inline replacement for the old "eta-track" page redirect.
 // Customer never leaves /store/{agentId} — they stay inside the
@@ -496,9 +612,10 @@ export default function StorePage({ setPage }) {
 
   const [loading, setLoading] = useState(true);
   const [store, setStore] = useState(null);
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(0);
   const [network, setNetwork] = useState("");
   const [selected, setSelected] = useState(null);
+  const [checkerSelected, setCheckerSelected] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [trackOpen, setTrackOpen] = useState(false);
@@ -578,6 +695,34 @@ export default function StorePage({ setPage }) {
     }
   };
 
+  const placeCheckerOrder = async (phone, quantity) => {
+    if (!checkerSelected) return;
+    setProcessing(true);
+    try {
+      const res = await smartFetch(`/store/order/checker`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent_id: Number(agentId),
+          checker_type: checkerSelected.checker_type,
+          phone_number: phone,
+          quantity: quantity,
+        }),
+      });
+      const data = await res.json();
+      if (data.status === "created" && data.payment_url) {
+        clearStoreSession();
+        window.location.href = data.payment_url;
+        return;
+      }
+      alert(data.message || "Failed to create order");
+    } catch (err) {
+      alert("Network error");
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   if (loading) return (
     <div style={styles.centerWrap}>
       <div style={{ fontSize: 40, marginBottom: 12 }}>⏳</div>
@@ -599,6 +744,8 @@ export default function StorePage({ setPage }) {
     .filter((p) => p.network === network)
     .sort((a, b) => Number(a.final_price) - Number(b.final_price));
 
+  const checkerProducts = store.checkers || [];
+
   const cfg = NETWORK_CONFIG[network] || {};
   const networkLabel = cfg.label || network;
 
@@ -614,36 +761,71 @@ export default function StorePage({ setPage }) {
         </p>
       </div>
 
-      {/* PROGRESS */}
-      <div style={styles.progressWrap}>
-        {["Network", "Bundle", "Pay"].map((label, i) => {
-          const active = step === i + 1;
-          const done = step > i + 1;
-          return (
-            <div key={i} style={styles.progressItem}>
-              <div style={{
-                ...styles.progressDot,
-                background: done ? "#22c55e" : active ? "#38bdf8" : "rgba(255,255,255,0.1)",
-                border: active ? "2px solid #38bdf8" : done ? "2px solid #22c55e" : "2px solid rgba(255,255,255,0.1)",
-                color: done || active ? "white" : "#475569",
-              }}>
-                {done ? "✓" : i + 1}
+      {/* PROGRESS — only shown during the data-bundle flow (steps 1 & 2) */}
+      {(step === 1 || step === 2) && (
+        <div style={styles.progressWrap}>
+          {["Network", "Bundle", "Pay"].map((label, i) => {
+            const active = step === i + 1;
+            const done = step > i + 1;
+            return (
+              <div key={i} style={styles.progressItem}>
+                <div style={{
+                  ...styles.progressDot,
+                  background: done ? "#22c55e" : active ? "#38bdf8" : "rgba(255,255,255,0.1)",
+                  border: active ? "2px solid #38bdf8" : done ? "2px solid #22c55e" : "2px solid rgba(255,255,255,0.1)",
+                  color: done || active ? "white" : "#475569",
+                }}>
+                  {done ? "✓" : i + 1}
+                </div>
+                <span style={{
+                  ...styles.progressLabel,
+                  color: active ? "#38bdf8" : done ? "#22c55e" : "#475569",
+                }}>{label}</span>
               </div>
-              <span style={{
-                ...styles.progressLabel,
-                color: active ? "#38bdf8" : done ? "#22c55e" : "#475569",
-              }}>{label}</span>
-            </div>
-          );
-        })}
-        <div style={styles.progressLine} />
-      </div>
+            );
+          })}
+          <div style={styles.progressLine} />
+        </div>
+      )}
 
       <div style={styles.wrapper}>
+
+        {/* ============ STEP 0 — WHAT WOULD YOU LIKE TO BUY? ============ */}
+        {step === 0 && (
+          <div style={styles.box}>
+            <p style={styles.stepLabel}>What would you like to buy?</p>
+
+            <div style={styles.productTypeGrid}>
+              <div style={styles.productTypeCard} onClick={() => goToStep(1, "")}>
+                <div style={styles.productTypeEmoji}>📶</div>
+                <div style={styles.productTypeName}>Data Bundles</div>
+                <div style={styles.productTypeDesc}>MTN, Telecel & AirtelTigo bundles</div>
+                <div style={{ ...styles.bundleCta, color: "#38bdf8" }}>Select →</div>
+              </div>
+              <div style={styles.productTypeCard} onClick={() => setStep("checker")}>
+                <div style={styles.productTypeEmoji}>🎓</div>
+                <div style={styles.productTypeName}>Result Checkers</div>
+                <div style={styles.productTypeDesc}>WAEC & BECE checker cards</div>
+                <div style={{ ...styles.bundleCta, color: "#a78bfa" }}>Select →</div>
+              </div>
+            </div>
+
+            <div style={styles.infoRow}>
+              <span style={styles.infoChip}>🔒 Paystack Secured</span>
+              <span style={styles.infoChip}>⚡ Instant Delivery</span>
+            </div>
+
+            <button style={styles.trackBtn} onClick={handleTrackOrder}>
+              📦 Track My Order
+            </button>
+          </div>
+        )}
 
         {/* ============ STEP 1 — NETWORK ============ */}
         {step === 1 && (
           <div style={styles.box}>
+            <button style={styles.backBtn} onClick={() => goToStep(0, "")}>← Back</button>
+
             <p style={styles.stepLabel}>Step 1 of 2 · Select Your Network</p>
 
             <div style={styles.networkGrid}>
@@ -736,6 +918,46 @@ export default function StorePage({ setPage }) {
           </div>
         )}
 
+        {/* ============ STEP "checker" — RESULT CHECKERS ============ */}
+        {step === "checker" && (
+          <div style={styles.box}>
+            <button style={styles.backBtn} onClick={() => goToStep(0, "")}>← Back</button>
+
+            <p style={styles.stepLabel}>Pick a Result Checker</p>
+
+            {checkerProducts.length === 0 && (
+              <div style={{ textAlign: "center", padding: "30px 0 10px" }}>
+                <div style={{ fontSize: 36, marginBottom: 8 }}>📭</div>
+                <p style={{ color: "#475569", fontSize: 14, margin: 0 }}>No checkers available.</p>
+              </div>
+            )}
+
+            <div style={styles.checkerGrid}>
+              {checkerProducts.map((item, i) => {
+                const c = CHECKER_CONFIG[item.checker_type] || {
+                  label: item.checker_type, emoji: "🎫", color: "#64748b",
+                  bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.1)",
+                };
+                return (
+                  <div
+                    key={i}
+                    style={{ ...styles.checkerCard, background: c.bg, border: `1px solid ${c.border}` }}
+                    onClick={() => setCheckerSelected(item)}
+                  >
+                    <div style={styles.productTypeEmoji}>{c.emoji}</div>
+                    <div style={{ ...styles.networkName, color: c.color }}>{c.label}</div>
+                    <div style={{ ...styles.productTypeDesc, marginBottom: 2 }}>{c.desc}</div>
+                    <div style={{ ...styles.bundlePrice, color: c.color }}>
+                      GH₵ {Number(item.final_price).toFixed(2)}
+                    </div>
+                    <div style={{ ...styles.bundleCta, color: c.color }}>Select →</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
       </div>
 
       {/* CONFIRM MODAL */}
@@ -747,6 +969,17 @@ export default function StorePage({ setPage }) {
           processing={processing}
           onClose={() => { if (!processing) setSelected(null); }}
           onConfirm={placeOrder}
+        />
+      )}
+
+      {/* CHECKER CONFIRM MODAL */}
+      {checkerSelected && (
+        <CheckerConfirmModal
+          selected={checkerSelected}
+          checkerCfg={CHECKER_CONFIG[checkerSelected.checker_type]}
+          processing={processing}
+          onClose={() => { if (!processing) setCheckerSelected(null); }}
+          onConfirm={placeCheckerOrder}
         />
       )}
 
@@ -820,6 +1053,13 @@ const styles = {
   bundleSize: { fontWeight: 900, fontSize: 20, color: "#f1f5f9" },
   bundlePrice: { fontWeight: 900, fontSize: 17 },
   bundleCta: { fontSize: 11, fontWeight: 800, opacity: 0.7 },
+  productTypeGrid: { display: "flex", flexDirection: "column", gap: 12, marginBottom: 20 },
+  productTypeCard: { background: "rgba(2,6,23,0.7)", borderRadius: 16, padding: "20px 18px", cursor: "pointer", textAlign: "center", transition: "transform 0.15s", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, border: "1px solid rgba(255,255,255,0.08)" },
+  productTypeEmoji: { fontSize: 32, marginBottom: 2 },
+  productTypeName: { fontWeight: 900, fontSize: 17, color: "#f1f5f9" },
+  productTypeDesc: { fontSize: 12, color: "#64748b", fontWeight: 600 },
+  checkerGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
+  checkerCard: { borderRadius: 16, padding: "18px 14px 14px", cursor: "pointer", textAlign: "center", transition: "transform 0.15s", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
   floatWrap: { position: "fixed", bottom: 24, right: 20, zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 },
   chatPopup: { background: "#0f172a", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 18, padding: 18, width: 270, boxShadow: "0 8px 40px rgba(0,0,0,0.5)" },
   chatHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },

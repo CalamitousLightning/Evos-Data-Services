@@ -334,6 +334,28 @@ class StoreOrderRequest(BaseModel):
         return cleaned
 
 
+class CheckerStoreOrderRequest(BaseModel):
+    agent_id: int
+    checker_type: str = Field(min_length=3, max_length=10)
+    phone_number: str = Field(min_length=9, max_length=15)
+    quantity: int = Field(default=1, ge=1, le=20)
+    email: Optional[EmailStr] = None
+
+    @validator("checker_type")
+    def checker_type_valid(cls, v):
+        v = v.strip().upper()
+        if v not in ("WAEC", "BECE"):
+            raise ValueError("Invalid checker type")
+        return v
+
+    @validator("phone_number")
+    def phone_clean(cls, v):
+        cleaned = re.sub(r"[\s\-\(\)]", "", v)
+        if not re.match(r"^\d{9,15}$", cleaned):
+            raise ValueError("Invalid phone number")
+        return cleaned
+
+
 class DepositInitiateRequest(BaseModel):
     agent_id: int
     amount: float = Field(gt=0, le=10000)
@@ -603,6 +625,10 @@ def dispatch_checker_order(checker: dict):
             "serial_numbers":       cards,
         }).eq("id", checker_id).execute()
         logger.info("CHECKER DISPATCH: order %s bulk-purchased %d %s cards ✅", checker_id, quantity, checker_type)
+        try:
+            process_checker_agent_profit(checker_id, safe_ref)
+        except Exception as profit_err:
+            logger.error("CHECKER AGENT PROFIT ERROR (bulk): %s", str(profit_err))
 
     else:
         result = call_checker_purchase(checker_type, phone, safe_ref)
@@ -624,6 +650,10 @@ def dispatch_checker_order(checker: dict):
             "serial_numbers":       [card],
         }).eq("id", checker_id).execute()
         logger.info("CHECKER DISPATCH: order %s purchased %s card ✅", checker_id, checker_type)
+        try:
+            process_checker_agent_profit(checker_id, data.get("reference") or safe_ref)
+        except Exception as profit_err:
+            logger.error("CHECKER AGENT PROFIT ERROR (single): %s", str(profit_err))
 
 
 # =========================
@@ -1210,6 +1240,65 @@ def process_agent_profit(order_id, reference):
     supabase.table("agent_transactions").insert({
         "agent_id":  agent_id,
         "order_id":  order_id,
+        "amount":    float(profit),
+        "type":      "credit",
+        "reference": reference
+    }).execute()
+
+
+def process_checker_agent_profit(checker_id, reference):
+    """Mirrors process_agent_profit but for the checkers table. Only fires
+    for store-checkout rows (base_price + agent_price populated) — direct
+    customer purchases and an agent's own agent/buy-checker purchases leave
+    those columns empty, so this is a no-op for them."""
+    existing = supabase.table("agent_transactions") \
+        .select("id") \
+        .eq("reference", reference) \
+        .limit(1) \
+        .execute()
+    if existing.data:
+        return
+
+    checker_res = supabase.table("checkers") \
+        .select("*") \
+        .eq("id", checker_id) \
+        .limit(1) \
+        .execute()
+    if not checker_res.data:
+        return
+
+    checker = checker_res.data[0]
+    agent_id    = checker.get("agent_id")
+    base_price  = checker.get("base_price")
+    agent_price = checker.get("agent_price")
+
+    if not agent_id or base_price is None or agent_price is None:
+        return
+
+    profit = Decimal(str(agent_price)) - Decimal(str(base_price))
+    if profit <= 0:
+        return
+
+    wallet = supabase.table("agent_wallets") \
+        .select("*") \
+        .eq("agent_id", agent_id) \
+        .limit(1) \
+        .execute()
+
+    if wallet.data:
+        new_balance = Decimal(str(wallet.data[0]["balance"])) + profit
+        supabase.table("agent_wallets") \
+            .update({"balance": float(new_balance)}) \
+            .eq("agent_id", agent_id) \
+            .execute()
+    else:
+        supabase.table("agent_wallets") \
+            .insert({"agent_id": agent_id, "balance": float(profit)}) \
+            .execute()
+
+    supabase.table("agent_transactions").insert({
+        "agent_id":  agent_id,
+        "order_id":  checker_id,
         "amount":    float(profit),
         "type":      "credit",
         "reference": reference
@@ -4244,11 +4333,27 @@ async def public_agent_store(request: Request, agent_id: int):
                 "final_price": round(base_price + markup, 2)
             })
 
+        checker_markups = supabase.table("checker_agent_prices").select("*").eq("agent_id", agent_id).execute()
+        checker_markup_map = {}
+        for m in (checker_markups.data or []):
+            checker_markup_map[str(m.get("checker_type", "")).strip().upper()] = float(m.get("markup", 0) or 0)
+
+        checkers = []
+        for checker_type in CHECKER_TYPES:
+            markup = float(checker_markup_map.get(checker_type, 0) or 0)
+            checkers.append({
+                "checker_type": checker_type,
+                "base_price":   CHECKER_AGENT_BASE_PRICE,
+                "markup":       markup,
+                "final_price":  round(CHECKER_AGENT_BASE_PRICE + markup, 2),
+            })
+
         return {
             "status":     "success",
             "agent_id":   agent_id,
             "agent_name": u.get("store_name") or u.get("username") or u.get("full_name") or "Agent",
-            "prices":     bundles
+            "prices":     bundles,
+            "checkers":   checkers
         }
     except Exception as e:
         logger.error("STORE ERROR: %s", str(e))
@@ -4378,6 +4483,95 @@ async def create_store_order(request: Request, payload: StoreOrderRequest):
         }
     except Exception as e:
         logger.error("STORE ORDER ERROR: %s", str(e))
+        return {"status": "error", "message": "Failed to create order"}
+
+
+@app.post("/store/order/checker")
+@limiter.limit("10/minute")
+async def create_store_checker_order(request: Request, payload: CheckerStoreOrderRequest):
+    try:
+        agent_id       = payload.agent_id
+        checker_type   = payload.checker_type
+        phone_number   = payload.phone_number
+        quantity       = payload.quantity
+        customer_email = str(payload.email or "customer@evoshub.store").strip()
+
+        agent = supabase.table("users") \
+            .select("id,role,agent_status,full_name,username") \
+            .eq("id", agent_id).limit(1).execute()
+        if not agent.data:
+            return {"status": "error", "message": "Store not found"}
+        user = agent.data[0]
+        if user.get("role") != "agent" or user.get("agent_status") != "approved":
+            return {"status": "error", "message": "Store unavailable"}
+
+        products = get_checker_products()
+        product = next((p for p in products if p.get("name", "").upper() == checker_type), None)
+        if not product:
+            return {"status": "error", "message": "Checker type not available"}
+        if not product.get("inStock"):
+            return {"status": "error", "message": f"{checker_type} checkers are currently out of stock"}
+
+        base_price = CHECKER_AGENT_BASE_PRICE
+
+        markup = supabase.table("checker_agent_prices").select("markup") \
+            .eq("agent_id", agent_id).eq("checker_type", checker_type).limit(1).execute()
+        markup_price = float(markup.data[0].get("markup", 0) or 0) if markup.data else 0.0
+        unit_agent_price = round(base_price + markup_price, 2)
+
+        total_base_price  = round(base_price * quantity, 2)
+        total_agent_price = round(unit_agent_price * quantity, 2)
+        total_profit       = round(total_agent_price - total_base_price, 2)
+
+        reference = f"STORE-CHK-{agent_id}-{uuid.uuid4().hex[:10].upper()}"
+
+        checker = supabase.table("checkers").insert({
+            "agent_id":     agent_id,
+            "guest_email":  customer_email,
+            "checker_type": checker_type,
+            "phone_number": phone_number,
+            "quantity":     quantity,
+            "price":        total_agent_price,
+            "paystack_ref": reference,
+            "evosdata_ref": reference,
+            "status":       "pending_payment",
+            "base_price":   total_base_price,
+            "agent_price":  total_agent_price,
+            "profit":       total_profit
+        }).execute()
+
+        if not checker.data:
+            return {"status": "error", "message": "Failed to create order"}
+
+        checker_id = checker.data[0]["id"]
+
+        pay = requests.post(
+            "https://api.paystack.co/transaction/initialize",
+            json={
+                "email":        customer_email,
+                "amount":       int(total_agent_price * 100),
+                "reference":    reference,
+                "callback_url": f"https://evosdata.xyz/store/{agent_id}",
+                "metadata":     {"checker_id": checker_id, "agent_id": agent_id, "checker_type": checker_type, "quantity": quantity}
+            },
+            headers={"Authorization": f"Bearer {PAYSTACK_SECRET}", "Content-Type": "application/json"},
+            timeout=30
+        )
+        pay_data = pay.json()
+
+        if not pay_data.get("status"):
+            supabase.table("checkers").delete().eq("id", checker_id).execute()
+            return {"status": "error", "message": "Payment initialization failed"}
+
+        return {
+            "status":      "created",
+            "checker_id":  checker_id,
+            "reference":   reference,
+            "pay_amount":  total_agent_price,
+            "payment_url": pay_data["data"]["authorization_url"]
+        }
+    except Exception as e:
+        logger.error("STORE CHECKER ORDER ERROR: %s", str(e))
         return {"status": "error", "message": "Failed to create order"}
 
 
