@@ -4,10 +4,20 @@ import { smartFetch } from "../config";
 
 export default function Success() {
   const [status, setStatus] = useState("verifying");
+  const [checkerData, setCheckerData] = useState(null);
+  const [copiedKey, setCopiedKey] = useState("");
 
   const params    = new URLSearchParams(window.location.search);
   const reference = params.get("reference");
   const type      = params.get("type");
+
+  const copyToClipboard = (text, key) => {
+    if (!text) return;
+    navigator.clipboard?.writeText(text).then(() => {
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(""), 1500);
+    });
+  };
 
   useEffect(() => {
     if (!reference) {
@@ -24,6 +34,19 @@ export default function Success() {
       }).catch(console.error);
 
       setStatus("deposit_success");
+    } else if (type === "checker") {
+      // Checker purchases need the actual serial + PIN before we can show
+      // a real success screen, so this one is NOT fire-and-forget — it
+      // verifies payment (dispatching to DataMart inline if the webhook
+      // hasn't landed yet) and waits for the response.
+      setStatus("checker_verifying");
+      smartFetch(`/checkers/status/${reference}`)
+        .then((res) => res.json())
+        .then((data) => {
+          setCheckerData(data);
+          setStatus(data?.status === "successful" ? "checker_success" : "checker_pending");
+        })
+        .catch(() => setStatus("checker_pending"));
     } else {
       // fire-and-forget
       smartFetch(`/orders/sync/${reference}`, {
@@ -63,6 +86,88 @@ export default function Success() {
               </button>
               <button style={s.secondaryBtn} onClick={() => window.location.href = "/agent-dashboard"}>
                 🏠 Dashboard
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ── CHECKER: VERIFYING ── */}
+        {status === "checker_verifying" && (
+          <>
+            <div style={s.spinner}>⏳</div>
+            <h2 style={s.title}>Verifying Payment</h2>
+            <p style={s.sub}>Fetching your serial number and PIN, this takes a few seconds...</p>
+          </>
+        )}
+
+        {/* ── CHECKER: SUCCESS (serial + pin) ── */}
+        {status === "checker_success" && (
+          <>
+            <div style={{ ...s.iconCircle, background: "rgba(34,197,94,0.15)", border: "2px solid rgba(34,197,94,0.3)" }}>
+              🎓
+            </div>
+            <h2 style={{ ...s.title, color: "#22c55e" }}>Checker Purchased!</h2>
+            <p style={s.sub}>Your {checkerData?.checker_type} card{checkerData?.quantity > 1 ? "s are" : " is"} ready ✅</p>
+
+            <div style={s.checkerCardList}>
+              {(checkerData?.serial_numbers || []).map((card, i) => (
+                <div key={i} style={s.checkerCardBox}>
+                  <div style={s.checkerCardRow}>
+                    <span style={s.checkerCardLabel}>Serial</span>
+                    <span style={s.checkerCardValue}>{card.serialNumber}</span>
+                    <button
+                      style={s.checkerCopyBtn}
+                      onClick={() => copyToClipboard(card.serialNumber, `s-${i}`)}
+                    >
+                      {copiedKey === `s-${i}` ? "✓" : "Copy"}
+                    </button>
+                  </div>
+                  <div style={s.checkerCardRow}>
+                    <span style={s.checkerCardLabel}>PIN</span>
+                    <span style={s.checkerCardValue}>{card.pin}</span>
+                    <button
+                      style={s.checkerCopyBtn}
+                      onClick={() => copyToClipboard(card.pin, `p-${i}`)}
+                    >
+                      {copiedKey === `p-${i}` ? "✓" : "Copy"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p style={{ ...s.sub, margin: "0 0 20px", fontSize: 12 }}>
+              📩 We've also sent this by SMS to {checkerData?.phone_number}. Save it somewhere safe.
+            </p>
+
+            <div style={s.btnGroup}>
+              <button style={s.primaryBtn} onClick={() => window.location.href = "/checkers"}>
+                🎓 Buy Another Checker
+              </button>
+              <button style={s.secondaryBtn} onClick={() => window.location.href = "/"}>
+                🏠 Go Home
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ── CHECKER: STILL PROCESSING ── */}
+        {status === "checker_pending" && (
+          <>
+            <div style={{ ...s.iconCircle, background: "rgba(251,191,36,0.15)", border: "2px solid rgba(251,191,36,0.3)" }}>
+              ⏳
+            </div>
+            <h2 style={{ ...s.title, color: "#fbbf24" }}>Payment Received</h2>
+            <p style={s.sub}>
+              Your checker is still being processed — this can take a minute.
+              Use "Find your checker" on the Checkers page with your phone number to retrieve it shortly.
+            </p>
+
+            <div style={s.btnGroup}>
+              <button style={s.primaryBtn} onClick={() => window.location.href = "/checkers"}>
+                🔎 Go to Checkers Page
+              </button>
+              <button style={s.secondaryBtn} onClick={() => window.location.href = "/"}>
+                🏠 Go Home
               </button>
             </div>
           </>
@@ -213,6 +318,23 @@ const s = {
     boxShadow: "0 4px 16px rgba(124,58,237,0.35)",
     textDecoration: "none",
     fontFamily: "inherit",
+  },
+
+  checkerCardList: { display: "flex", flexDirection: "column", gap: 10, marginBottom: 10 },
+  checkerCardBox: {
+    background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.25)",
+    borderRadius: 12, padding: "10px 12px", textAlign: "left",
+  },
+  checkerCardRow: { display: "flex", alignItems: "center", gap: 8, padding: "4px 0" },
+  checkerCardLabel: { fontSize: 11, color: "#64748b", fontWeight: 700, width: 44, flexShrink: 0 },
+  checkerCardValue: {
+    fontSize: 13, color: "#f1f5f9", fontWeight: 800, fontFamily: "monospace",
+    flex: 1, wordBreak: "break-all",
+  },
+  checkerCopyBtn: {
+    fontSize: 11, fontWeight: 800, color: "#22c55e", background: "rgba(34,197,94,0.12)",
+    border: "1px solid rgba(34,197,94,0.3)", borderRadius: 8, padding: "4px 10px",
+    cursor: "pointer", flexShrink: 0, fontFamily: "inherit",
   },
 
   btnGroup: { display: "flex", flexDirection: "column", gap: 10 },

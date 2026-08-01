@@ -17,6 +17,7 @@ import ETATrack           from "./pages/ETATrack";
 import AgentBuyData       from "./pages/AgentBuyData";
 import AgentDeposit       from "./pages/AgentDeposit";
 import ForgotPassword     from "./pages/ForgotPassword";
+import Checkers           from "./pages/Checkers";
 
 export default function App() {
     const [page, setPage]         = useState("home");
@@ -73,6 +74,7 @@ export default function App() {
         const routeMap = {
             "/":                   "home",
             "/shop":               "shop",
+            "/checkers":           "checkers",
             "/orders":             "orders",
             "/dashboard":          "dashboard",
             "/login":              "login",
@@ -117,6 +119,7 @@ export default function App() {
         const routes = {
             home:               "/",
             shop:               "/shop",
+            checkers:           "/checkers",
             orders:             "/orders",
             dashboard:          "/dashboard",
             login:              "/login",
@@ -148,6 +151,8 @@ export default function App() {
                 return <Home setPage={navigate} theme={theme} />;
             case "shop":
                 return <Shop user={user} theme={theme} />;
+            case "checkers":
+                return <Checkers user={user} theme={theme} />;
             case "orders":
                 return <Orders user={user} theme={theme} />;
             case "login":
@@ -280,6 +285,13 @@ export default function App() {
                                 {item.label}
                             </button>
                         ))}
+                        <button
+                            style={sidebarBtnGreen(page === "checkers")}
+                            onClick={() => navigate("checkers")}
+                        >
+                            <span style={sidebarBtnIcon}>🎓</span>
+                            Result Checkers
+                        </button>
                     </div>
 
                     {/* AGENT NAV */}
@@ -590,6 +602,23 @@ const sidebarBtn = (active) => ({
     border:     active ? "1px solid rgba(56,189,248,0.25)" : "1px solid transparent",
     background: active ? "rgba(56,189,248,0.1)" : "transparent",
     color:      active ? "#38bdf8" : "#94a3b8",
+    fontSize:   14,
+    fontWeight: active ? 800 : 600,
+    cursor:     "pointer",
+    textAlign:  "left",
+    width:      "100%",
+    transition: "all 0.15s",
+});
+
+const sidebarBtnGreen = (active) => ({
+    display:    "flex",
+    alignItems: "center",
+    gap:        10,
+    padding:    "10px 12px",
+    borderRadius: 10,
+    border:     active ? "1px solid rgba(34,197,94,0.3)" : "1px solid transparent",
+    background: active ? "rgba(34,197,94,0.12)" : "transparent",
+    color:      active ? "#22c55e" : "#94a3b8",
     fontSize:   14,
     fontWeight: active ? 800 : 600,
     cursor:     "pointer",

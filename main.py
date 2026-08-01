@@ -1235,6 +1235,20 @@ def get_prices(request: Request):
 
 
 
+# =========================
+# CHECKERS: PRODUCTS (proxy — frontend never sees the DataMart API key)
+# =========================
+@app.get("/checkers/products")
+@limiter.limit("60/minute")
+def list_checker_products(request: Request):
+    try:
+        products = get_checker_products()
+        return {"status": "success", "data": products}
+    except Exception as e:
+        logger.error("CHECKER PRODUCTS PROXY ERROR: %s", str(e))
+        return {"status": "error", "data": []}
+
+
 @app.post("/checkers/create")
 @limiter.limit("10/minute")
 def create_checker_order(request: Request, data: CreateCheckerOrderRequest):
@@ -1268,7 +1282,7 @@ def create_checker_order(request: Request, data: CreateCheckerOrderRequest):
                 json={
                     "email": customer_email,
                     "amount": int(total_price * 100),
-                    "callback_url": "https://evosdata.xyz/success",
+                    "callback_url": "https://evosdata.xyz/success?type=checker",
                 },
                 timeout=REQUEST_TIMEOUT,
             ).json()
@@ -1300,7 +1314,87 @@ def create_checker_order(request: Request, data: CreateCheckerOrderRequest):
     except Exception as e:
         logger.error("CREATE CHECKER ORDER ERROR: %s", str(e))
         raise HTTPException(status_code=500, detail="Server error")
-        
+
+
+# =========================
+# CHECKERS: STATUS (by Paystack reference — used by Success.jsx)
+# If the webhook hasn't landed yet when the customer bounces back from
+# Paystack, this verifies + dispatches inline instead of making them wait
+# for the 5-minute retry_stuck_checker_payments cycle.
+# =========================
+@app.get("/checkers/status/{reference}")
+@limiter.limit("20/minute")
+async def get_checker_status(request: Request, reference: str):
+    try:
+        res = supabase.table("checkers").select("*").eq("paystack_ref", reference).limit(1).execute()
+        if not res.data:
+            raise HTTPException(404, "Checker order not found")
+        checker = res.data[0]
+
+        if checker["status"] in ("pending_payment", "failed") and not checker.get("datamart_ref"):
+            try:
+                async with httpx.AsyncClient() as client:
+                    pres = await client.get(
+                        f"https://api.paystack.co/transaction/verify/{reference}",
+                        headers={"Authorization": f"Bearer {PAYSTACK_SECRET}"},
+                        timeout=15,
+                    )
+                    pdata = pres.json()
+
+                if pdata.get("data", {}).get("status") == "success":
+                    recheck = supabase.table("checkers").select("*").eq("id", checker["id"]).limit(1).execute()
+                    fresh = recheck.data[0] if recheck.data else checker
+                    if fresh["status"] in ("pending_payment", "failed") and not fresh.get("datamart_ref"):
+                        supabase.table("checkers").update({"status": "paid"}).eq("id", checker["id"]).execute()
+                        fresh_paid = supabase.table("checkers").select("*").eq("id", checker["id"]).limit(1).execute().data[0]
+                        try:
+                            dispatch_checker_order(fresh_paid)
+                        except Exception as dispatch_err:
+                            logger.error("CHECKER STATUS: dispatch error for checker %s: %s", checker["id"], str(dispatch_err))
+                            supabase.table("checkers").update({"status": "failed"}).eq("id", checker["id"]).execute()
+                    # re-fetch once more so the response reflects the dispatch outcome
+                    checker = supabase.table("checkers").select("*").eq("id", checker["id"]).limit(1).execute().data[0]
+            except Exception as verify_err:
+                logger.error("CHECKER STATUS: verify error for ref %s: %s", reference, str(verify_err))
+
+        return {
+            "status":         checker["status"],
+            "checker_type":   checker["checker_type"],
+            "quantity":       checker["quantity"],
+            "phone_number":   checker["phone_number"],
+            "price":          checker["price"],
+            "serial_numbers": checker.get("serial_numbers") or [],
+            "reference":      checker["paystack_ref"],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("CHECKER STATUS ERROR: %s", str(e))
+        raise HTTPException(status_code=500, detail="Failed to fetch checker status")
+
+
+# =========================
+# CHECKERS: TRACK (by phone — mirrors /orders/track)
+# =========================
+@app.get("/checkers/track")
+@limiter.limit("20/minute")
+def track_checkers(request: Request, phone: str = Query(...)):
+    try:
+        cleaned = normalise_phone(phone)
+        res = supabase.table("checkers") \
+            .select("checker_type, quantity, price, phone_number, status, created_at, evosdata_ref, paystack_ref, serial_numbers") \
+            .eq("phone_number", cleaned) \
+            .order("created_at", desc=True) \
+            .limit(10) \
+            .execute()
+        return {"checkers": res.data or []}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("CHECKER TRACK ERROR: %s", str(e))
+        raise HTTPException(status_code=500, detail="Failed to fetch checker orders")
+
+
 @app.post("/agent/buy-checker")
 @limiter.limit("10/minute")
 async def agent_buy_checker(request: Request, payload: AgentBuyCheckerRequest):

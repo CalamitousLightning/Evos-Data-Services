@@ -220,6 +220,7 @@ export default function Home({ setPage, theme }) {
         .evos-live-dot { animation: evosPulse 1.8s ease-in-out infinite; }
         .evos-net-card { transition: transform 0.15s ease, box-shadow 0.15s ease; }
         .evos-net-card:hover { transform: translateY(-3px); }
+        .evos-checker-banner:hover { transform: translateY(-3px); box-shadow: 0 12px 34px rgba(34,197,94,0.2); }
         .evos-feature-card, .evos-step-card { transition: transform 0.18s ease, border-color 0.18s ease; }
         .evos-feature-card:hover, .evos-step-card:hover { transform: translateY(-4px); }
         .evos-focusable:focus-visible { outline: 2px solid ${T.accent}; outline-offset: 3px; border-radius: 8px; }
@@ -379,6 +380,28 @@ export default function Home({ setPage, theme }) {
               <div style={styles.statLabel}>{s.label}</div>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* ===================== RESULT CHECKERS PROMO ===================== */}
+      <section style={styles.section}>
+        <div
+          className="evos-checker-banner evos-focusable"
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setPage("checkers"); }}
+          onClick={() => setPage("checkers")}
+          style={styles.checkerBanner}
+        >
+          <div style={styles.checkerBannerLeft}>
+            <div style={styles.checkerBannerBadge}>🎓 New</div>
+            <h2 style={styles.checkerBannerTitle}>WAEC &amp; BECE Result Checkers</h2>
+            <p style={styles.checkerBannerDesc}>
+              Get your serial number and PIN instantly — delivered straight to your phone by SMS.
+            </p>
+            <span style={styles.checkerBannerCta}>Buy a checker card →</span>
+          </div>
+          <div style={styles.checkerBannerIcon}>🎓</div>
         </div>
       </section>
 
@@ -799,6 +822,31 @@ function buildStyles(T) {
   statLabel: { fontSize: 12, color: T.muted, marginTop: 3 },
 
   // SECTIONS
+  checkerBanner: {
+    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16,
+    background: "linear-gradient(135deg, rgba(34,197,94,0.14), rgba(34,197,94,0.04))",
+    border: "1.5px solid rgba(34,197,94,0.35)", borderRadius: 22,
+    padding: "22px 24px", cursor: "pointer", transition: "transform 0.15s ease, box-shadow 0.15s ease",
+  },
+  checkerBannerLeft: { flex: 1, minWidth: 0 },
+  checkerBannerBadge: {
+    display: "inline-block", padding: "3px 12px", borderRadius: 50,
+    background: "rgba(34,197,94,0.18)", border: "1px solid rgba(34,197,94,0.4)",
+    color: "#22c55e", fontSize: 11, fontWeight: 800, marginBottom: 10,
+    textTransform: "uppercase", letterSpacing: "0.4px",
+  },
+  checkerBannerTitle: {
+    fontFamily: T.display, fontSize: "clamp(18px, 2.6vw, 24px)", fontWeight: 800,
+    color: "#22c55e", margin: "0 0 6px", letterSpacing: "-0.01em",
+  },
+  checkerBannerDesc: { fontSize: 13.5, color: T.muted, margin: "0 0 12px", lineHeight: 1.5, maxWidth: 440 },
+  checkerBannerCta: { fontSize: 13.5, fontWeight: 800, color: "#22c55e" },
+  checkerBannerIcon: {
+    fontSize: 44, flexShrink: 0, width: 78, height: 78, borderRadius: "50%",
+    background: "rgba(34,197,94,0.14)", border: "1px solid rgba(34,197,94,0.3)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+  },
+
   section: { padding: "10px 0 44px" },
   sectionHeader: { textAlign: "center", marginBottom: 30 },
   sectionTag: {

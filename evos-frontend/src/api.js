@@ -92,4 +92,24 @@ export const getOrders = (user_id) => request("get", `/orders/me?user_id=${user_
 export const verifyNumber = (phoneNumber, network, timeout = 12000) =>
   request("post", "/verify-number", { phoneNumber, network }, { timeout });
 
+// =========================
+// RESULT CHECKERS (WAEC / BECE)
+// =========================
+export const getCheckerProducts = () => request("get", "/checkers/products");
+
+export const createCheckerOrder = (data) =>
+  request("post", "/checkers/create", {
+    user_id: data.user_id || null,
+    checker_type: data.checker_type,
+    phone_number: data.phone_number,
+    quantity: data.quantity || 1,
+    email: data.email || undefined,
+  });
+
+export const getCheckerStatus = (reference) =>
+  request("get", `/checkers/status/${reference}`);
+
+export const trackCheckers = (phone) =>
+  request("get", `/checkers/track?phone=${encodeURIComponent(phone)}`);
+
 export default primaryClient;
