@@ -111,6 +111,13 @@ _checker_products_lock = threading.Lock()
 # (customer purchase page, checkout total, and agent wallet debit).
 CHECKER_SELL_PRICE = 18.50
 
+# What an agent pays per card when buying a checker for a customer directly
+# (agent_buy_checker) — this is the agent's cost, distinct from CHECKER_SELL_PRICE
+# which is the customer-facing retail price. Also the floor for any per-agent
+# resale markup set via /agent/checker-pricing — agents can only price at or
+# above this, never below their own cost.
+CHECKER_AGENT_BASE_PRICE = 16.80
+
 BUNDLES_GHANA_API_KEY = os.getenv("BUNDLES_GHANA_API_KEY")
 BUNDLES_GHANA_API_SECRET = os.getenv("BUNDLES_GHANA_API_SECRET")
 BUNDLES_GHANA_BASE = "https://evosdata.xyz/.netlify/functions/bundlesProxy"
@@ -1436,7 +1443,9 @@ async def agent_buy_checker(request: Request, payload: AgentBuyCheckerRequest):
         if not product.get("inStock"):
             return {"status": "error", "message": f"{payload.checker_type} checkers are out of stock"}
 
-        unit_cost   = float(product.get("price", 0))
+        # Agents pay their own cost (CHECKER_AGENT_BASE_PRICE), not the
+        # customer-facing retail price on `product["price"]`.
+        unit_cost   = CHECKER_AGENT_BASE_PRICE
         total_cost  = round(unit_cost * payload.quantity, 2)
         if total_cost <= 0:
             return {"status": "error", "message": "Invalid checker price"}
@@ -3712,6 +3721,96 @@ def save_agent_pricing(request: Request, payload: dict):
         raise
     except Exception as e:
         logger.error("SAVE AGENT PRICING ERROR: %s", str(e))
+        return {"status": "failed", "message": "Unable to save pricing"}
+
+
+# =========================
+# AGENT CHECKER PRICING
+# Lets an agent set their own resale price per checker type (WAEC/BECE).
+# Stored as a markup on top of CHECKER_AGENT_BASE_PRICE, same shape as the
+# data-bundle agent_prices table above — final_price = base + markup.
+# Markup must be >= 0: agents can only increase their price, never sell
+# below their own cost.
+# =========================
+CHECKER_TYPES = ("WAEC", "BECE")
+
+
+@app.get("/agent/checker-pricing/{agent_id}")
+@limiter.limit("30/minute")
+def get_agent_checker_pricing(request: Request, agent_id: int, _: int = Depends(require_agent)):
+    try:
+        rows_res = supabase.table("checker_agent_prices") \
+            .select("*") \
+            .eq("agent_id", agent_id) \
+            .execute()
+        rows = rows_res.data or []
+
+        markup_map = {}
+        for row in rows:
+            if not row:
+                continue
+            markup_map[row.get("checker_type", "").strip().upper()] = float(row.get("markup", 0) or 0)
+
+        result = []
+        for checker_type in CHECKER_TYPES:
+            markup = float(markup_map.get(checker_type, 0) or 0)
+            result.append({
+                "checker_type": checker_type,
+                "base_price":   CHECKER_AGENT_BASE_PRICE,
+                "markup":       markup,
+                "final_price":  round(CHECKER_AGENT_BASE_PRICE + markup, 2),
+            })
+
+        return {"status": "success", "prices": result}
+    except Exception as e:
+        logger.error("AGENT CHECKER PRICING ERROR: %s", str(e))
+        return {"status": "error", "prices": []}
+
+
+@app.post("/agent/checker-pricing/save")
+@limiter.limit("10/minute")
+def save_agent_checker_pricing(request: Request, payload: dict):
+    try:
+        agent_id = str(payload.get("agent_id", "")).strip()
+        prices   = payload.get("prices", [])
+
+        if not agent_id:
+            return {"status": "failed", "message": "agent_id required"}
+
+        token = request.headers.get("X-Agent-Token", "")
+        try:
+            agent_id_int = int(agent_id)
+        except ValueError:
+            return {"status": "failed", "message": "Invalid agent_id"}
+        if not token or not verify_agent_token(token, agent_id_int):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        rows = []
+        for item in prices:
+            checker_type = str(item.get("checker_type", "")).strip().upper()
+            if checker_type not in CHECKER_TYPES:
+                continue
+            try:
+                markup = float(item.get("markup", 0) or 0)
+            except:
+                markup = 0
+            # Agents can only mark UP from their base cost, never below it.
+            if markup < 0:
+                return {
+                    "status": "failed",
+                    "message": f"{checker_type} price can't be below the base price of GH₵ {CHECKER_AGENT_BASE_PRICE:.2f}",
+                }
+            rows.append({"agent_id": agent_id, "checker_type": checker_type, "markup": markup})
+
+        supabase.table("checker_agent_prices").delete().eq("agent_id", agent_id).execute()
+        if rows:
+            supabase.table("checker_agent_prices").insert(rows).execute()
+
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("SAVE AGENT CHECKER PRICING ERROR: %s", str(e))
         return {"status": "failed", "message": "Unable to save pricing"}
 
 

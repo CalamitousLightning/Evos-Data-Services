@@ -18,6 +18,8 @@ import AgentBuyData       from "./pages/AgentBuyData";
 import AgentDeposit       from "./pages/AgentDeposit";
 import ForgotPassword     from "./pages/ForgotPassword";
 import Checkers           from "./pages/Checkers";
+import AgentBuyChecker    from "./pages/AgentBuyChecker";
+import AgentCheckerPricing from "./pages/AgentCheckerPricing";
 
 export default function App() {
     const [page, setPage]         = useState("home");
@@ -85,6 +87,8 @@ export default function App() {
             "/agent-store":        "agent-store",
             "/agent-withdraw":     "agent-withdraw",
             "/agent-buy-data":     "agent-buy-data",
+            "/agent-buy-checker":  "agent-buy-checker",
+            "/agent-checker-pricing": "agent-checker-pricing",
             "/agent-deposit":      "agent-deposit",
             "/admin-withdrawals":  "admin-withdrawals",
             "/track":              "track-order",
@@ -130,6 +134,8 @@ export default function App() {
             "agent-store":      "/agent-store",
             "agent-withdraw":   "/agent-withdraw",
             "agent-buy-data":   "/agent-buy-data",
+            "agent-buy-checker":      "/agent-buy-checker",
+            "agent-checker-pricing":  "/agent-checker-pricing",
             "agent-deposit":    "/agent-deposit",
             "admin-withdrawals":"/admin-withdrawals",
             store:              "/store",
@@ -171,6 +177,10 @@ export default function App() {
                 return <AgentWithdraw user={user} setPage={navigate} />;
             case "agent-buy-data":
                 return <AgentBuyData user={user} setPage={navigate} />;
+            case "agent-buy-checker":
+                return <AgentBuyChecker user={user} setPage={navigate} />;
+            case "agent-checker-pricing":
+                return <AgentCheckerPricing user={user} setPage={navigate} />;
             case "agent-deposit":
                 return <AgentDeposit user={user} setPage={navigate} />;
             case "admin-withdrawals":
@@ -322,6 +332,20 @@ export default function App() {
                                         >
                                             <span style={sidebarBtnIcon}>💰</span>
                                             Manage Pricing
+                                        </button>
+                                        <button
+                                            style={sidebarBtn(page === "agent-buy-checker")}
+                                            onClick={() => navigate("agent-buy-checker")}
+                                        >
+                                            <span style={sidebarBtnIcon}>🎓</span>
+                                            Buy Checker (Base Price)
+                                        </button>
+                                        <button
+                                            style={sidebarBtn(page === "agent-checker-pricing")}
+                                            onClick={() => navigate("agent-checker-pricing")}
+                                        >
+                                            <span style={sidebarBtnIcon}>🏷️</span>
+                                            Manage Checker Pricing
                                         </button>
                                         <button
                                             style={sidebarBtn(page === "agent-withdraw")}
