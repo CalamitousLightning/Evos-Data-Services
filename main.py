@@ -104,6 +104,13 @@ CHECKER_PRICE_CACHE_TTL = 300
 _checker_products_cache = {"data": None, "ts": 0}
 _checker_products_lock = threading.Lock()
 
+# Retail price shown to customers and charged at checkout, for every checker
+# type (WAEC + BECE). Overrides whatever price DataMart reports on their
+# /products endpoint — that field is still used for inStock/stockCount,
+# just not for price. Change this single value to adjust pricing everywhere
+# (customer purchase page, checkout total, and agent wallet debit).
+CHECKER_SELL_PRICE = 18.50
+
 BUNDLES_GHANA_API_KEY = os.getenv("BUNDLES_GHANA_API_KEY")
 BUNDLES_GHANA_API_SECRET = os.getenv("BUNDLES_GHANA_API_SECRET")
 BUNDLES_GHANA_BASE = "https://evosdata.xyz/.netlify/functions/bundlesProxy"
@@ -486,6 +493,13 @@ def get_checker_products():
             timeout=REQUEST_TIMEOUT,
         )
         data = res.json().get("data", [])
+
+        # Keep DataMart's stock info, but always sell at our own fixed price
+        # rather than whatever they currently list.
+        for p in data:
+            if isinstance(p, dict):
+                p["price"] = CHECKER_SELL_PRICE
+
         with _checker_products_lock:
             _checker_products_cache["data"] = data
             _checker_products_cache["ts"] = now
