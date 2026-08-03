@@ -242,8 +242,12 @@ export default function AgentWithdraw({ user, setPage }) {
           <div style={S.successIcon}>✅</div>
           <h2 style={S.successTitle}>Transfer Initiated</h2>
           <p style={S.successSub}>
-            GH₵ {receivedAmount.toFixed(2)} is on its way to {mobileNumber}.
-            Instant transfer — funds typically arrive within minutes.
+            {message.text || (
+              <>
+                GH₵ {receivedAmount.toFixed(2)} is on its way to {mobileNumber}.
+                Instant transfer — funds typically arrive within minutes.
+              </>
+            )}
           </p>
           <div style={S.successMeta}>
             <span style={S.metaLabel}>Withdrawn from wallet</span>
