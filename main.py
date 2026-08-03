@@ -449,7 +449,7 @@ class AgentBuyCheckerRequest(BaseModel):
         if not re.match(r"^\d{9,15}$", cleaned):
             raise ValueError("Invalid phone number")
         return cleaned
-        
+
 # =========================
 # HELPERS
 # =========================
@@ -468,8 +468,8 @@ MOOLRE_CHANNEL_MAP = {
 
 PAYSTACK_MOMO_BANK_CODE = {
     "MTN": "MTN",
-    "TELECEL": "VOD",       # confirm via GET https://api.paystack.co/bank?currency=GHS&type=mobile_money
-    "AIRTELTIGO": "ATL",    # confirm via the same endpoint
+    "TELECEL": "VOD",       # confirmed via Paystack's Creating Transfer Recipients docs
+    "AIRTELTIGO": "ATL",    # confirmed via the same docs
 }
 
 SDL_NETWORK_MAP = {
@@ -970,6 +970,13 @@ def call_moolre(endpoint: str, body: dict):
 # separate call: GET /bank/resolve?account_number=...&bank_code=...
 # This must run BEFORE recipient creation if you want the real account name
 # instead of "Not verified".
+#
+# NOTE: Resolve Account Number is documented as available for Ghana, but in
+# practice its coverage per mobile-money network is uneven — MTN tends to
+# resolve reliably, while Telecel/AirtelTigo often come back with
+# status:false and no usable name for a given number. That's a Paystack-side
+# data-coverage limitation, not a request-shape bug, so we log the raw
+# response and surface the reason instead of silently swallowing it.
 # =========================
 def paystack_resolve_account(account_number: str, bank_code: str) -> dict:
     try:
@@ -979,7 +986,12 @@ def paystack_resolve_account(account_number: str, bank_code: str) -> dict:
             headers={"Authorization": f"Bearer {PAYSTACK_SECRET}"},
             timeout=REQUEST_TIMEOUT,
         )
-        return res.json()
+        data = res.json()
+        logger.info(
+            "PAYSTACK RESOLVE: bank_code=%s account=%s http=%s status=%s message=%s",
+            bank_code, account_number, res.status_code, data.get("status"), data.get("message")
+        )
+        return data
     except Exception as e:
         logger.error("PAYSTACK RESOLVE ACCOUNT ERROR: %s", str(e))
         return {"status": False, "message": str(e)}
@@ -3617,15 +3629,22 @@ async def verify_withdraw_account(request: Request, payload: VerifyAccountReques
             return {"status": "error", "message": f"Unsupported network for Paystack: {network}"}
 
         # Resolve the real account name first — /transferrecipient alone
-        # doesn't reliably return this for mobile money.
+        # doesn't reliably return this for mobile money. NOTE: Paystack's
+        # Resolve Account Number coverage for Ghana mobile money is uneven
+        # per network — MTN tends to resolve reliably; Telecel/AirtelTigo
+        # frequently come back status:false with no name on file. We keep
+        # `resolve_message` so the frontend can show *why* it's unresolved
+        # instead of just a blanket "Not verified".
         resolved = paystack_resolve_account(payload.mobile_number, bank_code)
         resolved_name = ""
+        resolve_message = None
         if resolved.get("status"):
             resolved_name = resolved.get("data", {}).get("account_name", "") or ""
         else:
+            resolve_message = resolved.get("message") or "Could not resolve account name for this number."
             logger.warning(
                 "PAYSTACK RESOLVE: could not resolve %s on %s: %s",
-                payload.mobile_number, network, resolved.get("message")
+                payload.mobile_number, network, resolve_message
             )
 
         recipient = paystack_create_recipient(resolved_name or "EVOS Agent", payload.mobile_number, network)
@@ -3646,6 +3665,8 @@ async def verify_withdraw_account(request: Request, payload: VerifyAccountReques
             "recipient_code": rdata.get("recipient_code"),
             "mobile_number": payload.mobile_number,
             "network": network,
+            "resolved": bool(account_name),
+            "resolve_message": None if account_name else resolve_message,
         }
 
     # Moolre has no name-resolution endpoint in this integration —
@@ -3656,6 +3677,8 @@ async def verify_withdraw_account(request: Request, payload: VerifyAccountReques
         "account_name": "",
         "mobile_number": payload.mobile_number,
         "network": network,
+        "resolved": False,
+        "resolve_message": None,
         "note": "Moolre does not support account name lookup — agent must confirm name manually.",
     }
         
