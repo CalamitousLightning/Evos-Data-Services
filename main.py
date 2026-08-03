@@ -963,6 +963,28 @@ def call_moolre(endpoint: str, body: dict):
 # =========================
 # PAYSTACK TRANSFER HELPERS
 # =========================
+# =========================
+# PAYSTACK ACCOUNT RESOLUTION
+# Per Paystack's docs, /transferrecipient does NOT reliably return a resolved
+# account_name for mobile money in `data.details` — name resolution is a
+# separate call: GET /bank/resolve?account_number=...&bank_code=...
+# This must run BEFORE recipient creation if you want the real account name
+# instead of "Not verified".
+# =========================
+def paystack_resolve_account(account_number: str, bank_code: str) -> dict:
+    try:
+        res = requests.get(
+            "https://api.paystack.co/bank/resolve",
+            params={"account_number": account_number, "bank_code": bank_code},
+            headers={"Authorization": f"Bearer {PAYSTACK_SECRET}"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        return res.json()
+    except Exception as e:
+        logger.error("PAYSTACK RESOLVE ACCOUNT ERROR: %s", str(e))
+        return {"status": False, "message": str(e)}
+
+
 def paystack_create_recipient(name: str, mobile_number: str, network: str) -> dict:
     bank_code = PAYSTACK_MOMO_BANK_CODE.get(network.upper())
     if not bank_code:
@@ -3388,11 +3410,28 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
 
         withdrawal_id = wd.data[0]["id"]
 
-        recipient = paystack_create_recipient(account_name or "EVOS Agent", mobile_number, network)
+        # If the frontend didn't already pass a resolved name (e.g. the
+        # agent skipped or bypassed the verify-account step), resolve it
+        # here too rather than silently falling back to "EVOS Agent".
+        resolved_account_name = account_name
+        if not resolved_account_name:
+            resolved = paystack_resolve_account(mobile_number, PAYSTACK_MOMO_BANK_CODE.get(network, ""))
+            if resolved.get("status"):
+                resolved_account_name = resolved.get("data", {}).get("account_name", "") or ""
+            else:
+                logger.warning(
+                    "PAYSTACK RESOLVE (withdraw): could not resolve %s on %s: %s",
+                    mobile_number, network, resolved.get("message")
+                )
+
+        recipient = paystack_create_recipient(resolved_account_name or "EVOS Agent", mobile_number, network)
         if not recipient.get("status"):
             refund()
             supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
             return {"error": recipient.get("message", "Could not create transfer recipient")}
+
+        if resolved_account_name and resolved_account_name != account_name:
+            supabase.table("agent_withdrawals").update({"account_name": resolved_account_name}).eq("id", withdrawal_id).execute()
 
         recipient_code = recipient["data"]["recipient_code"]
         # NOTE: only the post-fee amount is actually transferred. The agent's
@@ -3405,8 +3444,9 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
         )
 
         if not transfer.get("status"):
-            transfer_msg = str(transfer.get("message", "") or "")
+            transfer_msg   = str(transfer.get("message", "") or "")
             transfer_msg_l = transfer_msg.lower()
+
             # Paystack returns wording like this when OUR business balance is
             # too low to cover the payout — that's an internal/ops problem,
             # not the agent's. Don't reveal it or auto-fail/refund; leave the
@@ -3437,7 +3477,7 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
 
             refund()
             supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
-            return {"error": transfer.get("message", "Paystack transfer failed")}
+            return {"error": transfer_msg or "Paystack transfer failed"}
 
         tdata           = transfer.get("data", {})
         transfer_status = tdata.get("status")   # expected "success" | "pending" with OTP disabled
@@ -3572,17 +3612,37 @@ async def verify_withdraw_account(request: Request, payload: VerifyAccountReques
     network = payload.network.upper()
 
     if payload.provider == "paystack":
-        recipient = paystack_create_recipient("EVOS Agent", payload.mobile_number, network)
+        bank_code = PAYSTACK_MOMO_BANK_CODE.get(network)
+        if not bank_code:
+            return {"status": "error", "message": f"Unsupported network for Paystack: {network}"}
+
+        # Resolve the real account name first — /transferrecipient alone
+        # doesn't reliably return this for mobile money.
+        resolved = paystack_resolve_account(payload.mobile_number, bank_code)
+        resolved_name = ""
+        if resolved.get("status"):
+            resolved_name = resolved.get("data", {}).get("account_name", "") or ""
+        else:
+            logger.warning(
+                "PAYSTACK RESOLVE: could not resolve %s on %s: %s",
+                payload.mobile_number, network, resolved.get("message")
+            )
+
+        recipient = paystack_create_recipient(resolved_name or "EVOS Agent", payload.mobile_number, network)
         if not recipient.get("status"):
             error_msg = recipient.get("message", "Could not verify account")
             return {"status": "error", "message": error_msg}
 
         rdata = recipient.get("data", {})
         details = rdata.get("details", {})
+        # Prefer the name from the dedicated resolve call; fall back to
+        # whatever (if anything) the recipient creation echoed back.
+        account_name = resolved_name or details.get("account_name") or ""
+
         return {
             "status": "success",
             "provider": "paystack",
-            "account_name": details.get("account_name") or "",
+            "account_name": account_name,
             "recipient_code": rdata.get("recipient_code"),
             "mobile_number": payload.mobile_number,
             "network": network,
