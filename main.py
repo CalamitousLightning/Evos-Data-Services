@@ -3405,6 +3405,36 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
         )
 
         if not transfer.get("status"):
+            transfer_msg = str(transfer.get("message", "") or "")
+            transfer_msg_l = transfer_msg.lower()
+            # Paystack returns wording like this when OUR business balance is
+            # too low to cover the payout — that's an internal/ops problem,
+            # not the agent's. Don't reveal it or auto-fail/refund; leave the
+            # request sitting as "processing" so an admin can top up and
+            # manually complete it later via /admin/withdrawals/{id}/paid.
+            low_balance_signals = (
+                "insufficient", "not enough", "not enough to fulfil", "not enough to fulfill",
+                "top up", "top-up", "topup", "fund your account", "fund your wallet",
+            )
+            if any(sig in transfer_msg_l for sig in low_balance_signals):
+                logger.error(
+                    "PAYSTACK WITHDRAW: business balance insufficient for withdrawal %s "
+                    "(agent %s, GH₵%s) — Paystack said: %s. Leaving as 'processing' for "
+                    "manual completion once topped up.",
+                    withdrawal_id, agent_id, payout_amount, transfer_msg
+                )
+                return {
+                    "status":          "success",
+                    "provider":        "paystack",
+                    "message":         "Your withdrawal is active and being processed. "
+                                       "Please try again shortly if it doesn't reflect.",
+                    "withdrawal_id":   withdrawal_id,
+                    "transfer_status": "processing",
+                    "amount":          amount,
+                    "fee":             fee,
+                    "payout_amount":   payout_amount,
+                }
+
             refund()
             supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
             return {"error": transfer.get("message", "Paystack transfer failed")}
