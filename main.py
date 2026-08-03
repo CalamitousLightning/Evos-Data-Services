@@ -111,9 +111,11 @@ _checker_products_lock = threading.Lock()
 # (customer purchase page, checkout total, and agent wallet debit).
 CHECKER_SELL_PRICE = 18.50
 
-# What agents pay per card — lower than CHECKER_SELL_PRICE so they have room
-# to mark up when reselling through their own storefront (agent_checker_prices)
-# or just resell manually after an instant "buy at base price" purchase.
+# What an agent pays per card when buying a checker for a customer directly
+# (agent_buy_checker) — this is the agent's cost, distinct from CHECKER_SELL_PRICE
+# which is the customer-facing retail price. Also the floor for any per-agent
+# resale markup set via /agent/checker-pricing — agents can only price at or
+# above this, never below their own cost.
 CHECKER_AGENT_BASE_PRICE = 16.80
 
 BUNDLES_GHANA_API_KEY = os.getenv("BUNDLES_GHANA_API_KEY")
@@ -323,6 +325,28 @@ class StoreOrderRequest(BaseModel):
         if v.upper() not in allowed:
             raise ValueError("Invalid network")
         return v.upper()
+
+    @validator("phone_number")
+    def phone_clean(cls, v):
+        cleaned = re.sub(r"[\s\-\(\)]", "", v)
+        if not re.match(r"^\d{9,15}$", cleaned):
+            raise ValueError("Invalid phone number")
+        return cleaned
+
+
+class CheckerStoreOrderRequest(BaseModel):
+    agent_id: int
+    checker_type: str = Field(min_length=3, max_length=10)
+    phone_number: str = Field(min_length=9, max_length=15)
+    quantity: int = Field(default=1, ge=1, le=20)
+    email: Optional[EmailStr] = None
+
+    @validator("checker_type")
+    def checker_type_valid(cls, v):
+        v = v.strip().upper()
+        if v not in ("WAEC", "BECE"):
+            raise ValueError("Invalid checker type")
+        return v
 
     @validator("phone_number")
     def phone_clean(cls, v):
@@ -601,6 +625,10 @@ def dispatch_checker_order(checker: dict):
             "serial_numbers":       cards,
         }).eq("id", checker_id).execute()
         logger.info("CHECKER DISPATCH: order %s bulk-purchased %d %s cards ✅", checker_id, quantity, checker_type)
+        try:
+            process_checker_agent_profit(checker_id, safe_ref)
+        except Exception as profit_err:
+            logger.error("CHECKER AGENT PROFIT ERROR (bulk): %s", str(profit_err))
 
     else:
         result = call_checker_purchase(checker_type, phone, safe_ref)
@@ -622,6 +650,10 @@ def dispatch_checker_order(checker: dict):
             "serial_numbers":       [card],
         }).eq("id", checker_id).execute()
         logger.info("CHECKER DISPATCH: order %s purchased %s card ✅", checker_id, checker_type)
+        try:
+            process_checker_agent_profit(checker_id, data.get("reference") or safe_ref)
+        except Exception as profit_err:
+            logger.error("CHECKER AGENT PROFIT ERROR (single): %s", str(profit_err))
 
 
 # =========================
@@ -931,28 +963,6 @@ def call_moolre(endpoint: str, body: dict):
 # =========================
 # PAYSTACK TRANSFER HELPERS
 # =========================
-# =========================
-# PAYSTACK ACCOUNT RESOLUTION
-# Per Paystack's docs, /transferrecipient does NOT reliably return a resolved
-# account_name for mobile money in `data.details` — name resolution is a
-# separate call: GET /bank/resolve?account_number=...&bank_code=...
-# This must run BEFORE recipient creation if you want the real account name
-# instead of "Not verified".
-# =========================
-def paystack_resolve_account(account_number: str, bank_code: str) -> dict:
-    try:
-        res = requests.get(
-            "https://api.paystack.co/bank/resolve",
-            params={"account_number": account_number, "bank_code": bank_code},
-            headers={"Authorization": f"Bearer {PAYSTACK_SECRET}"},
-            timeout=REQUEST_TIMEOUT,
-        )
-        return res.json()
-    except Exception as e:
-        logger.error("PAYSTACK RESOLVE ACCOUNT ERROR: %s", str(e))
-        return {"status": False, "message": str(e)}
-
-
 def paystack_create_recipient(name: str, mobile_number: str, network: str) -> dict:
     bank_code = PAYSTACK_MOMO_BANK_CODE.get(network.upper())
     if not bank_code:
@@ -1236,6 +1246,65 @@ def process_agent_profit(order_id, reference):
     }).execute()
 
 
+def process_checker_agent_profit(checker_id, reference):
+    """Mirrors process_agent_profit but for the checkers table. Only fires
+    for store-checkout rows (base_price + agent_price populated) — direct
+    customer purchases and an agent's own agent/buy-checker purchases leave
+    those columns empty, so this is a no-op for them."""
+    existing = supabase.table("agent_transactions") \
+        .select("id") \
+        .eq("reference", reference) \
+        .limit(1) \
+        .execute()
+    if existing.data:
+        return
+
+    checker_res = supabase.table("checkers") \
+        .select("*") \
+        .eq("id", checker_id) \
+        .limit(1) \
+        .execute()
+    if not checker_res.data:
+        return
+
+    checker = checker_res.data[0]
+    agent_id    = checker.get("agent_id")
+    base_price  = checker.get("base_price")
+    agent_price = checker.get("agent_price")
+
+    if not agent_id or base_price is None or agent_price is None:
+        return
+
+    profit = Decimal(str(agent_price)) - Decimal(str(base_price))
+    if profit <= 0:
+        return
+
+    wallet = supabase.table("agent_wallets") \
+        .select("*") \
+        .eq("agent_id", agent_id) \
+        .limit(1) \
+        .execute()
+
+    if wallet.data:
+        new_balance = Decimal(str(wallet.data[0]["balance"])) + profit
+        supabase.table("agent_wallets") \
+            .update({"balance": float(new_balance)}) \
+            .eq("agent_id", agent_id) \
+            .execute()
+    else:
+        supabase.table("agent_wallets") \
+            .insert({"agent_id": agent_id, "balance": float(profit)}) \
+            .execute()
+
+    supabase.table("agent_transactions").insert({
+        "agent_id":  agent_id,
+        "order_id":  checker_id,
+        "amount":    float(profit),
+        "type":      "credit",
+        "reference": reference
+    }).execute()
+
+
 # =========================
 # USER STATS
 # =========================
@@ -1463,6 +1532,8 @@ async def agent_buy_checker(request: Request, payload: AgentBuyCheckerRequest):
         if not product.get("inStock"):
             return {"status": "error", "message": f"{payload.checker_type} checkers are out of stock"}
 
+        # Agents pay their own cost (CHECKER_AGENT_BASE_PRICE), not the
+        # customer-facing retail price on `product["price"]`.
         unit_cost   = CHECKER_AGENT_BASE_PRICE
         total_cost  = round(unit_cost * payload.quantity, 2)
         if total_cost <= 0:
@@ -3317,28 +3388,11 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
 
         withdrawal_id = wd.data[0]["id"]
 
-        # If the frontend didn't already pass a resolved name (e.g. the
-        # agent skipped or bypassed the verify-account step), resolve it
-        # here too rather than silently falling back to "EVOS Agent".
-        resolved_account_name = account_name
-        if not resolved_account_name:
-            resolved = paystack_resolve_account(mobile_number, PAYSTACK_MOMO_BANK_CODE.get(network, ""))
-            if resolved.get("status"):
-                resolved_account_name = resolved.get("data", {}).get("account_name", "") or ""
-            else:
-                logger.warning(
-                    "PAYSTACK RESOLVE (withdraw): could not resolve %s on %s: %s",
-                    mobile_number, network, resolved.get("message")
-                )
-
-        recipient = paystack_create_recipient(resolved_account_name or "EVOS Agent", mobile_number, network)
+        recipient = paystack_create_recipient(account_name or "EVOS Agent", mobile_number, network)
         if not recipient.get("status"):
             refund()
             supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
             return {"error": recipient.get("message", "Could not create transfer recipient")}
-
-        if resolved_account_name and resolved_account_name != account_name:
-            supabase.table("agent_withdrawals").update({"account_name": resolved_account_name}).eq("id", withdrawal_id).execute()
 
         recipient_code = recipient["data"]["recipient_code"]
         # NOTE: only the post-fee amount is actually transferred. The agent's
@@ -3351,36 +3405,39 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
         )
 
         if not transfer.get("status"):
-            transfer_msg   = str(transfer.get("message", "") or "")
+            transfer_msg = str(transfer.get("message", "") or "")
             transfer_msg_l = transfer_msg.lower()
-
             # Paystack returns wording like this when OUR business balance is
             # too low to cover the payout — that's an internal/ops problem,
-            # not the agent's fault, and showing them Paystack's raw message
-            # ("insufficient balance...") reads like *their* wallet is short,
-            # which it isn't. Refund them properly and give a clear, honest
-            # message instead — then log loudly so this doesn't go unnoticed.
+            # not the agent's. Don't reveal it or auto-fail/refund; leave the
+            # request sitting as "processing" so an admin can top up and
+            # manually complete it later via /admin/withdrawals/{id}/paid.
             low_balance_signals = (
                 "insufficient", "not enough", "not enough to fulfil", "not enough to fulfill",
                 "top up", "top-up", "topup", "fund your account", "fund your wallet",
             )
-
-            refund()
-            supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
-
             if any(sig in transfer_msg_l for sig in low_balance_signals):
                 logger.error(
-                    "PAYSTACK WITHDRAW: BUSINESS BALANCE TOO LOW to pay withdrawal %s "
-                    "(agent %s, GH₵%s payout). Paystack said: %s. Agent has been refunded. "
-                    "ACTION NEEDED: top up the Paystack business balance.",
+                    "PAYSTACK WITHDRAW: business balance insufficient for withdrawal %s "
+                    "(agent %s, GH₵%s) — Paystack said: %s. Leaving as 'processing' for "
+                    "manual completion once topped up.",
                     withdrawal_id, agent_id, payout_amount, transfer_msg
                 )
                 return {
-                    "error": "Withdrawal couldn't be completed right now — your balance has "
-                             "been restored. Please try again shortly.",
+                    "status":          "success",
+                    "provider":        "paystack",
+                    "message":         "Your withdrawal is active and being processed. "
+                                       "Please try again shortly if it doesn't reflect.",
+                    "withdrawal_id":   withdrawal_id,
+                    "transfer_status": "processing",
+                    "amount":          amount,
+                    "fee":             fee,
+                    "payout_amount":   payout_amount,
                 }
 
-            return {"error": transfer_msg or "Paystack transfer failed"}
+            refund()
+            supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
+            return {"error": transfer.get("message", "Paystack transfer failed")}
 
         tdata           = transfer.get("data", {})
         transfer_status = tdata.get("status")   # expected "success" | "pending" with OTP disabled
@@ -3515,37 +3572,17 @@ async def verify_withdraw_account(request: Request, payload: VerifyAccountReques
     network = payload.network.upper()
 
     if payload.provider == "paystack":
-        bank_code = PAYSTACK_MOMO_BANK_CODE.get(network)
-        if not bank_code:
-            return {"status": "error", "message": f"Unsupported network for Paystack: {network}"}
-
-        # Resolve the real account name first — /transferrecipient alone
-        # doesn't reliably return this for mobile money.
-        resolved = paystack_resolve_account(payload.mobile_number, bank_code)
-        resolved_name = ""
-        if resolved.get("status"):
-            resolved_name = resolved.get("data", {}).get("account_name", "") or ""
-        else:
-            logger.warning(
-                "PAYSTACK RESOLVE: could not resolve %s on %s: %s",
-                payload.mobile_number, network, resolved.get("message")
-            )
-
-        recipient = paystack_create_recipient(resolved_name or "EVOS Agent", payload.mobile_number, network)
+        recipient = paystack_create_recipient("EVOS Agent", payload.mobile_number, network)
         if not recipient.get("status"):
             error_msg = recipient.get("message", "Could not verify account")
             return {"status": "error", "message": error_msg}
 
         rdata = recipient.get("data", {})
         details = rdata.get("details", {})
-        # Prefer the name from the dedicated resolve call; fall back to
-        # whatever (if anything) the recipient creation echoed back.
-        account_name = resolved_name or details.get("account_name") or ""
-
         return {
             "status": "success",
             "provider": "paystack",
-            "account_name": account_name,
+            "account_name": details.get("account_name") or "",
             "recipient_code": rdata.get("recipient_code"),
             "mobile_number": payload.mobile_number,
             "network": network,
@@ -3803,6 +3840,96 @@ def save_agent_pricing(request: Request, payload: dict):
         raise
     except Exception as e:
         logger.error("SAVE AGENT PRICING ERROR: %s", str(e))
+        return {"status": "failed", "message": "Unable to save pricing"}
+
+
+# =========================
+# AGENT CHECKER PRICING
+# Lets an agent set their own resale price per checker type (WAEC/BECE).
+# Stored as a markup on top of CHECKER_AGENT_BASE_PRICE, same shape as the
+# data-bundle agent_prices table above — final_price = base + markup.
+# Markup must be >= 0: agents can only increase their price, never sell
+# below their own cost.
+# =========================
+CHECKER_TYPES = ("WAEC", "BECE")
+
+
+@app.get("/agent/checker-pricing/{agent_id}")
+@limiter.limit("30/minute")
+def get_agent_checker_pricing(request: Request, agent_id: int, _: int = Depends(require_agent)):
+    try:
+        rows_res = supabase.table("checker_agent_prices") \
+            .select("*") \
+            .eq("agent_id", agent_id) \
+            .execute()
+        rows = rows_res.data or []
+
+        markup_map = {}
+        for row in rows:
+            if not row:
+                continue
+            markup_map[row.get("checker_type", "").strip().upper()] = float(row.get("markup", 0) or 0)
+
+        result = []
+        for checker_type in CHECKER_TYPES:
+            markup = float(markup_map.get(checker_type, 0) or 0)
+            result.append({
+                "checker_type": checker_type,
+                "base_price":   CHECKER_AGENT_BASE_PRICE,
+                "markup":       markup,
+                "final_price":  round(CHECKER_AGENT_BASE_PRICE + markup, 2),
+            })
+
+        return {"status": "success", "prices": result}
+    except Exception as e:
+        logger.error("AGENT CHECKER PRICING ERROR: %s", str(e))
+        return {"status": "error", "prices": []}
+
+
+@app.post("/agent/checker-pricing/save")
+@limiter.limit("10/minute")
+def save_agent_checker_pricing(request: Request, payload: dict):
+    try:
+        agent_id = str(payload.get("agent_id", "")).strip()
+        prices   = payload.get("prices", [])
+
+        if not agent_id:
+            return {"status": "failed", "message": "agent_id required"}
+
+        token = request.headers.get("X-Agent-Token", "")
+        try:
+            agent_id_int = int(agent_id)
+        except ValueError:
+            return {"status": "failed", "message": "Invalid agent_id"}
+        if not token or not verify_agent_token(token, agent_id_int):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        rows = []
+        for item in prices:
+            checker_type = str(item.get("checker_type", "")).strip().upper()
+            if checker_type not in CHECKER_TYPES:
+                continue
+            try:
+                markup = float(item.get("markup", 0) or 0)
+            except:
+                markup = 0
+            # Agents can only mark UP from their base cost, never below it.
+            if markup < 0:
+                return {
+                    "status": "failed",
+                    "message": f"{checker_type} price can't be below the base price of GH₵ {CHECKER_AGENT_BASE_PRICE:.2f}",
+                }
+            rows.append({"agent_id": agent_id, "checker_type": checker_type, "markup": markup})
+
+        supabase.table("checker_agent_prices").delete().eq("agent_id", agent_id).execute()
+        if rows:
+            supabase.table("checker_agent_prices").insert(rows).execute()
+
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("SAVE AGENT CHECKER PRICING ERROR: %s", str(e))
         return {"status": "failed", "message": "Unable to save pricing"}
 
 
@@ -4236,11 +4363,27 @@ async def public_agent_store(request: Request, agent_id: int):
                 "final_price": round(base_price + markup, 2)
             })
 
+        checker_markups = supabase.table("checker_agent_prices").select("*").eq("agent_id", agent_id).execute()
+        checker_markup_map = {}
+        for m in (checker_markups.data or []):
+            checker_markup_map[str(m.get("checker_type", "")).strip().upper()] = float(m.get("markup", 0) or 0)
+
+        checkers = []
+        for checker_type in CHECKER_TYPES:
+            markup = float(checker_markup_map.get(checker_type, 0) or 0)
+            checkers.append({
+                "checker_type": checker_type,
+                "base_price":   CHECKER_AGENT_BASE_PRICE,
+                "markup":       markup,
+                "final_price":  round(CHECKER_AGENT_BASE_PRICE + markup, 2),
+            })
+
         return {
             "status":     "success",
             "agent_id":   agent_id,
             "agent_name": u.get("store_name") or u.get("username") or u.get("full_name") or "Agent",
-            "prices":     bundles
+            "prices":     bundles,
+            "checkers":   checkers
         }
     except Exception as e:
         logger.error("STORE ERROR: %s", str(e))
@@ -4370,6 +4513,95 @@ async def create_store_order(request: Request, payload: StoreOrderRequest):
         }
     except Exception as e:
         logger.error("STORE ORDER ERROR: %s", str(e))
+        return {"status": "error", "message": "Failed to create order"}
+
+
+@app.post("/store/order/checker")
+@limiter.limit("10/minute")
+async def create_store_checker_order(request: Request, payload: CheckerStoreOrderRequest):
+    try:
+        agent_id       = payload.agent_id
+        checker_type   = payload.checker_type
+        phone_number   = payload.phone_number
+        quantity       = payload.quantity
+        customer_email = str(payload.email or "customer@evoshub.store").strip()
+
+        agent = supabase.table("users") \
+            .select("id,role,agent_status,full_name,username") \
+            .eq("id", agent_id).limit(1).execute()
+        if not agent.data:
+            return {"status": "error", "message": "Store not found"}
+        user = agent.data[0]
+        if user.get("role") != "agent" or user.get("agent_status") != "approved":
+            return {"status": "error", "message": "Store unavailable"}
+
+        products = get_checker_products()
+        product = next((p for p in products if p.get("name", "").upper() == checker_type), None)
+        if not product:
+            return {"status": "error", "message": "Checker type not available"}
+        if not product.get("inStock"):
+            return {"status": "error", "message": f"{checker_type} checkers are currently out of stock"}
+
+        base_price = CHECKER_AGENT_BASE_PRICE
+
+        markup = supabase.table("checker_agent_prices").select("markup") \
+            .eq("agent_id", agent_id).eq("checker_type", checker_type).limit(1).execute()
+        markup_price = float(markup.data[0].get("markup", 0) or 0) if markup.data else 0.0
+        unit_agent_price = round(base_price + markup_price, 2)
+
+        total_base_price  = round(base_price * quantity, 2)
+        total_agent_price = round(unit_agent_price * quantity, 2)
+        total_profit       = round(total_agent_price - total_base_price, 2)
+
+        reference = f"STORE-CHK-{agent_id}-{uuid.uuid4().hex[:10].upper()}"
+
+        checker = supabase.table("checkers").insert({
+            "agent_id":     agent_id,
+            "guest_email":  customer_email,
+            "checker_type": checker_type,
+            "phone_number": phone_number,
+            "quantity":     quantity,
+            "price":        total_agent_price,
+            "paystack_ref": reference,
+            "evosdata_ref": reference,
+            "status":       "pending_payment",
+            "base_price":   total_base_price,
+            "agent_price":  total_agent_price,
+            "profit":       total_profit
+        }).execute()
+
+        if not checker.data:
+            return {"status": "error", "message": "Failed to create order"}
+
+        checker_id = checker.data[0]["id"]
+
+        pay = requests.post(
+            "https://api.paystack.co/transaction/initialize",
+            json={
+                "email":        customer_email,
+                "amount":       int(total_agent_price * 100),
+                "reference":    reference,
+                "callback_url": f"https://evosdata.xyz/store/{agent_id}",
+                "metadata":     {"checker_id": checker_id, "agent_id": agent_id, "checker_type": checker_type, "quantity": quantity}
+            },
+            headers={"Authorization": f"Bearer {PAYSTACK_SECRET}", "Content-Type": "application/json"},
+            timeout=30
+        )
+        pay_data = pay.json()
+
+        if not pay_data.get("status"):
+            supabase.table("checkers").delete().eq("id", checker_id).execute()
+            return {"status": "error", "message": "Payment initialization failed"}
+
+        return {
+            "status":      "created",
+            "checker_id":  checker_id,
+            "reference":   reference,
+            "pay_amount":  total_agent_price,
+            "payment_url": pay_data["data"]["authorization_url"]
+        }
+    except Exception as e:
+        logger.error("STORE CHECKER ORDER ERROR: %s", str(e))
         return {"status": "error", "message": "Failed to create order"}
 
 
