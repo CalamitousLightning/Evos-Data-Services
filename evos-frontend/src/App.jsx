@@ -102,6 +102,12 @@ export default function App() {
     const isAgentActive = user?.role === "agent" && user?.agent_status === "approved";
     const isAdmin       = user?.role === "admin";
 
+    // Customers on a public agent store link (/store/{agentId}) should never
+    // get bounced to the homepage or full site nav — that's how they end up
+    // leaving mid-checkout and losing their place. See logoWrap and the
+    // hamburger button below.
+    const isStorePage   = page === "store";
+
     // =========================
     // LOGOUT
     // =========================
@@ -211,7 +217,15 @@ export default function App() {
                 {/* ======= NAVBAR ======= */}
                 <nav style={navStyle}>
                     {/* LOGO + BRAND */}
-                    <div style={logoWrap} onClick={() => navigate("home")}>
+                    <div
+                        style={logoWrap}
+                        onClick={() => {
+                            // On a store page, going "home" would pull the customer
+                            // out of the agent's store. Just refresh in place instead.
+                            if (isStorePage) { window.location.reload(); return; }
+                            navigate("home");
+                        }}
+                    >
                         <img
                             src="/evosdata.png"
                             alt="EVOS Logo"
@@ -224,24 +238,28 @@ export default function App() {
                         </div>
                     </div>
 
-                    {/* HAMBURGER / CLOSE */}
-                    <button
-                        style={menuIconStyle}
-                        onClick={() => setMenuOpen(!menuOpen)}
-                        aria-label="Toggle menu"
-                    >
-                        <span style={burgerLine(menuOpen, 0)} />
-                        <span style={burgerLine(menuOpen, 1)} />
-                        <span style={burgerLine(menuOpen, 2)} />
-                    </button>
+                    {/* HAMBURGER / CLOSE — hidden on store pages so a customer
+                        can never open the full site nav and wander off */}
+                    {!isStorePage && (
+                        <button
+                            style={menuIconStyle}
+                            onClick={() => setMenuOpen(!menuOpen)}
+                            aria-label="Toggle menu"
+                        >
+                            <span style={burgerLine(menuOpen, 0)} />
+                            <span style={burgerLine(menuOpen, 1)} />
+                            <span style={burgerLine(menuOpen, 2)} />
+                        </button>
+                    )}
                 </nav>
 
                 {/* ======= SIDEBAR OVERLAY (dim background) ======= */}
-                {menuOpen && (
+                {menuOpen && !isStorePage && (
                     <div style={sidebarOverlay} onClick={() => setMenuOpen(false)} />
                 )}
 
                 {/* ======= SIDEBAR ======= */}
+                {!isStorePage && (
                 <div style={sidebar(menuOpen)}>
 
                     {/* Sidebar header */}
@@ -398,6 +416,7 @@ export default function App() {
                         </div>
                     </div>
                 </div>
+                )}
 
                 {/* ======= PAGE CONTENT ======= */}
                 <main style={contentStyle}>

@@ -754,6 +754,12 @@ export default function StorePage({ setPage }) {
 
       {/* HEADER */}
       <div style={styles.header}>
+        <img
+          src={store.logo || "/evosdata.png"}
+          alt={`${store.agent_name} logo`}
+          style={styles.storeLogo}
+          onError={(e) => { e.target.src = "/evosdata.png"; }}
+        />
         <div style={styles.headerBadge}>🏪 Agent Store</div>
         <h1 style={styles.title}>{store.agent_name}'s Store</h1>
         <p style={styles.sub}>
@@ -1026,6 +1032,11 @@ const styles = {
   container: { padding: "28px 18px 80px", minHeight: "100vh", fontFamily: "ui-sans-serif, system-ui, Arial", color: "#e5e7eb" },
   centerWrap: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh", textAlign: "center", padding: 24, color: "#e5e7eb" },
   header: { textAlign: "center", marginBottom: 24 },
+  storeLogo: {
+    width: 72, height: 72, objectFit: "contain", borderRadius: 18,
+    background: "rgba(15,23,42,0.9)", border: "1px solid rgba(255,255,255,0.08)",
+    padding: 8, marginBottom: 10,
+  },
   headerBadge: { display: "inline-block", padding: "5px 18px", borderRadius: 50, background: "rgba(56,189,248,0.15)", border: "1px solid rgba(56,189,248,0.3)", color: "#38bdf8", fontSize: 12, fontWeight: 800, marginBottom: 10, letterSpacing: "0.5px" },
   title: { fontSize: "clamp(22px, 5vw, 30px)", fontWeight: 900, color: "#f1f5f9", margin: "0 0 6px" },
   sub: { fontSize: 13, color: "#64748b", margin: 0, fontWeight: 600 },

@@ -28,6 +28,11 @@ export default function AgentDashboard({ user, setPage }) {
     const [storeNameSaving, setStoreNameSaving] = useState(false);
     const [storeNameMsg, setStoreNameMsg]   = useState("");
 
+    const [storeLogo, setStoreLogo]           = useState("");   // saved (base64 data URI or "")
+    const [storeLogoPreview, setStoreLogoPreview] = useState(""); // picked, not yet saved
+    const [storeLogoSaving, setStoreLogoSaving]   = useState(false);
+    const [storeLogoMsg, setStoreLogoMsg]         = useState("");
+
     // FIX: read token from user prop first (available immediately after login),
     // fall back to storage for page refreshes where user is rehydrated from storage
     const getToken = () =>
@@ -62,14 +67,15 @@ export default function AgentDashboard({ user, setPage }) {
                 setLoading(true);
                 setError("");
                 const headers = agentHeaders();
-                const [dashRes, txRes, nameRes] = await Promise.all([
+                const [dashRes, txRes, nameRes, logoRes] = await Promise.all([
                     smartFetch(`/agent/dashboard/${user.id}`, { headers }),
                     smartFetch(`/agent/transactions/${user.id}`, { headers }),
                     smartFetch(`/agent/store-name/${user.id}`, { headers }),
+                    smartFetch(`/agent/store-logo/${user.id}`, { headers }),
                 ]);
 
                 // FIX: if any request is 403, token is missing — send back to login
-                if (dashRes.status === 403 || txRes.status === 403 || nameRes.status === 403) {
+                if (dashRes.status === 403 || txRes.status === 403 || nameRes.status === 403 || logoRes.status === 403) {
                     sessionStorage.removeItem("agentToken");
                     localStorage.removeItem("agentToken");
                     setPage("login");
@@ -79,7 +85,10 @@ export default function AgentDashboard({ user, setPage }) {
                 const data     = await dashRes.json();
                 const txData   = await txRes.json();
                 const nameData = await nameRes.json();
+                const logoData = await logoRes.json();
                 const currentName = nameData.store_name || "";
+                setStoreLogo(logoData.logo || "");
+                setStoreLogoPreview(logoData.logo || "");
 
                 setStats({
                     wallet_balance: Number(data.wallet_balance  || 0),
@@ -132,6 +141,90 @@ export default function AgentDashboard({ user, setPage }) {
         finally {
             setStoreNameSaving(false);
             setTimeout(() => setStoreNameMsg(""), 3000);
+        }
+    };
+
+    // Resizes/compresses whatever the agent picks down to a small square JPEG
+    // before it ever touches the network — keeps uploads fast and the saved
+    // payload well under the server's size cap regardless of the source file.
+    const MAX_LOGO_DIM = 320;
+    const handleLogoFile = (e) => {
+        const file = e.target.files?.[0];
+        e.target.value = ""; // allow re-selecting the same file later
+        if (!file) return;
+
+        if (!file.type.startsWith("image/")) {
+            setStoreLogoMsg("Please choose an image file");
+            setTimeout(() => setStoreLogoMsg(""), 3000);
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = () => {
+            const img = new Image();
+            img.onload = () => {
+                const size = Math.min(img.width, img.height); // center-crop to square
+                const canvas = document.createElement("canvas");
+                canvas.width = MAX_LOGO_DIM;
+                canvas.height = MAX_LOGO_DIM;
+                const ctx = canvas.getContext("2d");
+                const sx = (img.width - size) / 2;
+                const sy = (img.height - size) / 2;
+                ctx.drawImage(img, sx, sy, size, size, 0, 0, MAX_LOGO_DIM, MAX_LOGO_DIM);
+                const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+                setStoreLogoPreview(dataUrl);
+                setStoreLogoMsg("");
+            };
+            img.onerror = () => setStoreLogoMsg("Couldn't read that image — try another file");
+            img.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+    };
+
+    const saveStoreLogo = async () => {
+        setStoreLogoMsg("");
+        setStoreLogoSaving(true);
+        try {
+            const res = await smartFetch(`/agent/store-logo`, {
+                method: "POST",
+                headers: agentHeaders(),
+                body: JSON.stringify({ agent_id: user.id, logo_base64: storeLogoPreview }),
+            });
+            const data = await res.json();
+            if (data.status === "success") {
+                setStoreLogo(data.logo || "");
+                setStoreLogoMsg("✅ Logo saved!");
+            } else {
+                setStoreLogoMsg(data.error || "Failed to save logo");
+            }
+        } catch { setStoreLogoMsg("Network error"); }
+        finally {
+            setStoreLogoSaving(false);
+            setTimeout(() => setStoreLogoMsg(""), 3000);
+        }
+    };
+
+    const removeStoreLogo = async () => {
+        setStoreLogoMsg("");
+        setStoreLogoSaving(true);
+        try {
+            const res = await smartFetch(`/agent/store-logo`, {
+                method: "POST",
+                headers: agentHeaders(),
+                body: JSON.stringify({ agent_id: user.id, logo_base64: "" }),
+            });
+            const data = await res.json();
+            if (data.status === "success") {
+                setStoreLogo("");
+                setStoreLogoPreview("");
+                setStoreLogoMsg("Removed — back to the default EVOS logo");
+            } else {
+                setStoreLogoMsg(data.error || "Failed to remove logo");
+            }
+        } catch { setStoreLogoMsg("Network error"); }
+        finally {
+            setStoreLogoSaving(false);
+            setTimeout(() => setStoreLogoMsg(""), 3000);
         }
     };
 
@@ -256,6 +349,68 @@ export default function AgentDashboard({ user, setPage }) {
                             </button>
                         </div>
 
+                        <div style={styles.storeNameCard}>
+                            <div style={styles.storeNameHeader}>
+                                <span style={styles.storeNameTitle}>🖼️ Store Logo</span>
+                            </div>
+                            <p style={styles.storeNameHint}>
+                                Shown at the top of your store page. If you don't set one,
+                                customers see the default EVOS logo instead.
+                            </p>
+
+                            <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 12 }}>
+                                <img
+                                    src={storeLogoPreview || "/evosdata.png"}
+                                    alt="Store logo preview"
+                                    style={{
+                                        width: 64, height: 64, objectFit: "cover", borderRadius: 14,
+                                        border: "1px solid rgba(255,255,255,0.08)", background: "rgba(2,6,23,0.75)",
+                                    }}
+                                />
+                                <label style={styles.logoChooseBtn}>
+                                    Choose Image
+                                    <input type="file" accept="image/*" onChange={handleLogoFile} style={{ display: "none" }} />
+                                </label>
+                            </div>
+
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                                <span style={{ fontSize: 11, color: "#475569" }}>Square images work best</span>
+                                {storeLogoMsg && (
+                                    <span style={{ fontSize: 12, fontWeight: 700, color: storeLogoMsg.startsWith("✅") ? "#22c55e" : storeLogoMsg.startsWith("Removed") ? "#94a3b8" : "#f87171" }}>
+                                        {storeLogoMsg}
+                                    </span>
+                                )}
+                            </div>
+
+                            <div style={{ display: "flex", gap: 8 }}>
+                                <button
+                                    onClick={saveStoreLogo}
+                                    disabled={storeLogoSaving || !storeLogoPreview || storeLogoPreview === storeLogo}
+                                    style={{
+                                        ...styles.storeNameBtn,
+                                        marginTop: 0,
+                                        opacity: storeLogoSaving || !storeLogoPreview || storeLogoPreview === storeLogo ? 0.5 : 1,
+                                        cursor:  storeLogoSaving || !storeLogoPreview || storeLogoPreview === storeLogo ? "not-allowed" : "pointer",
+                                    }}
+                                >
+                                    {storeLogoSaving ? "Saving..." : "Save Logo"}
+                                </button>
+                                {storeLogo && (
+                                    <button
+                                        onClick={removeStoreLogo}
+                                        disabled={storeLogoSaving}
+                                        style={{
+                                            marginTop: 0, padding: "12px", borderRadius: 12, border: "1px solid rgba(239,68,68,0.3)",
+                                            background: "rgba(239,68,68,0.1)", color: "#f87171", fontWeight: 800, fontSize: 13,
+                                            opacity: storeLogoSaving ? 0.5 : 1, cursor: storeLogoSaving ? "not-allowed" : "pointer",
+                                        }}
+                                    >
+                                        Remove
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+
                         <div style={styles.actionsSection}>
                             <h3 style={styles.sectionTitle}>Quick Actions</h3>
                             <div style={styles.actionsGrid}>
@@ -360,6 +515,7 @@ const styles = {
     storeNameHint:   { fontSize: 12, color: "#475569", margin: "0 0 12px", lineHeight: 1.6 },
     storeNameInput:  { width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(2,6,23,0.75)", color: "#e5e7eb", fontSize: 14, marginBottom: 8, boxSizing: "border-box", outline: "none" },
     storeNameBtn:    { marginTop: 10, width: "100%", padding: "12px", borderRadius: 12, border: "none", background: "linear-gradient(135deg, #38bdf8, #0ea5e9)", color: "#000", fontWeight: 900, fontSize: 14 },
+    logoChooseBtn:   { padding: "10px 16px", borderRadius: 12, border: "1px solid rgba(56,189,248,0.3)", background: "rgba(56,189,248,0.1)", color: "#38bdf8", fontWeight: 800, fontSize: 13, cursor: "pointer" },
     actionsSection:  { marginBottom: 24 },
     sectionTitle:    { fontSize: 16, fontWeight: 900, color: "#f1f5f9", margin: "0 0 14px" },
     actionsGrid:     { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
