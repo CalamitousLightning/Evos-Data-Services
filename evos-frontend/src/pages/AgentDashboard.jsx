@@ -2,37 +2,13 @@ import { useEffect, useState } from "react";
 
 import { smartFetch } from "../config";
 
-const slugify = (name) =>
-    name.trim().toLowerCase()
-        .replace(/[^a-z0-9\s-]/g, "")
-        .replace(/\s+/g, "-")
-        .replace(/-+/g, "-")
-        .replace(/^-|-$/g, "");
-
-const buildStoreLink = (agentId, storeName) => {
-    const base = `${window.location.origin}/store/${agentId}`;
-    const slug = storeName ? slugify(storeName) : "";
-    return slug ? `${base}/${slug}` : base;
-};
-
 export default function AgentDashboard({ user, setPage }) {
     const [loading, setLoading]             = useState(true);
     const [error, setError]                 = useState("");
-    const [copied, setCopied]               = useState(false);
     const [stats, setStats]                 = useState({
         wallet_balance: 0, total_sales: 0, total_profit: 0,
-        total_orders: 0, store_link: "", transactions: [],
+        total_orders: 0, transactions: [],
     });
-    const [storeName, setStoreName]         = useState("");
-    const [storeNameInput, setStoreNameInput] = useState("");
-    const [storeNameSaving, setStoreNameSaving] = useState(false);
-    const [storeNameMsg, setStoreNameMsg]   = useState("");
-
-    const [storeLogo, setStoreLogo]           = useState("");   // saved (base64 data URI or "")
-    const [storeLogoPreview, setStoreLogoPreview] = useState(""); // picked, not yet saved
-    const [storeLogoSaving, setStoreLogoSaving]   = useState(false);
-    const [storeLogoMsg, setStoreLogoMsg]         = useState("");
-
     // FIX: read token from user prop first (available immediately after login),
     // fall back to storage for page refreshes where user is rehydrated from storage
     const getToken = () =>
@@ -67,39 +43,29 @@ export default function AgentDashboard({ user, setPage }) {
                 setLoading(true);
                 setError("");
                 const headers = agentHeaders();
-                const [dashRes, txRes, nameRes, logoRes] = await Promise.all([
+                const [dashRes, txRes] = await Promise.all([
                     smartFetch(`/agent/dashboard/${user.id}`, { headers }),
                     smartFetch(`/agent/transactions/${user.id}`, { headers }),
-                    smartFetch(`/agent/store-name/${user.id}`, { headers }),
-                    smartFetch(`/agent/store-logo/${user.id}`, { headers }),
                 ]);
 
                 // FIX: if any request is 403, token is missing — send back to login
-                if (dashRes.status === 403 || txRes.status === 403 || nameRes.status === 403 || logoRes.status === 403) {
+                if (dashRes.status === 403 || txRes.status === 403) {
                     sessionStorage.removeItem("agentToken");
                     localStorage.removeItem("agentToken");
                     setPage("login");
                     return;
                 }
 
-                const data     = await dashRes.json();
-                const txData   = await txRes.json();
-                const nameData = await nameRes.json();
-                const logoData = await logoRes.json();
-                const currentName = nameData.store_name || "";
-                setStoreLogo(logoData.logo || "");
-                setStoreLogoPreview(logoData.logo || "");
+                const data   = await dashRes.json();
+                const txData = await txRes.json();
 
                 setStats({
                     wallet_balance: Number(data.wallet_balance  || 0),
                     total_sales:    Number(data.total_sales     || 0),
                     total_profit:   Number(data.total_profit    || 0),
                     total_orders:   Number(data.total_orders    || 0),
-                    store_link:     buildStoreLink(user.id, currentName),
                     transactions:   txData.transactions || [],
                 });
-                setStoreName(currentName);
-                setStoreNameInput(currentName);
             } catch (err) {
                 console.log(err);
                 setError("Failed to load dashboard");
@@ -110,123 +76,6 @@ export default function AgentDashboard({ user, setPage }) {
 
         loadDashboard();
     }, [user]);
-
-    const copyLink = async () => {
-        try {
-            await navigator.clipboard.writeText(stats.store_link);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-        } catch { alert("Copy failed"); }
-    };
-
-    const saveStoreName = async () => {
-        setStoreNameMsg("");
-        setStoreNameSaving(true);
-        try {
-            const res = await smartFetch(`/agent/store-name`, {
-                method: "POST",
-                headers: agentHeaders(),
-                body: JSON.stringify({ agent_id: user.id, store_name: storeNameInput.trim() }),
-            });
-            const data = await res.json();
-            if (data.status === "success") {
-                const newName = storeNameInput.trim();
-                setStoreName(newName);
-                setStats((prev) => ({ ...prev, store_link: buildStoreLink(user.id, newName) }));
-                setStoreNameMsg("✅ Store name saved!");
-            } else {
-                setStoreNameMsg(data.error || "Failed to save");
-            }
-        } catch { setStoreNameMsg("Network error"); }
-        finally {
-            setStoreNameSaving(false);
-            setTimeout(() => setStoreNameMsg(""), 3000);
-        }
-    };
-
-    // Resizes/compresses whatever the agent picks down to a small square JPEG
-    // before it ever touches the network — keeps uploads fast and the saved
-    // payload well under the server's size cap regardless of the source file.
-    const MAX_LOGO_DIM = 320;
-    const handleLogoFile = (e) => {
-        const file = e.target.files?.[0];
-        e.target.value = ""; // allow re-selecting the same file later
-        if (!file) return;
-
-        if (!file.type.startsWith("image/")) {
-            setStoreLogoMsg("Please choose an image file");
-            setTimeout(() => setStoreLogoMsg(""), 3000);
-            return;
-        }
-
-        const reader = new FileReader();
-        reader.onload = () => {
-            const img = new Image();
-            img.onload = () => {
-                const size = Math.min(img.width, img.height); // center-crop to square
-                const canvas = document.createElement("canvas");
-                canvas.width = MAX_LOGO_DIM;
-                canvas.height = MAX_LOGO_DIM;
-                const ctx = canvas.getContext("2d");
-                const sx = (img.width - size) / 2;
-                const sy = (img.height - size) / 2;
-                ctx.drawImage(img, sx, sy, size, size, 0, 0, MAX_LOGO_DIM, MAX_LOGO_DIM);
-                const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-                setStoreLogoPreview(dataUrl);
-                setStoreLogoMsg("");
-            };
-            img.onerror = () => setStoreLogoMsg("Couldn't read that image — try another file");
-            img.src = reader.result;
-        };
-        reader.readAsDataURL(file);
-    };
-
-    const saveStoreLogo = async () => {
-        setStoreLogoMsg("");
-        setStoreLogoSaving(true);
-        try {
-            const res = await smartFetch(`/agent/store-logo`, {
-                method: "POST",
-                headers: agentHeaders(),
-                body: JSON.stringify({ agent_id: user.id, logo_base64: storeLogoPreview }),
-            });
-            const data = await res.json();
-            if (data.status === "success") {
-                setStoreLogo(data.logo || "");
-                setStoreLogoMsg("✅ Logo saved!");
-            } else {
-                setStoreLogoMsg(data.error || "Failed to save logo");
-            }
-        } catch { setStoreLogoMsg("Network error"); }
-        finally {
-            setStoreLogoSaving(false);
-            setTimeout(() => setStoreLogoMsg(""), 3000);
-        }
-    };
-
-    const removeStoreLogo = async () => {
-        setStoreLogoMsg("");
-        setStoreLogoSaving(true);
-        try {
-            const res = await smartFetch(`/agent/store-logo`, {
-                method: "POST",
-                headers: agentHeaders(),
-                body: JSON.stringify({ agent_id: user.id, logo_base64: "" }),
-            });
-            const data = await res.json();
-            if (data.status === "success") {
-                setStoreLogo("");
-                setStoreLogoPreview("");
-                setStoreLogoMsg("Removed — back to the default EVOS logo");
-            } else {
-                setStoreLogoMsg(data.error || "Failed to remove logo");
-            }
-        } catch { setStoreLogoMsg("Network error"); }
-        finally {
-            setStoreLogoSaving(false);
-            setTimeout(() => setStoreLogoMsg(""), 3000);
-        }
-    };
 
     const logout = () => {
         localStorage.clear();
@@ -293,128 +142,11 @@ export default function AgentDashboard({ user, setPage }) {
                             ))}
                         </div>
 
-                        <div style={styles.storeLinkCard}>
-                            <div style={styles.storeLinkHeader}>
-                                <span style={styles.storeLinkTitle}>🏪 Your Store Link</span>
-                                <span style={styles.storeLinkBadge}>Live</span>
-                            </div>
-                            <div style={styles.storeLinkText}>{stats.store_link}</div>
-                            <div style={styles.storeLinkBtns}>
-                                <button style={styles.copyBtn} onClick={copyLink}>{copied ? "✅ Copied!" : "📋 Copy Link"}</button>
-                                <button style={styles.visitBtn} onClick={() => window.open(stats.store_link, "_blank")}>🔗 Visit Store</button>
-                            </div>
-                        </div>
-
-                        <div style={styles.storeNameCard}>
-                            <div style={styles.storeNameHeader}>
-                                <span style={styles.storeNameTitle}>✏️ Store Display Name</span>
-                                {storeName && (
-                                    <span style={styles.storeNameCurrent}>
-                                        Current: <strong style={{ color: "#38bdf8" }}>{storeName}</strong>
-                                    </span>
-                                )}
-                            </div>
-                            <p style={styles.storeNameHint}>
-                                This name appears on your store page and in your store link. e.g.{" "}
-                                <span style={{ color: "#38bdf8", fontFamily: "monospace", fontSize: 11 }}>
-                                    /store/{user?.id}/{storeName ? slugify(storeName) : "your-store-name"}
-                                </span>
-                            </p>
-                            <input
-                                type="text"
-                                placeholder={`e.g. ${user?.username || "My Data Store"}`}
-                                value={storeNameInput}
-                                maxLength={40}
-                                onChange={(e) => setStoreNameInput(e.target.value)}
-                                style={styles.storeNameInput}
-                            />
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                <span style={{ fontSize: 11, color: "#475569" }}>{storeNameInput.length}/40 characters</span>
-                                {storeNameMsg && (
-                                    <span style={{ fontSize: 12, fontWeight: 700, color: storeNameMsg.startsWith("✅") ? "#22c55e" : "#f87171" }}>
-                                        {storeNameMsg}
-                                    </span>
-                                )}
-                            </div>
-                            <button
-                                onClick={saveStoreName}
-                                disabled={storeNameSaving || storeNameInput.trim() === storeName}
-                                style={{
-                                    ...styles.storeNameBtn,
-                                    opacity: storeNameSaving || storeNameInput.trim() === storeName ? 0.5 : 1,
-                                    cursor:  storeNameSaving || storeNameInput.trim() === storeName ? "not-allowed" : "pointer",
-                                }}
-                            >
-                                {storeNameSaving ? "Saving..." : "Save Store Name"}
-                            </button>
-                        </div>
-
-                        <div style={styles.storeNameCard}>
-                            <div style={styles.storeNameHeader}>
-                                <span style={styles.storeNameTitle}>🖼️ Store Logo</span>
-                            </div>
-                            <p style={styles.storeNameHint}>
-                                Shown at the top of your store page. If you don't set one,
-                                customers see the default EVOS logo instead.
-                            </p>
-
-                            <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 12 }}>
-                                <img
-                                    src={storeLogoPreview || "/evosdata.png"}
-                                    alt="Store logo preview"
-                                    style={{
-                                        width: 64, height: 64, objectFit: "cover", borderRadius: 14,
-                                        border: "1px solid rgba(255,255,255,0.08)", background: "rgba(2,6,23,0.75)",
-                                    }}
-                                />
-                                <label style={styles.logoChooseBtn}>
-                                    Choose Image
-                                    <input type="file" accept="image/*" onChange={handleLogoFile} style={{ display: "none" }} />
-                                </label>
-                            </div>
-
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                                <span style={{ fontSize: 11, color: "#475569" }}>Square images work best</span>
-                                {storeLogoMsg && (
-                                    <span style={{ fontSize: 12, fontWeight: 700, color: storeLogoMsg.startsWith("✅") ? "#22c55e" : storeLogoMsg.startsWith("Removed") ? "#94a3b8" : "#f87171" }}>
-                                        {storeLogoMsg}
-                                    </span>
-                                )}
-                            </div>
-
-                            <div style={{ display: "flex", gap: 8 }}>
-                                <button
-                                    onClick={saveStoreLogo}
-                                    disabled={storeLogoSaving || !storeLogoPreview || storeLogoPreview === storeLogo}
-                                    style={{
-                                        ...styles.storeNameBtn,
-                                        marginTop: 0,
-                                        opacity: storeLogoSaving || !storeLogoPreview || storeLogoPreview === storeLogo ? 0.5 : 1,
-                                        cursor:  storeLogoSaving || !storeLogoPreview || storeLogoPreview === storeLogo ? "not-allowed" : "pointer",
-                                    }}
-                                >
-                                    {storeLogoSaving ? "Saving..." : "Save Logo"}
-                                </button>
-                                {storeLogo && (
-                                    <button
-                                        onClick={removeStoreLogo}
-                                        disabled={storeLogoSaving}
-                                        style={{
-                                            marginTop: 0, padding: "12px", borderRadius: 12, border: "1px solid rgba(239,68,68,0.3)",
-                                            background: "rgba(239,68,68,0.1)", color: "#f87171", fontWeight: 800, fontSize: 13,
-                                            opacity: storeLogoSaving ? 0.5 : 1, cursor: storeLogoSaving ? "not-allowed" : "pointer",
-                                        }}
-                                    >
-                                        Remove
-                                    </button>
-                                )}
-                            </div>
-                        </div>
-
                         <div style={styles.actionsSection}>
                             <h3 style={styles.sectionTitle}>Quick Actions</h3>
                             <div style={styles.actionsGrid}>
                                 {[
+                                    { icon: "🎨", label: "Store Settings",  desc: "Link, name & logo",        page: "agent-store-settings", color: "#38bdf8", bg: "rgba(56,189,248,0.1)", border: "rgba(56,189,248,0.25)" },
                                     { icon: "📡", label: "Buy Data",        desc: "Purchase at base price",   page: "agent-buy-data", color: "#a78bfa", bg: "rgba(167,139,250,0.1)", border: "rgba(167,139,250,0.25)" },
                                     { icon: "💰", label: "Manage Pricing",  desc: "Set your bundle markups",  page: "agent-pricing",  color: "#f59e0b", bg: "rgba(245,158,11,0.1)",  border: "rgba(245,158,11,0.25)"  },
                                     { icon: "💳", label: "Withdraw",        desc: "Send to your MoMo",        page: "agent-withdraw", color: "#22c55e", bg: "rgba(34,197,94,0.1)",   border: "rgba(34,197,94,0.25)"   },
@@ -500,22 +232,6 @@ const styles = {
     statIcon:        { fontSize: 24, marginBottom: 8 },
     statVal:         { fontWeight: 900, fontSize: 18, marginBottom: 4 },
     statLabel:       { fontSize: 12, color: "#64748b", fontWeight: 600 },
-    storeLinkCard:   { background: "rgba(15,23,42,0.9)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 18, padding: "18px 16px", marginBottom: 16, backdropFilter: "blur(20px)" },
-    storeLinkHeader: { display: "flex", alignItems: "center", gap: 10, marginBottom: 10 },
-    storeLinkTitle:  { fontWeight: 800, fontSize: 14, color: "#f1f5f9" },
-    storeLinkBadge:  { fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 50, background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "#22c55e", textTransform: "uppercase" },
-    storeLinkText:   { fontSize: 13, color: "#64748b", wordBreak: "break-all", lineHeight: 1.5, marginBottom: 14, background: "rgba(2,6,23,0.5)", padding: "10px 12px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.05)" },
-    storeLinkBtns:   { display: "flex", gap: 10 },
-    copyBtn:         { flex: 1, padding: "11px", borderRadius: 12, border: "none", background: "linear-gradient(135deg, #38bdf8, #0ea5e9)", color: "#000", fontWeight: 900, fontSize: 13, cursor: "pointer" },
-    visitBtn:        { flex: 1, padding: "11px", borderRadius: 12, border: "1px solid rgba(56,189,248,0.3)", background: "rgba(56,189,248,0.08)", color: "#38bdf8", fontWeight: 800, fontSize: 13, cursor: "pointer" },
-    storeNameCard:   { background: "rgba(15,23,42,0.9)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 18, padding: "18px 16px", marginBottom: 16, backdropFilter: "blur(20px)" },
-    storeNameHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 },
-    storeNameTitle:  { fontWeight: 800, fontSize: 14, color: "#f1f5f9" },
-    storeNameCurrent:{ fontSize: 12, color: "#64748b" },
-    storeNameHint:   { fontSize: 12, color: "#475569", margin: "0 0 12px", lineHeight: 1.6 },
-    storeNameInput:  { width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(2,6,23,0.75)", color: "#e5e7eb", fontSize: 14, marginBottom: 8, boxSizing: "border-box", outline: "none" },
-    storeNameBtn:    { marginTop: 10, width: "100%", padding: "12px", borderRadius: 12, border: "none", background: "linear-gradient(135deg, #38bdf8, #0ea5e9)", color: "#000", fontWeight: 900, fontSize: 14 },
-    logoChooseBtn:   { padding: "10px 16px", borderRadius: 12, border: "1px solid rgba(56,189,248,0.3)", background: "rgba(56,189,248,0.1)", color: "#38bdf8", fontWeight: 800, fontSize: 13, cursor: "pointer" },
     actionsSection:  { marginBottom: 24 },
     sectionTitle:    { fontSize: 16, fontWeight: 900, color: "#f1f5f9", margin: "0 0 14px" },
     actionsGrid:     { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },

@@ -7,6 +7,7 @@ import Login              from "./pages/Login";
 import Register           from "./pages/Register";
 import Success            from "./pages/Success";
 import AgentDashboard     from "./pages/AgentDashboard";
+import AgentStoreSettings from "./pages/AgentStoreSettings";
 import AgentPricing       from "./pages/AgentPricing";
 import AgentStore         from "./pages/AgentStore";
 import AgentWithdraw      from "./pages/AgentWithdraw";
@@ -83,6 +84,7 @@ export default function App() {
             "/register":           "register",
             "/success":            "success",
             "/agent-dashboard":    "agent-dashboard",
+            "/agent-store-settings": "agent-store-settings",
             "/agent-pricing":      "agent-pricing",
             "/agent-store":        "agent-store",
             "/agent-withdraw":     "agent-withdraw",
@@ -136,6 +138,7 @@ export default function App() {
             register:           "/register",
             success:            "/success",
             "agent-dashboard":  "/agent-dashboard",
+            "agent-store-settings": "/agent-store-settings",
             "agent-pricing":    "/agent-pricing",
             "agent-store":      "/agent-store",
             "agent-withdraw":   "/agent-withdraw",
@@ -175,6 +178,8 @@ export default function App() {
                 return <Dashboard user={user} setPage={navigate} theme={theme} />;
             case "agent-dashboard":
                 return <AgentDashboard user={user} setPage={navigate} theme={theme} />;
+            case "agent-store-settings":
+                return <AgentStoreSettings user={user} setPage={navigate} />;
             case "agent-pricing":
                 return <AgentPricing user={user} setPage={navigate} />;
             case "agent-store":
@@ -337,6 +342,13 @@ export default function App() {
                                 </button>
                                 {isAgentActive && (
                                     <>
+                                        <button
+                                            style={sidebarBtn(page === "agent-store-settings")}
+                                            onClick={() => navigate("agent-store-settings")}
+                                        >
+                                            <span style={sidebarBtnIcon}>🎨</span>
+                                            Store Settings
+                                        </button>
                                         <button
                                             style={sidebarBtn(page === "agent-buy-data")}
                                             onClick={() => navigate("agent-buy-data")}
