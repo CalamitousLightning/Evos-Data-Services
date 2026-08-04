@@ -4415,7 +4415,7 @@ async def agent_buy_data(request: Request, payload: AgentBuyDataRequest):
 async def public_agent_store(request: Request, agent_id: int):
     try:
         user = supabase.table("users") \
-            .select("id,username,full_name,store_name,role,agent_status") \
+            .select("id,username,full_name,store_name,store_logo,role,agent_status") \
             .eq("id", agent_id).limit(1).execute()
         if not user.data:
             return {"status": "error", "message": "Store not found"}
@@ -4465,6 +4465,9 @@ async def public_agent_store(request: Request, agent_id: int):
             "status":     "success",
             "agent_id":   agent_id,
             "agent_name": u.get("store_name") or u.get("username") or u.get("full_name") or "Agent",
+            # Base64 data URI of the agent's uploaded logo, or None if they
+            # never set one — frontend falls back to the default EVOS logo.
+            "logo":       u.get("store_logo") or None,
             "prices":     bundles,
             "checkers":   checkers
         }
@@ -4514,6 +4517,77 @@ async def get_store_name(request: Request, agent_id: int, _: int = Depends(requi
     except Exception as e:
         logger.error("GET STORE NAME ERROR: %s", str(e))
         return {"error": "Failed to fetch store name"}
+
+
+# =========================
+# AGENT STORE LOGO
+# Stored directly as a base64 data URI in users.store_logo — no separate
+# object storage/bucket needed. The frontend compresses/resizes to a small
+# square (see AgentDashboard.jsx) before upload, and STORE_LOGO_MAX_BYTES
+# below is a hard server-side backstop against an oversized payload landing
+# in the DB regardless of what the client claims to have done.
+# Empty string clears the logo, so the store page falls back to the
+# default EVOS logo — same pattern as clearing store_name.
+#
+#      Requires this column on the "users" table (run once in Supabase):
+#        alter table users add column if not exists store_logo text;
+# =========================
+STORE_LOGO_MAX_BYTES = 200_000  # ~200KB decoded; keeps the users table lean
+
+@app.post("/agent/store-logo")
+@limiter.limit("10/minute")
+async def save_store_logo(request: Request, payload: dict):
+    try:
+        agent_id    = payload.get("agent_id")
+        logo_base64 = str(payload.get("logo_base64", "")).strip()
+
+        if not agent_id:
+            return {"error": "agent_id required"}
+
+        token = request.headers.get("X-Agent-Token", "")
+        try:
+            agent_id_int = int(agent_id)
+        except (ValueError, TypeError):
+            return {"error": "Invalid agent_id"}
+        if not token or not verify_agent_token(token, agent_id_int):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        # Empty payload = agent removing their custom logo, reverting to default.
+        if not logo_base64:
+            supabase.table("users").update({"store_logo": None}).eq("id", agent_id).execute()
+            return {"status": "success", "logo": None}
+
+        if not logo_base64.startswith("data:image/"):
+            return {"error": "Logo must be an image file"}
+
+        # Rough decoded-size check on the base64 payload itself, cheap and
+        # good enough as a backstop (base64 inflates size by ~4/3).
+        approx_decoded_bytes = int(len(logo_base64) * 3 / 4)
+        if approx_decoded_bytes > STORE_LOGO_MAX_BYTES:
+            return {"error": "Logo image is too large. Please use a smaller image."}
+
+        supabase.table("users").update({"store_logo": logo_base64}).eq("id", agent_id).execute()
+        return {"status": "success", "logo": logo_base64}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("SAVE STORE LOGO ERROR: %s", str(e))
+        return {"error": "Failed to save store logo"}
+
+
+@app.get("/agent/store-logo/{agent_id}")
+@limiter.limit("30/minute")
+async def get_store_logo(request: Request, agent_id: int, _: int = Depends(require_agent)):
+    try:
+        res = supabase.table("users").select("store_logo").eq("id", agent_id).limit(1).execute()
+        if not res.data:
+            return {"error": "Agent not found"}
+        return {"logo": res.data[0].get("store_logo") or None}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("GET STORE LOGO ERROR: %s", str(e))
+        return {"error": "Failed to fetch store logo"}
 
 
 # =========================
