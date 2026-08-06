@@ -9,7 +9,6 @@ import Success            from "./pages/Success";
 import AgentDashboard     from "./pages/AgentDashboard";
 import AgentStoreSettings from "./pages/AgentStoreSettings";
 import AgentPricing       from "./pages/AgentPricing";
-import AgentStore         from "./pages/AgentStore";
 import AgentWithdraw      from "./pages/AgentWithdraw";
 import AdminWithdrawals   from "./pages/AdminWithdrawals";
 import StorePage          from "./pages/StorePage";
@@ -85,8 +84,7 @@ export default function App() {
             "/success":            "success",
             "/agent-dashboard":    "agent-dashboard",
             "/agent-store-settings": "agent-store-settings",
-            "/agent-pricing":      "agent-pricing",
-            "/agent-store":        "agent-store",
+            "/agent-pricing":      "agent-pricing",           
             "/agent-withdraw":     "agent-withdraw",
             "/agent-buy-data":     "agent-buy-data",
             "/agent-buy-checker":  "agent-buy-checker",
@@ -140,7 +138,6 @@ export default function App() {
             "agent-dashboard":  "/agent-dashboard",
             "agent-store-settings": "/agent-store-settings",
             "agent-pricing":    "/agent-pricing",
-            "agent-store":      "/agent-store",
             "agent-withdraw":   "/agent-withdraw",
             "agent-buy-data":   "/agent-buy-data",
             "agent-buy-checker":      "/agent-buy-checker",
@@ -181,9 +178,7 @@ export default function App() {
             case "agent-store-settings":
                 return <AgentStoreSettings user={user} setPage={navigate} />;
             case "agent-pricing":
-                return <AgentPricing user={user} setPage={navigate} />;
-            case "agent-store":
-                return <AgentStore user={user} setPage={navigate} />;
+                return <AgentPricing user={user} setPage={navigate} />;            
             case "agent-withdraw":
                 return <AgentWithdraw user={user} setPage={navigate} />;
             case "agent-buy-data":
