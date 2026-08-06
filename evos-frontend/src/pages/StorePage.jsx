@@ -23,6 +23,14 @@ const NETWORK_CONFIG = {
   },
 };
 
+// Checkers tile — sits alongside the networks in the same landing grid.
+const CHECKERS_TILE = {
+  label: "Result Checkers", emoji: "🎓", color: "#a78bfa",
+  bg: "linear-gradient(135deg, rgba(167,139,250,0.18), rgba(167,139,250,0.06))",
+  border: "rgba(167,139,250,0.4)",
+  desc: "WAEC & BECE",
+};
+
 const bundleAccents = [
   { border: "rgba(34,197,94,0.3)", price: "#22c55e" },
   { border: "rgba(56,189,248,0.3)", price: "#38bdf8" },
@@ -48,15 +56,6 @@ const CHECKER_CONFIG = {
     border: "rgba(56,189,248,0.4)",
     desc: "Result checker card for BECE results",
   },
-};
-
-// Combined tile config for the single landing grid (step 0):
-// MTN / Telecel / AirtelTigo / Checkers, all in one 2x2 grid.
-const CHECKERS_TILE = {
-  label: "Result Checkers", emoji: "🎓", color: "#a78bfa",
-  bg: "linear-gradient(135deg, rgba(167,139,250,0.18), rgba(167,139,250,0.06))",
-  border: "rgba(167,139,250,0.4)",
-  desc: "WAEC & BECE",
 };
 
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -250,9 +249,7 @@ function ConfirmModal({ selected, networkLabel, networkCfg, onClose, onConfirm, 
           border: `1px solid ${networkCfg?.border || "rgba(255,255,255,0.08)"}`,
         }}>
           <div style={modal.summaryHeader}>
-            {networkCfg?.logo ? (
-              <img src={networkCfg.logo} alt={networkLabel} style={modal.summaryLogo} />
-            ) : null}
+            <span style={{ fontSize: 18 }}>{networkCfg?.emoji}</span>
             <span style={{ fontWeight: 900, fontSize: 14, color: networkCfg?.color }}>Order Summary</span>
           </div>
           <div style={modal.summaryRow}>
@@ -782,8 +779,7 @@ export default function StorePage({ setPage }) {
       {step === 2 && (
         <div style={styles.progressWrap}>
           {["Bundle", "Pay"].map((label, i) => {
-            const stepIndex = i + 1; // 1 = Bundle (this screen), 2 = Pay (handled via modal)
-            const active = stepIndex === 1;
+            const active = i === 0; // this screen is always "Bundle"; Pay happens via modal
             return (
               <div key={i} style={styles.progressItem}>
                 <div style={{
@@ -792,7 +788,7 @@ export default function StorePage({ setPage }) {
                   border: active ? "2px solid #38bdf8" : "2px solid rgba(255,255,255,0.1)",
                   color: active ? "white" : "#475569",
                 }}>
-                  {stepIndex}
+                  {i + 1}
                 </div>
                 <span style={{
                   ...styles.progressLabel,
@@ -1043,16 +1039,14 @@ const styles = {
   headerBadge: { display: "inline-block", padding: "5px 18px", borderRadius: 50, background: "rgba(56,189,248,0.15)", border: "1px solid rgba(56,189,248,0.3)", color: "#38bdf8", fontSize: 12, fontWeight: 800, marginBottom: 10, letterSpacing: "0.5px" },
   title: { fontSize: "clamp(22px, 5vw, 30px)", fontWeight: 900, color: "#f1f5f9", margin: "0 0 6px" },
   sub: { fontSize: 13, color: "#64748b", margin: 0, fontWeight: 600 },
-  progressWrap: { display: "flex", justifyContent: "center", alignItems: "center", position: "relative", maxWidth: 260, margin: "0 auto 24px" },
+  progressWrap: { display: "flex", justifyContent: "center", alignItems: "center", position: "relative", maxWidth: 340, margin: "0 auto 24px" },
   progressItem: { display: "flex", flexDirection: "column", alignItems: "center", gap: 6, flex: 1, position: "relative", zIndex: 1 },
   progressDot: { width: 34, height: 34, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800, transition: "all 0.35s" },
   progressLabel: { fontSize: 11, fontWeight: 700, transition: "color 0.3s" },
-  progressLine: { position: "absolute", top: 17, left: "20%", right: "20%", height: 2, background: "rgba(255,255,255,0.08)", zIndex: 0 },
+  progressLine: { position: "absolute", top: 17, left: "16%", right: "16%", height: 2, background: "rgba(255,255,255,0.08)", zIndex: 0 },
   wrapper: { maxWidth: 480, margin: "0 auto" },
   box: { background: "rgba(15,23,42,0.9)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", padding: "24px 20px", borderRadius: 22, border: "1px solid rgba(255,255,255,0.07)", boxShadow: "0 25px 60px rgba(0,0,0,0.4)" },
   stepLabel: { fontSize: 12, color: "#38bdf8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.8px", margin: "0 0 18px" },
-
-  // ===== LANDING GRID (step 0) — 2x2 of MTN / Telecel / AirtelTigo / Checkers =====
   landingGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(2, 1fr)",
@@ -1085,14 +1079,13 @@ const styles = {
   landingLogo: { width: 34, height: 34, objectFit: "contain" },
   landingName: { fontWeight: 800, fontSize: 14, lineHeight: 1.2 },
   landingDesc: { fontSize: 10.5, color: "#64748b", fontWeight: 600, marginTop: -4 },
-
-  networkPill: { display: "inline-flex", alignItems: "center", gap: 8, padding: "7px 18px", borderRadius: 50, fontSize: 13, fontWeight: 900, marginBottom: 20 },
-  networkPillLogo: { width: 20, height: 20, objectFit: "contain", borderRadius: "50%", background: "#fff" },
-
+  networkName: { fontWeight: 800, fontSize: 16, flex: 1 },
   infoRow: { display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap", marginBottom: 16 },
   infoChip: { fontSize: 11, color: "#475569", fontWeight: 700, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", padding: "4px 10px", borderRadius: 50 },
   trackBtn: { width: "100%", padding: "12px", borderRadius: 14, background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.25)", color: "#38bdf8", fontWeight: 800, fontSize: 14, cursor: "pointer" },
   backBtn: { background: "rgba(255,255,255,0.06)", border: "none", color: "#38bdf8", fontSize: 13, fontWeight: 800, cursor: "pointer", padding: "6px 14px", borderRadius: 50, marginBottom: 16, display: "inline-block" },
+  networkPill: { display: "inline-flex", alignItems: "center", gap: 8, padding: "7px 18px", borderRadius: 50, fontSize: 13, fontWeight: 900, marginBottom: 20 },
+  networkPillLogo: { width: 20, height: 20, objectFit: "contain", borderRadius: "50%", background: "#fff" },
   bundleGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
   bundleCard: { background: "rgba(2,6,23,0.7)", borderRadius: 16, padding: "18px 14px 14px", cursor: "pointer", textAlign: "center", transition: "transform 0.15s", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
   bundleSize: { fontWeight: 900, fontSize: 20, color: "#f1f5f9" },
@@ -1102,7 +1095,6 @@ const styles = {
   productTypeDesc: { fontSize: 12, color: "#64748b", fontWeight: 600 },
   checkerGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
   checkerCard: { borderRadius: 16, padding: "18px 14px 14px", cursor: "pointer", textAlign: "center", transition: "transform 0.15s", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
-  networkName: { fontWeight: 800, fontSize: 16, flex: 1 },
   floatWrap: { position: "fixed", bottom: 24, right: 20, zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 },
   chatPopup: { background: "#0f172a", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 18, padding: 18, width: 270, boxShadow: "0 8px 40px rgba(0,0,0,0.5)" },
   chatHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
@@ -1121,7 +1113,6 @@ const modal = {
   closeBtn: { background: "rgba(255,255,255,0.08)", border: "none", color: "#94a3b8", fontSize: 13, cursor: "pointer", padding: "6px 10px", borderRadius: 50, fontWeight: 800 },
   summary: { borderRadius: 16, padding: "10px 16px", marginBottom: 18 },
   summaryHeader: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10, paddingBottom: 8, borderBottom: "1px solid rgba(255,255,255,0.06)" },
-  summaryLogo: { width: 22, height: 22, objectFit: "contain", borderRadius: "50%", background: "#fff" },
   summaryRow: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" },
   summaryLabel: { fontSize: 12, color: "#64748b", fontWeight: 600 },
   summaryValue: { fontSize: 14, fontWeight: 700, color: "#e5e7eb" },
