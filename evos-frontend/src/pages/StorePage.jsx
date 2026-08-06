@@ -4,19 +4,19 @@ import { smartFetch } from "../config";
 
 const NETWORK_CONFIG = {
   MTN: {
-    label: "MTN", emoji: "🟡", color: "#FFC107",
+    label: "MTN", logo: "/images/mtn.png", color: "#FFC107",
     bg: "linear-gradient(135deg, rgba(255,193,7,0.18), rgba(255,193,7,0.06))",
     border: "rgba(255,193,7,0.4)", shadow: "0 4px 20px rgba(245,158,11,0.2)",
     tag: "Most Popular", tagColor: "#f59e0b",
   },
   Telecel: {
-    label: "Telecel (Vodafone)", emoji: "🔴", color: "#ef4444",
+    label: "Telecel (Vodafone)", logo: "/images/telecel.png", color: "#ef4444",
     bg: "linear-gradient(135deg, rgba(239,68,68,0.18), rgba(239,68,68,0.06))",
     border: "rgba(239,68,68,0.4)", shadow: "0 4px 20px rgba(239,68,68,0.2)",
     tag: "Reliable", tagColor: "#ef4444",
   },
   AirtelTigo: {
-    label: "AirtelTigo", emoji: "🔵", color: "#6366f1",
+    label: "AirtelTigo", logo: "/images/airteltigo.png", color: "#6366f1",
     bg: "linear-gradient(135deg, rgba(99,102,241,0.18), rgba(99,102,241,0.06))",
     border: "rgba(99,102,241,0.4)", shadow: "0 4px 20px rgba(99,102,241,0.2)",
     tag: "Affordable", tagColor: "#6366f1",
@@ -48,6 +48,15 @@ const CHECKER_CONFIG = {
     border: "rgba(56,189,248,0.4)",
     desc: "Result checker card for BECE results",
   },
+};
+
+// Combined tile config for the single landing grid (step 0):
+// MTN / Telecel / AirtelTigo / Checkers, all in one 2x2 grid.
+const CHECKERS_TILE = {
+  label: "Result Checkers", emoji: "🎓", color: "#a78bfa",
+  bg: "linear-gradient(135deg, rgba(167,139,250,0.18), rgba(167,139,250,0.06))",
+  border: "rgba(167,139,250,0.4)",
+  desc: "WAEC & BECE",
 };
 
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -241,7 +250,9 @@ function ConfirmModal({ selected, networkLabel, networkCfg, onClose, onConfirm, 
           border: `1px solid ${networkCfg?.border || "rgba(255,255,255,0.08)"}`,
         }}>
           <div style={modal.summaryHeader}>
-            <span style={{ fontSize: 18 }}>{networkCfg?.emoji}</span>
+            {networkCfg?.logo ? (
+              <img src={networkCfg.logo} alt={networkLabel} style={modal.summaryLogo} />
+            ) : null}
             <span style={{ fontWeight: 900, fontSize: 14, color: networkCfg?.color }}>Order Summary</span>
           </div>
           <div style={modal.summaryRow}>
@@ -767,25 +778,25 @@ export default function StorePage({ setPage }) {
         </p>
       </div>
 
-      {/* PROGRESS — only shown during the data-bundle flow (steps 1 & 2) */}
-      {(step === 1 || step === 2) && (
+      {/* PROGRESS — only shown once inside the bundle-picking / pay flow */}
+      {step === 2 && (
         <div style={styles.progressWrap}>
-          {["Network", "Bundle", "Pay"].map((label, i) => {
-            const active = step === i + 1;
-            const done = step > i + 1;
+          {["Bundle", "Pay"].map((label, i) => {
+            const stepIndex = i + 1; // 1 = Bundle (this screen), 2 = Pay (handled via modal)
+            const active = stepIndex === 1;
             return (
               <div key={i} style={styles.progressItem}>
                 <div style={{
                   ...styles.progressDot,
-                  background: done ? "#22c55e" : active ? "#38bdf8" : "rgba(255,255,255,0.1)",
-                  border: active ? "2px solid #38bdf8" : done ? "2px solid #22c55e" : "2px solid rgba(255,255,255,0.1)",
-                  color: done || active ? "white" : "#475569",
+                  background: active ? "#38bdf8" : "rgba(255,255,255,0.1)",
+                  border: active ? "2px solid #38bdf8" : "2px solid rgba(255,255,255,0.1)",
+                  color: active ? "white" : "#475569",
                 }}>
-                  {done ? "✓" : i + 1}
+                  {stepIndex}
                 </div>
                 <span style={{
                   ...styles.progressLabel,
-                  color: active ? "#38bdf8" : done ? "#22c55e" : "#475569",
+                  color: active ? "#38bdf8" : "#475569",
                 }}>{label}</span>
               </div>
             );
@@ -796,56 +807,22 @@ export default function StorePage({ setPage }) {
 
       <div style={styles.wrapper}>
 
-        {/* ============ STEP 0 — WHAT WOULD YOU LIKE TO BUY? ============ */}
+        {/* ============ STEP 0 — LANDING: NETWORKS + CHECKERS GRID ============ */}
         {step === 0 && (
           <div style={styles.box}>
             <p style={styles.stepLabel}>What would you like to buy?</p>
 
-            <div style={styles.productTypeGrid}>
-              <div style={styles.productTypeCard} onClick={() => goToStep(1, "")}>
-                <div style={styles.productTypeEmoji}>📶</div>
-                <div style={styles.productTypeName}>Data Bundles</div>
-                <div style={styles.productTypeDesc}>MTN, Telecel & AirtelTigo bundles</div>
-                <div style={{ ...styles.bundleCta, color: "#38bdf8" }}>Select →</div>
-              </div>
-              <div style={styles.productTypeCard} onClick={() => setStep("checker")}>
-                <div style={styles.productTypeEmoji}>🎓</div>
-                <div style={styles.productTypeName}>Result Checkers</div>
-                <div style={styles.productTypeDesc}>WAEC & BECE checker cards</div>
-                <div style={{ ...styles.bundleCta, color: "#a78bfa" }}>Select →</div>
-              </div>
-            </div>
-
-            <div style={styles.infoRow}>
-              <span style={styles.infoChip}>🔒 Paystack Secured</span>
-              <span style={styles.infoChip}>⚡ Instant Delivery</span>
-            </div>
-
-            <button style={styles.trackBtn} onClick={handleTrackOrder}>
-              📦 Track My Order
-            </button>
-          </div>
-        )}
-
-        {/* ============ STEP 1 — NETWORK ============ */}
-        {step === 1 && (
-          <div style={styles.box}>
-            <button style={styles.backBtn} onClick={() => goToStep(0, "")}>← Back</button>
-
-            <p style={styles.stepLabel}>Step 1 of 2 · Select Your Network</p>
-
-            <div style={styles.networkGrid}>
+            <div style={styles.landingGrid}>
               {availableNetworks.map((netKey) => {
                 const c = NETWORK_CONFIG[netKey] || {
-                  label: netKey, emoji: "📡", color: "#64748b",
+                  label: netKey, logo: null, color: "#64748b",
                   bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.1)",
-                  shadow: "none", tag: "", tagColor: "#64748b",
                 };
                 return (
                   <div
                     key={netKey}
                     style={{
-                      ...styles.networkCard,
+                      ...styles.landingTile,
                       background: c.bg,
                       border: `1px solid ${c.border}`,
                     }}
@@ -853,7 +830,7 @@ export default function StorePage({ setPage }) {
                   >
                     {c.tag && (
                       <div style={{
-                        ...styles.networkTag,
+                        ...styles.landingTag,
                         background: c.tagColor + "22",
                         color: c.tagColor,
                         border: `1px solid ${c.tagColor}44`,
@@ -861,12 +838,35 @@ export default function StorePage({ setPage }) {
                         {c.tag}
                       </div>
                     )}
-                    <div style={styles.networkEmoji}>{c.emoji}</div>
-                    <div style={{ ...styles.networkName, color: c.color }}>{c.label}</div>
-                    <div style={{ ...styles.networkArrow, color: c.color }}>→</div>
+                    <div style={styles.landingLogoWrap}>
+                      {c.logo ? (
+                        <img src={c.logo} alt={c.label} style={styles.landingLogo} />
+                      ) : (
+                        <div style={{ fontSize: 34 }}>📡</div>
+                      )}
+                    </div>
+                    <div style={{ ...styles.landingName, color: c.color }}>{c.label}</div>
+                    <div style={{ ...styles.bundleCta, color: c.color }}>Select →</div>
                   </div>
                 );
               })}
+
+              {/* CHECKERS TILE — same grid, same size */}
+              <div
+                style={{
+                  ...styles.landingTile,
+                  background: CHECKERS_TILE.bg,
+                  border: `1px solid ${CHECKERS_TILE.border}`,
+                }}
+                onClick={() => setStep("checker")}
+              >
+                <div style={styles.landingLogoWrap}>
+                  <div style={{ fontSize: 34 }}>{CHECKERS_TILE.emoji}</div>
+                </div>
+                <div style={{ ...styles.landingName, color: CHECKERS_TILE.color }}>{CHECKERS_TILE.label}</div>
+                <div style={styles.landingDesc}>{CHECKERS_TILE.desc}</div>
+                <div style={{ ...styles.bundleCta, color: CHECKERS_TILE.color }}>Select →</div>
+              </div>
             </div>
 
             <div style={styles.infoRow}>
@@ -883,9 +883,9 @@ export default function StorePage({ setPage }) {
         {/* ============ STEP 2 — BUNDLES ============ */}
         {step === 2 && (
           <div style={styles.box}>
-            <button style={styles.backBtn} onClick={() => goToStep(1, "")}>← Back</button>
+            <button style={styles.backBtn} onClick={() => goToStep(0, "")}>← Back</button>
 
-            <p style={styles.stepLabel}>Step 2 of 2 · Pick a Bundle</p>
+            <p style={styles.stepLabel}>Pick a Bundle</p>
 
             <div style={{
               ...styles.networkPill,
@@ -893,7 +893,10 @@ export default function StorePage({ setPage }) {
               border: `1px solid ${cfg.border}`,
               color: cfg.color,
             }}>
-              {cfg.emoji} {networkLabel}
+              {cfg.logo ? (
+                <img src={cfg.logo} alt={networkLabel} style={styles.networkPillLogo} />
+              ) : null}
+              {networkLabel}
             </div>
 
             {bundles.length === 0 && (
@@ -1040,37 +1043,66 @@ const styles = {
   headerBadge: { display: "inline-block", padding: "5px 18px", borderRadius: 50, background: "rgba(56,189,248,0.15)", border: "1px solid rgba(56,189,248,0.3)", color: "#38bdf8", fontSize: 12, fontWeight: 800, marginBottom: 10, letterSpacing: "0.5px" },
   title: { fontSize: "clamp(22px, 5vw, 30px)", fontWeight: 900, color: "#f1f5f9", margin: "0 0 6px" },
   sub: { fontSize: 13, color: "#64748b", margin: 0, fontWeight: 600 },
-  progressWrap: { display: "flex", justifyContent: "center", alignItems: "center", position: "relative", maxWidth: 340, margin: "0 auto 24px" },
+  progressWrap: { display: "flex", justifyContent: "center", alignItems: "center", position: "relative", maxWidth: 260, margin: "0 auto 24px" },
   progressItem: { display: "flex", flexDirection: "column", alignItems: "center", gap: 6, flex: 1, position: "relative", zIndex: 1 },
   progressDot: { width: 34, height: 34, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800, transition: "all 0.35s" },
   progressLabel: { fontSize: 11, fontWeight: 700, transition: "color 0.3s" },
-  progressLine: { position: "absolute", top: 17, left: "16%", right: "16%", height: 2, background: "rgba(255,255,255,0.08)", zIndex: 0 },
+  progressLine: { position: "absolute", top: 17, left: "20%", right: "20%", height: 2, background: "rgba(255,255,255,0.08)", zIndex: 0 },
   wrapper: { maxWidth: 480, margin: "0 auto" },
   box: { background: "rgba(15,23,42,0.9)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", padding: "24px 20px", borderRadius: 22, border: "1px solid rgba(255,255,255,0.07)", boxShadow: "0 25px 60px rgba(0,0,0,0.4)" },
   stepLabel: { fontSize: 12, color: "#38bdf8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.8px", margin: "0 0 18px" },
-  networkGrid: { display: "flex", flexDirection: "column", gap: 12, marginBottom: 20 },
-  networkCard: { padding: "16px 18px", borderRadius: 16, cursor: "pointer", display: "flex", alignItems: "center", gap: 14, transition: "transform 0.15s", position: "relative" },
-  networkTag: { position: "absolute", top: 10, right: 42, fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 50, letterSpacing: "0.5px", textTransform: "uppercase" },
-  networkEmoji: { fontSize: 28, flexShrink: 0 },
-  networkName: { fontWeight: 800, fontSize: 16, flex: 1 },
-  networkArrow: { fontSize: 20, fontWeight: 900, flexShrink: 0 },
+
+  // ===== LANDING GRID (step 0) — 2x2 of MTN / Telecel / AirtelTigo / Checkers =====
+  landingGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(2, 1fr)",
+    gap: 12,
+    marginBottom: 20,
+  },
+  landingTile: {
+    borderRadius: 18,
+    padding: "16px 12px",
+    cursor: "pointer",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    textAlign: "center",
+    position: "relative",
+    aspectRatio: "1 / 1",
+    transition: "transform 0.15s",
+  },
+  landingTag: {
+    position: "absolute", top: 8, right: 8, fontSize: 9, fontWeight: 800,
+    padding: "2px 7px", borderRadius: 50, letterSpacing: "0.4px", textTransform: "uppercase",
+  },
+  landingLogoWrap: {
+    width: 52, height: 52, display: "flex", alignItems: "center", justifyContent: "center",
+    borderRadius: "50%", background: "rgba(255,255,255,0.9)", marginBottom: 2,
+    boxShadow: "0 2px 10px rgba(0,0,0,0.25)", flexShrink: 0,
+  },
+  landingLogo: { width: 34, height: 34, objectFit: "contain" },
+  landingName: { fontWeight: 800, fontSize: 14, lineHeight: 1.2 },
+  landingDesc: { fontSize: 10.5, color: "#64748b", fontWeight: 600, marginTop: -4 },
+
+  networkPill: { display: "inline-flex", alignItems: "center", gap: 8, padding: "7px 18px", borderRadius: 50, fontSize: 13, fontWeight: 900, marginBottom: 20 },
+  networkPillLogo: { width: 20, height: 20, objectFit: "contain", borderRadius: "50%", background: "#fff" },
+
   infoRow: { display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap", marginBottom: 16 },
   infoChip: { fontSize: 11, color: "#475569", fontWeight: 700, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", padding: "4px 10px", borderRadius: 50 },
   trackBtn: { width: "100%", padding: "12px", borderRadius: 14, background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.25)", color: "#38bdf8", fontWeight: 800, fontSize: 14, cursor: "pointer" },
   backBtn: { background: "rgba(255,255,255,0.06)", border: "none", color: "#38bdf8", fontSize: 13, fontWeight: 800, cursor: "pointer", padding: "6px 14px", borderRadius: 50, marginBottom: 16, display: "inline-block" },
-  networkPill: { display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 18px", borderRadius: 50, fontSize: 13, fontWeight: 900, marginBottom: 20 },
   bundleGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
   bundleCard: { background: "rgba(2,6,23,0.7)", borderRadius: 16, padding: "18px 14px 14px", cursor: "pointer", textAlign: "center", transition: "transform 0.15s", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
   bundleSize: { fontWeight: 900, fontSize: 20, color: "#f1f5f9" },
   bundlePrice: { fontWeight: 900, fontSize: 17 },
   bundleCta: { fontSize: 11, fontWeight: 800, opacity: 0.7 },
-  productTypeGrid: { display: "flex", flexDirection: "column", gap: 12, marginBottom: 20 },
-  productTypeCard: { background: "rgba(2,6,23,0.7)", borderRadius: 16, padding: "20px 18px", cursor: "pointer", textAlign: "center", transition: "transform 0.15s", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, border: "1px solid rgba(255,255,255,0.08)" },
   productTypeEmoji: { fontSize: 32, marginBottom: 2 },
-  productTypeName: { fontWeight: 900, fontSize: 17, color: "#f1f5f9" },
   productTypeDesc: { fontSize: 12, color: "#64748b", fontWeight: 600 },
   checkerGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
   checkerCard: { borderRadius: 16, padding: "18px 14px 14px", cursor: "pointer", textAlign: "center", transition: "transform 0.15s", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
+  networkName: { fontWeight: 800, fontSize: 16, flex: 1 },
   floatWrap: { position: "fixed", bottom: 24, right: 20, zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 },
   chatPopup: { background: "#0f172a", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 18, padding: 18, width: 270, boxShadow: "0 8px 40px rgba(0,0,0,0.5)" },
   chatHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
@@ -1089,6 +1121,7 @@ const modal = {
   closeBtn: { background: "rgba(255,255,255,0.08)", border: "none", color: "#94a3b8", fontSize: 13, cursor: "pointer", padding: "6px 10px", borderRadius: 50, fontWeight: 800 },
   summary: { borderRadius: 16, padding: "10px 16px", marginBottom: 18 },
   summaryHeader: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10, paddingBottom: 8, borderBottom: "1px solid rgba(255,255,255,0.06)" },
+  summaryLogo: { width: 22, height: 22, objectFit: "contain", borderRadius: "50%", background: "#fff" },
   summaryRow: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" },
   summaryLabel: { fontSize: 12, color: "#64748b", fontWeight: 600 },
   summaryValue: { fontSize: 14, fontWeight: 700, color: "#e5e7eb" },
