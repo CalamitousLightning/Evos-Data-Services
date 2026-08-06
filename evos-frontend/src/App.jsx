@@ -84,7 +84,7 @@ export default function App() {
             "/success":            "success",
             "/agent-dashboard":    "agent-dashboard",
             "/agent-store-settings": "agent-store-settings",
-            "/agent-pricing":      "agent-pricing",           
+            "/agent-pricing":      "agent-pricing",
             "/agent-withdraw":     "agent-withdraw",
             "/agent-buy-data":     "agent-buy-data",
             "/agent-buy-checker":  "agent-buy-checker",
@@ -178,7 +178,7 @@ export default function App() {
             case "agent-store-settings":
                 return <AgentStoreSettings user={user} setPage={navigate} />;
             case "agent-pricing":
-                return <AgentPricing user={user} setPage={navigate} />;            
+                return <AgentPricing user={user} setPage={navigate} />;
             case "agent-withdraw":
                 return <AgentWithdraw user={user} setPage={navigate} />;
             case "agent-buy-data":
