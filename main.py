@@ -2145,13 +2145,34 @@ async def retry_stuck_deposits():
                             logger.info("DEPOSIT RETRY: deposit %s still pending on Paystack — will retry", dep_id)
                         continue
 
-                    recheck = supabase.table("wallet_deposits") \
-                        .select("status") \
+                    # ── ATOMIC CLAIM ──────────────────────────────────
+                    # A plain "read status, then later write" check here left
+                    # a gap that /agent/deposit/verify (fired from the
+                    # frontend right after the Paystack redirect) could slip
+                    # through at the same time, double-crediting the same
+                    # deposit. Flipping status here — gated on it not already
+                    # being "credited" — means only ONE caller's update can
+                    # actually affect a row; that's the one that proceeds.
+                    claim = supabase.table("wallet_deposits") \
+                        .update({"status": "credited"}) \
                         .eq("id", dep_id) \
+                        .neq("status", "credited") \
+                        .execute()
+
+                    if not claim.data:
+                        logger.info("DEPOSIT RETRY: deposit %s already claimed elsewhere, skipping", dep_id)
+                        continue
+
+                    # Belt-and-suspenders: also guard on the transaction
+                    # reference itself, same pattern used for order/checker
+                    # profit crediting elsewhere in this file.
+                    existing_tx = supabase.table("agent_transactions") \
+                        .select("id") \
+                        .eq("reference", deposit.get("reference")) \
                         .limit(1) \
                         .execute()
-                    if recheck.data and recheck.data[0]["status"] == "credited":
-                        logger.info("DEPOSIT RETRY: deposit %s already credited, skipping", dep_id)
+                    if existing_tx.data:
+                        logger.info("DEPOSIT RETRY: deposit %s already has a credit transaction, skipping", dep_id)
                         continue
 
                     wallet_res = supabase.table("agent_wallets") \
@@ -2172,11 +2193,6 @@ async def retry_stuck_deposits():
                         supabase.table("agent_wallets") \
                             .insert({"agent_id": agent_id, "balance": new_balance}) \
                             .execute()
-
-                    supabase.table("wallet_deposits") \
-                        .update({"status": "credited"}) \
-                        .eq("id", dep_id) \
-                        .execute()
 
                     supabase.table("agent_transactions").insert({
                         "agent_id":  agent_id,
@@ -4163,6 +4179,32 @@ async def verify_deposit(request: Request, payload: dict):
         agent_id      = deposit["agent_id"]
         credit_amount = float(deposit["amount"])
 
+        # ── ATOMIC CLAIM ──────────────────────────────────────────────
+        # Flip status pending -> credited FIRST, gated on it not already
+        # being "credited". Only the caller whose update actually affects a
+        # row (i.e. wins the race) proceeds to touch the wallet. This closes
+        # the gap that let this endpoint and retry_stuck_deposits() (or two
+        # concurrent calls to this same endpoint) both credit the same
+        # deposit — which is exactly what caused the double GH₵1.00 credit.
+        claim = supabase.table("wallet_deposits") \
+            .update({"status": "credited"}) \
+            .eq("id", deposit["id"]) \
+            .neq("status", "credited") \
+            .execute()
+
+        if not claim.data:
+            wallet_res = supabase.table("agent_wallets").select("balance").eq("agent_id", agent_id).limit(1).execute()
+            balance = float(wallet_res.data[0]["balance"]) if wallet_res.data else 0
+            return {"status": "already_credited", "wallet_balance": balance}
+
+        # Belt-and-suspenders: also guard on the transaction reference
+        # itself, matching the pattern used for order/checker profit crediting.
+        existing_tx = supabase.table("agent_transactions").select("id").eq("reference", deposit.get("reference")).limit(1).execute()
+        if existing_tx.data:
+            wallet_res = supabase.table("agent_wallets").select("balance").eq("agent_id", agent_id).limit(1).execute()
+            balance = float(wallet_res.data[0]["balance"]) if wallet_res.data else 0
+            return {"status": "already_credited", "wallet_balance": balance}
+
         wallet_res = supabase.table("agent_wallets").select("balance").eq("agent_id", agent_id).limit(1).execute()
         if wallet_res.data:
             current_balance = float(wallet_res.data[0]["balance"] or 0)
@@ -4172,7 +4214,6 @@ async def verify_deposit(request: Request, payload: dict):
             new_balance = round(credit_amount, 2)
             supabase.table("agent_wallets").insert({"agent_id": agent_id, "balance": new_balance}).execute()
 
-        supabase.table("wallet_deposits").update({"status": "credited"}).eq("id", deposit["id"]).execute()
         supabase.table("agent_transactions").insert({
             "agent_id":  agent_id,
             "type":      "credit",
