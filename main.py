@@ -686,6 +686,11 @@ MAX_ATTEMPTS_PER_PROVIDER = 3
 #      Supabase):
 #        alter table agent_withdrawals add column if not exists fee numeric default 0;
 #        alter table agent_withdrawals add column if not exists payout_amount numeric default 0;
+#        alter table agent_withdrawals add column if not exists failure_reason text;
+#      "failure_reason" holds the internal (never agent-facing) reason a
+#      transfer couldn't be completed — e.g. "business balance too low" or
+#      "auto-refunded after 60 min". Used by admin tooling and the
+#      background retry job; never returned to the agent.
 # =========================
 WITHDRAWAL_FEE_PERCENT = 4.0
 
@@ -1052,6 +1057,70 @@ def paystack_verify_transfer(reference: str) -> dict:
     except Exception as e:
         logger.error("PAYSTACK VERIFY TRANSFER ERROR: %s", str(e))
         return {"status": False, "message": str(e)}
+
+
+# =========================
+# WITHDRAWAL FINALIZATION (shared, atomic)
+# Every path that can resolve a "processing" paystack withdrawal — the
+# webhook, the agent's status-poll endpoint, the background retry job, and
+# admin actions — funnels through here. The atomic
+# `.eq("status", "processing")` guard on the update means only ONE caller
+# can ever win the transition for a given withdrawal, no matter how many of
+# these fire concurrently. That's what prevents double-crediting the agent's
+# wallet on a refund, or double-inserting the debit transaction on a payout.
+# Requires the "failure_reason" column (see migration note below).
+# =========================
+def finalize_paystack_withdrawal(row: dict, final_status: str, note: str = None) -> bool:
+    if final_status not in ("paid", "failed"):
+        return False
+
+    withdrawal_id = row["id"]
+    agent_id      = row["agent_id"]
+    amount        = float(row["amount"])
+    reference     = row.get("paystack_ref")
+
+    update_payload = {"status": final_status}
+    if note:
+        update_payload["failure_reason"] = note
+
+    claim = supabase.table("agent_withdrawals") \
+        .update(update_payload) \
+        .eq("id", withdrawal_id) \
+        .eq("status", "processing") \
+        .execute()
+
+    if not claim.data:
+        # Someone else (webhook / poll / retry job / admin) already
+        # finalized this withdrawal — nothing more to do here.
+        return False
+
+    if final_status == "paid":
+        existing_tx = supabase.table("agent_transactions").select("id").eq("reference", reference).limit(1).execute()
+        if not existing_tx.data:
+            supabase.table("agent_transactions").insert({
+                "agent_id":  agent_id,
+                "amount":    -amount,
+                "type":      "withdrawal",
+                "reference": reference,
+            }).execute()
+        logger.info("WITHDRAWAL FINALIZE: withdrawal %s marked paid", withdrawal_id)
+    else:
+        wlt = supabase.table("agent_wallets").select("balance").eq("agent_id", agent_id).limit(1).execute()
+        if wlt.data:
+            new_balance = round(float(wlt.data[0]["balance"]) + amount, 2)
+            supabase.table("agent_wallets").update({"balance": new_balance}).eq("agent_id", agent_id).execute()
+            logger.info(
+                "WITHDRAWAL FINALIZE: refunded GH₵%s to agent %s (withdrawal %s) — reason: %s",
+                amount, agent_id, withdrawal_id, note or "unspecified"
+            )
+        else:
+            logger.error(
+                "WITHDRAWAL FINALIZE: no wallet found for agent %s — could not refund withdrawal %s!",
+                agent_id, withdrawal_id
+            )
+
+    return True
+
 
 # =========================
 # PASSWORD SECURITY
@@ -2522,6 +2591,157 @@ async def retry_stuck_checker_payments():
         await asyncio.sleep(300)
 
 
+# =========================
+# BACKGROUND: RETRY STUCK PAYSTACK WITHDRAWALS
+# Two distinct kinds of "stuck" land here, both left at status "processing":
+#
+#  A) A transfer WAS created at Paystack (paystack_transfer_code is set) but
+#     we never got a final transfer.success/failed webhook — re-verify it
+#     directly with Paystack and finalize.
+#
+#  B) A transfer was NEVER created (paystack_transfer_code is null) —
+#     almost always because our Paystack business balance was too low at
+#     the moment the agent withdrew. The agent's wallet is already debited
+#     and sitting frozen. We retry sending the transfer (safe/idempotent —
+#     Paystack rejects a duplicate of the same reference rather than paying
+#     twice) for up to WITHDRAWAL_RETRY_WINDOW_MINUTES in case the business
+#     account gets topped up in the meantime. If it still hasn't gone
+#     through after that window, we auto-refund the agent.
+#
+# All finalization goes through finalize_paystack_withdrawal(), which is
+# gated on an atomic "status == processing" claim — so this job can never
+# double-refund or double-pay even if it overlaps with the webhook, the
+# agent's status-poll, or an admin action touching the same row.
+# =========================
+_withdrawal_retry_running = False
+WITHDRAWAL_RETRY_WINDOW_MINUTES = 60   # keep trying to actually send it for up to 1hr
+WITHDRAWAL_RETRY_MIN_AGE_MINUTES = 3   # give the normal flow / webhook a head start first
+
+async def retry_stuck_paystack_withdrawals():
+    global _withdrawal_retry_running
+    if _withdrawal_retry_running:
+        logger.info("WITHDRAWAL RETRY: already running, skipping duplicate")
+        return
+
+    _withdrawal_retry_running = True
+    await asyncio.sleep(150)
+
+    while True:
+        try:
+            logger.info("WITHDRAWAL RETRY: scanning for stuck paystack withdrawals...")
+
+            now    = utc_now()
+            floor  = (now - timedelta(minutes=WITHDRAWAL_RETRY_MIN_AGE_MINUTES)).isoformat()
+            cutoff = (now - timedelta(hours=24)).isoformat()
+
+            stuck = supabase.table("agent_withdrawals") \
+                .select("*") \
+                .eq("status", "processing") \
+                .eq("provider", "paystack") \
+                .lte("created_at", floor) \
+                .gte("created_at", cutoff) \
+                .execute()
+
+            rows = stuck.data or []
+            logger.info("WITHDRAWAL RETRY: %d stuck paystack withdrawals found", len(rows))
+
+            for row in rows:
+                withdrawal_id = row.get("id")
+                try:
+                    ref = row.get("paystack_ref")
+                    if not ref:
+                        continue
+
+                    age = now - parse_db_dt(row["created_at"])
+                    transfer_code = row.get("paystack_transfer_code")
+
+                    # ── CASE A: transfer exists at Paystack, re-check it ──
+                    if transfer_code:
+                        result = paystack_verify_transfer(ref)
+                        if not result.get("status"):
+                            logger.info("WITHDRAWAL RETRY %s: verify failed: %s", withdrawal_id, result.get("message"))
+                            continue
+                        t_status = result.get("data", {}).get("status")
+                        if t_status == "success":
+                            finalize_paystack_withdrawal(row, "paid")
+                        elif t_status in ("failed", "reversed"):
+                            finalize_paystack_withdrawal(row, "failed", note=f"Paystack transfer {t_status}")
+                        else:
+                            logger.info("WITHDRAWAL RETRY %s: still '%s' at Paystack", withdrawal_id, t_status)
+                        continue
+
+                    # ── CASE B: never actually sent — retry within the window ──
+                    if age > timedelta(minutes=WITHDRAWAL_RETRY_WINDOW_MINUTES):
+                        finalize_paystack_withdrawal(
+                            row, "failed",
+                            note=f"Auto-refunded after {WITHDRAWAL_RETRY_WINDOW_MINUTES} min — payout could not be completed"
+                        )
+                        continue
+
+                    network = (row.get("bank_name") or "").upper()
+                    account_number = row.get("account_number")
+                    if not network or not account_number:
+                        logger.warning("WITHDRAWAL RETRY %s: missing network/account, cannot retry", withdrawal_id)
+                        continue
+
+                    recipient = paystack_create_recipient(
+                        row.get("account_name") or "EVOS Agent", account_number, network
+                    )
+                    if not recipient.get("status"):
+                        logger.info("WITHDRAWAL RETRY %s: recipient recreation failed: %s", withdrawal_id, recipient.get("message"))
+                        continue
+
+                    recipient_code = recipient["data"]["recipient_code"]
+                    transfer = paystack_initiate_transfer(
+                        amount=float(row["payout_amount"]),
+                        recipient_code=recipient_code,
+                        reference=ref,
+                        reason=f"EVOS Agent Withdrawal #{withdrawal_id}",
+                    )
+
+                    if not transfer.get("status"):
+                        msg = str(transfer.get("message", "") or "")
+                        # A "duplicate reference" style response means Paystack
+                        # already has a record of this transfer from a prior
+                        # attempt — go verify its real status instead of
+                        # treating this as a fresh failure.
+                        if "duplicate" in msg.lower():
+                            result = paystack_verify_transfer(ref)
+                            if result.get("status"):
+                                t_status = result.get("data", {}).get("status")
+                                if t_status == "success":
+                                    finalize_paystack_withdrawal(row, "paid")
+                                elif t_status in ("failed", "reversed"):
+                                    finalize_paystack_withdrawal(row, "failed", note=f"Paystack transfer {t_status}")
+                        else:
+                            supabase.table("agent_withdrawals").update({
+                                "failure_reason": msg or "Paystack transfer could not be initiated"
+                            }).eq("id", withdrawal_id).execute()
+                            logger.info("WITHDRAWAL RETRY %s: still failing: %s", withdrawal_id, msg)
+                        continue
+
+                    tdata = transfer.get("data", {})
+                    t_status = tdata.get("status")
+                    supabase.table("agent_withdrawals").update({
+                        "paystack_transfer_code": tdata.get("transfer_code"),
+                    }).eq("id", withdrawal_id).execute()
+
+                    if t_status == "success":
+                        row["paystack_transfer_code"] = tdata.get("transfer_code")
+                        finalize_paystack_withdrawal(row, "paid")
+                        logger.info("WITHDRAWAL RETRY %s: succeeded on retry ✅", withdrawal_id)
+                    else:
+                        logger.info("WITHDRAWAL RETRY %s: now in flight at Paystack (status=%s)", withdrawal_id, t_status)
+
+                except Exception as e:
+                    logger.error("WITHDRAWAL RETRY: error on withdrawal %s: %s", withdrawal_id, str(e))
+
+        except Exception as e:
+            logger.error("WITHDRAWAL RETRY ERROR: %s", str(e))
+
+        await asyncio.sleep(300)
+
+
 @app.on_event("startup")
 async def startup_event():
     log_agyekumdata_categories()
@@ -2529,6 +2749,7 @@ async def startup_event():
     asyncio.create_task(retry_stuck_deposits())
     asyncio.create_task(retry_stuck_order_payments())
     asyncio.create_task(retry_stuck_checker_payments())
+    asyncio.create_task(retry_stuck_paystack_withdrawals())
 
 
 # =========================
@@ -2921,38 +3142,17 @@ async def paystack_webhook(request: Request):
 
             row          = wd.data[0]
             final_status = "paid" if event == "transfer.success" else "failed"
+            note         = None if final_status == "paid" else f"Paystack {event} webhook"
 
-            if row.get("status") == final_status:
-                print(f"PAYSTACK WEBHOOK: withdrawal {row.get('id')} already marked {final_status}")
+            # Atomic — the same helper the retry job and status-poll
+            # endpoint use, so no matter which one gets there first, only
+            # one actually applies the wallet refund / debit record.
+            applied = finalize_paystack_withdrawal(row, final_status, note=note)
+            if not applied:
+                print(f"PAYSTACK WEBHOOK: withdrawal {row.get('id')} already finalized, skipping")
                 return {"status": "already processed"}
 
-            supabase.table("agent_withdrawals").update({"status": final_status}).eq("paystack_ref", reference).execute()
             print(f"PAYSTACK WEBHOOK: withdrawal {row.get('id')} updated to status={final_status}")
-
-            if final_status == "paid":
-                existing_tx = supabase.table("agent_transactions").select("id").eq("reference", reference).limit(1).execute()
-                if not existing_tx.data:
-                    supabase.table("agent_transactions").insert({
-                        "agent_id":  row["agent_id"],
-                        "amount":    -float(row["amount"]),
-                        "type":      "withdrawal",
-                        "reference": reference,
-                    }).execute()
-                    print(f"PAYSTACK WEBHOOK: agent_transactions debit recorded for agent={row['agent_id']} amount=-{row['amount']}")
-                else:
-                    print(f"PAYSTACK WEBHOOK: agent_transactions entry already exists for reference={reference}, skipping insert")
-            else:
-                wlt = supabase.table("agent_wallets").select("balance").eq("agent_id", row["agent_id"]).limit(1).execute()
-                if wlt.data:
-                    new_balance = float(wlt.data[0]["balance"]) + float(row["amount"])
-                    supabase.table("agent_wallets").update({
-                        "balance": new_balance
-                    }).eq("agent_id", row["agent_id"]).execute()
-                    logger.info("PAYSTACK TRANSFER WEBHOOK: refunded GH₵%s to agent %s", row["amount"], row["agent_id"])
-                    print(f"PAYSTACK WEBHOOK: refunded GH₵{row['amount']} to agent {row['agent_id']}, new balance={new_balance}")
-                else:
-                    print(f"PAYSTACK WEBHOOK: no agent_wallets row found for agent={row['agent_id']}, refund skipped")
-
             return {"status": "processed"}
 
         # =========================
@@ -3472,40 +3672,43 @@ async def request_withdrawal(request: Request, payload: WithdrawRequest):
         )
 
         if not transfer.get("status"):
-            transfer_msg   = str(transfer.get("message", "") or "")
-            transfer_msg_l = transfer_msg.lower()
+            transfer_msg = str(transfer.get("message", "") or "")
 
-            # Paystack returns wording like this when OUR business balance is
-            # too low to cover the payout — that's an internal/ops problem,
-            # not the agent's. Don't reveal it or auto-fail/refund; leave the
-            # request sitting as "processing" so an admin can top up and
-            # manually complete it later via /admin/withdrawals/{id}/paid.
-            low_balance_signals = (
-                "insufficient", "not enough", "not enough to fulfil", "not enough to fulfill",
-                "top up", "top-up", "topup", "fund your account", "fund your wallet",
+            # ANY failure to initiate a transfer at this point — insufficient
+            # business balance, account restrictions, rate limits, whatever
+            # Paystack's exact wording happens to be — is an internal/ops
+            # problem, never something the agent caused or can fix. We NEVER
+            # surface Paystack's raw message to the agent (wording changes
+            # over time and keyword-matching for it is fragile — safer to
+            # just never show any of it).
+            #
+            # We also don't refund immediately: the wallet stays debited and
+            # the request stays "processing". retry_stuck_paystack_withdrawals()
+            # (background job) will keep retrying the transfer for up to an
+            # hour in case it was just a temporary low-balance situation, and
+            # will auto-refund the agent if it still can't go through after
+            # that — atomically, so it can never double-credit.
+            supabase.table("agent_withdrawals").update({
+                "failure_reason": transfer_msg or "Paystack transfer could not be initiated",
+            }).eq("id", withdrawal_id).execute()
+
+            logger.error(
+                "PAYSTACK WITHDRAW: transfer could not be initiated for withdrawal %s "
+                "(agent %s, GH₵%s) — Paystack said: %s. Leaving as 'processing'; "
+                "background retry job will keep trying and auto-refund if needed.",
+                withdrawal_id, agent_id, payout_amount, transfer_msg
             )
-            if any(sig in transfer_msg_l for sig in low_balance_signals):
-                logger.error(
-                    "PAYSTACK WITHDRAW: business balance insufficient for withdrawal %s "
-                    "(agent %s, GH₵%s) — Paystack said: %s. Leaving as 'processing' for "
-                    "manual completion once topped up.",
-                    withdrawal_id, agent_id, payout_amount, transfer_msg
-                )
-                return {
-                    "status":          "success",
-                    "provider":        "paystack",
-                    "message":         "Your withdrawal is active and being processed. "
-                                       "Please try again shortly if it doesn't reflect.",
-                    "withdrawal_id":   withdrawal_id,
-                    "transfer_status": "processing",
-                    "amount":          amount,
-                    "fee":             fee,
-                    "payout_amount":   payout_amount,
-                }
-
-            refund()
-            supabase.table("agent_withdrawals").update({"status": "failed"}).eq("id", withdrawal_id).execute()
-            return {"error": transfer_msg or "Paystack transfer failed"}
+            return {
+                "status":          "success",
+                "provider":        "paystack",
+                "message":         "Your withdrawal is active and being processed. "
+                                   "Please try again shortly if it doesn't reflect.",
+                "withdrawal_id":   withdrawal_id,
+                "transfer_status": "processing",
+                "amount":          amount,
+                "fee":             fee,
+                "payout_amount":   payout_amount,
+            }
 
         tdata           = transfer.get("data", {})
         transfer_status = tdata.get("status")   # expected "success" | "pending" with OTP disabled
@@ -3723,6 +3926,11 @@ async def check_withdrawal_status(request: Request, withdrawal_id: int):
             ref = row.get("paystack_ref")
             if not ref:
                 return {"status": final_status, "withdrawal": row}
+            # Nothing was ever sent to Paystack for this reference (initiate
+            # failed synchronously, e.g. low business balance) — there's
+            # nothing to verify yet. Leave it to the background retry job.
+            if not row.get("paystack_transfer_code"):
+                return {"status": final_status, "withdrawal": row}
             result = paystack_verify_transfer(ref)
             if result.get("status"):
                 t_status = result.get("data", {}).get("status")
@@ -3741,14 +3949,19 @@ async def check_withdrawal_status(request: Request, withdrawal_id: int):
                 tx_status    = status_res.get("data", {}).get("txstatus", 0)
                 final_status = "paid" if tx_status == 1 else "failed" if tx_status == 2 else "processing"
 
-        if final_status != row.get("status"):
-            supabase.table("agent_withdrawals").update({"status": final_status}).eq("id", withdrawal_id).execute()
-            if final_status == "failed":
-                wlt = supabase.table("agent_wallets").select("balance").eq("agent_id", row["agent_id"]).limit(1).execute()
-                if wlt.data:
-                    supabase.table("agent_wallets").update({
-                        "balance": float(wlt.data[0]["balance"]) + float(row["amount"])
-                    }).eq("agent_id", row["agent_id"]).execute()
+        if final_status in ("paid", "failed") and final_status != row.get("status"):
+            if provider == "paystack":
+                # Atomic — safe even if the webhook or the retry job is
+                # resolving this exact withdrawal at the same moment.
+                finalize_paystack_withdrawal(row, final_status, note="Resolved via agent status poll")
+            else:
+                supabase.table("agent_withdrawals").update({"status": final_status}).eq("id", withdrawal_id).execute()
+                if final_status == "failed":
+                    wlt = supabase.table("agent_wallets").select("balance").eq("agent_id", row["agent_id"]).limit(1).execute()
+                    if wlt.data:
+                        supabase.table("agent_wallets").update({
+                            "balance": round(float(wlt.data[0]["balance"]) + float(row["amount"]), 2)
+                        }).eq("agent_id", row["agent_id"]).execute()
 
         return {"status": final_status, "withdrawal": row}
     except HTTPException:
@@ -3811,32 +4024,6 @@ async def moolre_webhook(request: Request):
     except Exception as e:
         logger.error("MOOLRE WEBHOOK ERROR: %s", str(e))
         return {"received": False}
-
-
-# =========================
-# ADMIN WITHDRAWALS — PROTECTED
-# =========================
-@app.post("/admin/withdrawals/{withdrawal_id}/paid")
-async def mark_paid(withdrawal_id: int, _: None = Depends(require_admin)):
-    supabase.table("agent_withdrawals").update({"status": "paid"}).eq("id", withdrawal_id).execute()
-    return {"status": "paid"}
-
-
-@app.post("/admin/withdrawals/{withdrawal_id}/reject")
-async def reject_withdrawal(withdrawal_id: int, _: None = Depends(require_admin)):
-    req = supabase.table("agent_withdrawals").select("*").eq("id", withdrawal_id).limit(1).execute()
-    if not req.data:
-        return {"error": "Not found"}
-
-    row = req.data[0]
-    if row["status"] != "pending":
-        return {"error": "Already processed"}
-
-    wallet  = supabase.table("agent_wallets").select("balance").eq("agent_id", row["agent_id"]).limit(1).execute()
-    current = float(wallet.data[0]["balance"])
-    supabase.table("agent_wallets").update({"balance": current + float(row["amount"])}).eq("agent_id", row["agent_id"]).execute()
-    supabase.table("agent_withdrawals").update({"status": "rejected"}).eq("id", withdrawal_id).execute()
-    return {"status": "rejected"}
 
 
 # =========================

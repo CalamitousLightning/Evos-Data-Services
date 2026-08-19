@@ -10,7 +10,6 @@ import AgentDashboard     from "./pages/AgentDashboard";
 import AgentStoreSettings from "./pages/AgentStoreSettings";
 import AgentPricing       from "./pages/AgentPricing";
 import AgentWithdraw      from "./pages/AgentWithdraw";
-import AdminWithdrawals   from "./pages/AdminWithdrawals";
 import StorePage          from "./pages/StorePage";
 import OrderTracking      from "./pages/OrderTracking";
 import ETATrack           from "./pages/ETATrack";
@@ -90,7 +89,6 @@ export default function App() {
             "/agent-buy-checker":  "agent-buy-checker",
             "/agent-checker-pricing": "agent-checker-pricing",
             "/agent-deposit":      "agent-deposit",
-            "/admin-withdrawals":  "admin-withdrawals",
             "/track":              "track-order",
             "/eta-track":          "eta-track",
             "/forgot-password":    "forgot-password",
@@ -143,7 +141,6 @@ export default function App() {
             "agent-buy-checker":      "/agent-buy-checker",
             "agent-checker-pricing":  "/agent-checker-pricing",
             "agent-deposit":    "/agent-deposit",
-            "admin-withdrawals":"/admin-withdrawals",
             store:              "/store",
             "track-order":      "/track",
             "eta-track":        "/eta-track",
@@ -189,8 +186,6 @@ export default function App() {
                 return <AgentCheckerPricing user={user} setPage={navigate} />;
             case "agent-deposit":
                 return <AgentDeposit user={user} setPage={navigate} />;
-            case "admin-withdrawals":
-                return <AdminWithdrawals user={user} setPage={navigate} />;
             case "store":
                 return <StorePage setPage={navigate} theme={theme} />;
             case "track-order":
@@ -385,22 +380,7 @@ export default function App() {
                         </>
                     )}
 
-                    {/* ADMIN NAV */}
-                    {isAdmin && (
-                        <>
-                            <div style={sidebarDivider} />
-                            <div style={sidebarSection}>
-                                <div style={sidebarSectionLabel}>Admin</div>
-                                <button
-                                    style={sidebarBtn(page === "admin-withdrawals")}
-                                    onClick={() => navigate("admin-withdrawals")}
-                                >
-                                    <span style={sidebarBtnIcon}>🛠</span>
-                                    Withdrawals
-                                </button>
-                            </div>
-                        </>
-                    )}
+
 
                     {/* AUTH */}
                     <div style={{ marginTop: "auto" }}>
