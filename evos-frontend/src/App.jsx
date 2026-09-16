@@ -19,6 +19,7 @@ import ForgotPassword     from "./pages/ForgotPassword";
 import Checkers           from "./pages/Checkers";
 import AgentBuyChecker    from "./pages/AgentBuyChecker";
 import AgentCheckerPricing from "./pages/AgentCheckerPricing";
+import DashXera           from "./pages/DashXera";
 
 export default function App() {
     const [page, setPage]         = useState("home");
@@ -92,6 +93,7 @@ export default function App() {
             "/track":              "track-order",
             "/eta-track":          "eta-track",
             "/forgot-password":    "forgot-password",
+            "/dashxera":           "dashxera",
         };
 
         setPage(routeMap[path] || "home");
@@ -146,6 +148,7 @@ export default function App() {
             "eta-track":        "/eta-track",
             "order-tracking":   "/eta-track",
             "forgot-password":  "/forgot-password",
+            dashxera:           "/dashxera",
         };
 
         window.history.pushState({}, "", routes[target] || "/");
@@ -197,6 +200,10 @@ export default function App() {
                 return <ETATrack setPage={navigate} />;
             case "forgot-password":
                 return <ForgotPassword setPage={navigate} />;
+            case "dashxera":
+                // Guarded again on the server by X-Admin-Secret — hiding the
+                // route is convenience, not the actual access control.
+                return <DashXera />;
             default:
                 return <Home setPage={navigate} theme={theme} />;
         }
@@ -381,6 +388,23 @@ export default function App() {
                     )}
 
 
+
+                    {/* ADMIN NAV */}
+                    {isAdmin && (
+                        <>
+                            <div style={sidebarDivider} />
+                            <div style={sidebarSection}>
+                                <div style={sidebarSectionLabel}>Admin</div>
+                                <button
+                                    style={sidebarBtn(page === "dashxera")}
+                                    onClick={() => navigate("dashxera")}
+                                >
+                                    <span style={sidebarBtnIcon}>📈</span>
+                                    DashXera
+                                </button>
+                            </div>
+                        </>
+                    )}
 
                     {/* AUTH */}
                     <div style={{ marginTop: "auto" }}>

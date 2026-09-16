@@ -5494,3 +5494,23 @@ async def whatsapp_webhook(request: Request):
 @app.get("/")
 def root():
     return {"status": "EVOS API is running"}
+
+
+# =========================
+# DASHXERA — ADMIN DASHBOARD
+# =========================
+# Mounted last, once `app`, `supabase` and every provider helper above
+# already exist — dashxera resolves them lazily at request time rather than
+# importing this module back, so there's no circular import.
+#
+# install() does two things: mounts /admin/dashxera, and attaches a log
+# handler to the root logger that turns the PURCHASE ERROR / RETRY JOB lines
+# already written above into durable rows in provider_incidents. That's how
+# a "DataMart wallet is empty" failure reaches the dashboard without any
+# edits to the dispatch code.
+try:
+    import dashxera
+    dashxera.install(app)
+except Exception as _dashxera_err:
+    # A dashboard must never be able to take the API down with it.
+    logger.error("DASHXERA: failed to mount (%s) — API continues without it", _dashxera_err)
