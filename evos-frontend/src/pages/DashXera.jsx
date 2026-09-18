@@ -4,16 +4,24 @@ import { smartFetch } from "../config";
 /**
  * DashXera — internal admin operations console for EVOS Data Services.
  *
- * Auth reuses the X-Admin-Secret header the rest of /admin/* already uses.
- * The secret is held in sessionStorage only, so closing the tab signs you out.
- * No provider key, Paystack secret or Supabase credential is ever sent to or
- * stored by this page.
+ * Sign-in is the same admin_agents-gated login used across the Evoxera
+ * ecosystem (see admin_auth.py / POST /admin/login): your existing
+ * public.users username and password, valid here only if that account also
+ * has an active admin_agents row. There's no separate DashXera password to
+ * remember, and the same session works the way EvosHub/XERA admin access
+ * already does.
+ *
+ * The session token is held in sessionStorage only, so closing the tab
+ * signs you out. It expires after 12 hours regardless, and access can be
+ * revoked instantly from admin_agents — the backend re-checks that on
+ * every single request, not just at login. No provider key, Paystack
+ * secret or Supabase credential is ever sent to or stored by this page.
  */
 
 const WINDOWS = [7, 14, 30, 60, 90];
 const REFRESH_MS = 60000;
-const SECRET_KEY = "dashxeraSecret";
-const LABEL_KEY = "dashxeraLabel";
+const TOKEN_KEY = "dashxeraToken";
+const USER_KEY = "dashxeraUser";
 const PAGE_SIZE = 25;
 
 const SECTIONS = [
@@ -67,10 +75,15 @@ const timeAgo = (iso) => {
 const when = (iso) => (iso ? new Date(iso).toLocaleString("en-GH") : "—");
 
 export default function DashXera() {
-  const [secret, setSecret] = useState(() => sessionStorage.getItem(SECRET_KEY) || "");
-  const [label, setLabel] = useState(() => sessionStorage.getItem(LABEL_KEY) || "");
-  const [secretDraft, setSecretDraft] = useState("");
-  const [labelDraft, setLabelDraft] = useState("");
+  const [token, setToken] = useState(() => sessionStorage.getItem(TOKEN_KEY) || "");
+  const [adminUser, setAdminUser] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem(USER_KEY) || "null"); }
+    catch { return null; }
+  });
+  const [identifierDraft, setIdentifierDraft] = useState("");
+  const [passwordDraft, setPasswordDraft] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState("");
   const [authed, setAuthed] = useState(false);
 
   const [section, setSection] = useState("overview");
@@ -106,21 +119,26 @@ export default function DashXera() {
         ...options,
         headers: {
           "Content-Type": "application/json",
-          "X-Admin-Secret": secret,
-          "X-Admin-Label": label || "admin",
+          Authorization: `Bearer ${token}`,
           ...(options.headers || {}),
         },
       });
-      if (res.status === 403) throw new Error("UNAUTHORISED");
+      // 401 = the token itself is missing, malformed or expired. 403 = the
+      // token is fine but admin_agents.is_active was flipped off since it
+      // was issued — the backend re-checks that live on every request.
+      // Distinct messages so someone whose access was pulled isn't told
+      // their session merely "timed out".
+      if (res.status === 401) throw new Error("SESSION_EXPIRED");
+      if (res.status === 403) throw new Error("ACCESS_REVOKED");
       if (!res.ok) throw new Error(`Request failed (${res.status})`);
       return res.json();
     },
-    [secret, label]
+    [token]
   );
 
   const load = useCallback(
     async (quiet = false) => {
-      if (!secret) return;
+      if (!token) return;
       if (!quiet) setLoading(true);
       setError("");
       try {
@@ -169,11 +187,12 @@ export default function DashXera() {
         setAuthed(true);
         setLastSync(new Date());
       } catch (err) {
-        if (err.message === "UNAUTHORISED") {
-          sessionStorage.removeItem(SECRET_KEY);
-          setSecret("");
-          setAuthed(false);
-          setError("That admin secret was rejected.");
+        if (err.message === "SESSION_EXPIRED") {
+          signOut();
+          setLoginError("Your session expired. Please sign in again.");
+        } else if (err.message === "ACCESS_REVOKED") {
+          signOut();
+          setLoginError("Your admin access has been revoked.");
         } else {
           setError(err.message || "Could not reach the dashboard API.");
         }
@@ -181,7 +200,8 @@ export default function DashXera() {
         setLoading(false);
       }
     },
-    [call, days, secret, section, ordersPage, undispatchedPage, statusFilter, search]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [call, days, token, section, ordersPage, undispatchedPage, statusFilter, search]
   );
 
   useEffect(() => { load(); }, [load]);
@@ -197,19 +217,60 @@ export default function DashXera() {
     setTimeout(() => setToast(null), 6000);
   };
 
-  const signIn = (event) => {
+  const signIn = async (event) => {
     event.preventDefault();
-    if (!secretDraft.trim()) return;
-    sessionStorage.setItem(SECRET_KEY, secretDraft.trim());
-    sessionStorage.setItem(LABEL_KEY, labelDraft.trim());
-    setSecret(secretDraft.trim());
-    setLabel(labelDraft.trim());
+    const identifier = identifierDraft.trim();
+    if (!identifier || !passwordDraft) return;
+
+    setLoginBusy(true);
+    setLoginError("");
+    try {
+      const res = await smartFetch("/admin/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identifier, password: passwordDraft }),
+      });
+
+      // 429 = brute-force lockout, returned as a plain-text detail rather
+      // than the {status: ...} shape every other outcome uses.
+      if (res.status === 429) {
+        const body = await res.json().catch(() => ({}));
+        setLoginError(body.detail || "Too many attempts. Please wait and try again.");
+        return;
+      }
+
+      const data = await res.json();
+
+      if (data.status === "ok" && data.token) {
+        sessionStorage.setItem(TOKEN_KEY, data.token);
+        sessionStorage.setItem(USER_KEY, JSON.stringify(data.user));
+        setToken(data.token);
+        setAdminUser(data.user);
+        setPasswordDraft("");
+        return;
+      }
+
+      if (data.status === "not_authorized") {
+        setLoginError("This account doesn't have admin access.");
+        return;
+      }
+
+      // Covers "invalid_credentials" and anything unrecognized —
+      // deliberately generic, matching the backend's own refusal to
+      // distinguish "wrong password" from "unknown account".
+      setLoginError("Incorrect username/email or password.");
+    } catch {
+      setLoginError("Couldn't reach the server. Check your connection and try again.");
+    } finally {
+      setLoginBusy(false);
+    }
   };
 
   const signOut = () => {
-    sessionStorage.removeItem(SECRET_KEY);
-    sessionStorage.removeItem(LABEL_KEY);
-    setSecret("");
+    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(USER_KEY);
+    setToken("");
+    setAdminUser(null);
     setAuthed(false);
     setSummary(null);
   };
@@ -280,31 +341,39 @@ export default function DashXera() {
   );
 
   /* ------------------------------------------------------------- sign in */
-  if (!secret) {
+  if (!token) {
     return (
       <div style={styles.gate}>
         <form style={styles.gateCard} onSubmit={signIn}>
           <div style={styles.gateMark}>DX</div>
           <h1 style={styles.gateTitle}>DashXera</h1>
           <p style={styles.gateSub}>
-            Operations console for EVOS Data Services. Enter the admin secret to continue.
+            Operations console for EVOS Data Services. Sign in with your admin account —
+            the same username and password used across the Evoxera ecosystem.
           </p>
           <input
             style={styles.input}
-            type="password"
-            autoComplete="off"
-            placeholder="Admin secret"
-            value={secretDraft}
-            onChange={(e) => setSecretDraft(e.target.value)}
+            autoComplete="username"
+            placeholder="Username or email"
+            value={identifierDraft}
+            onChange={(e) => setIdentifierDraft(e.target.value)}
           />
           <input
             style={styles.input}
-            placeholder="Your name (recorded against every action)"
-            value={labelDraft}
-            onChange={(e) => setLabelDraft(e.target.value)}
+            type="password"
+            autoComplete="current-password"
+            placeholder="Password"
+            value={passwordDraft}
+            onChange={(e) => setPasswordDraft(e.target.value)}
           />
-          <button style={styles.primaryBtn} type="submit">Open dashboard</button>
-          {error && <div style={styles.gateError}>{error}</div>}
+          <button style={styles.primaryBtn} type="submit" disabled={loginBusy}>
+            {loginBusy ? "Signing in…" : "Sign in"}
+          </button>
+          {loginError && <div style={styles.gateError}>{loginError}</div>}
+          <p style={styles.gateFoot}>
+            Access is limited to active admin agents. Ask an existing admin to add you if
+            your account isn't recognized.
+          </p>
         </form>
       </div>
     );
@@ -346,6 +415,9 @@ export default function DashXera() {
           })}
         </nav>
 
+        {adminUser?.display_name && (
+          <div style={styles.signedInAs}>Signed in as {adminUser.display_name}</div>
+        )}
         <button style={styles.signOutBtn} onClick={signOut}>Sign out</button>
       </aside>
 
@@ -1183,6 +1255,7 @@ const styles = {
   gateTitle: { margin: 0, fontSize: 24, fontWeight: 800, letterSpacing: "-0.5px" },
   gateSub: { margin: 0, fontSize: 13, color: "#94a3b8", lineHeight: 1.5 },
   gateError: { fontSize: 13, color: "#f87171" },
+  gateFoot: { margin: "4px 0 0", fontSize: 11.5, color: "#475569", lineHeight: 1.5 },
 
   input: { padding: "11px 13px", borderRadius: 10, border: "1px solid rgba(148,163,184,0.2)",
     background: "rgba(2,6,23,0.6)", color: "#e2e8f0", fontSize: 14, outline: "none" },
@@ -1212,7 +1285,8 @@ const styles = {
   navIcon: { width: 16, textAlign: "center", fontSize: 13, opacity: 0.8 },
   navBadge: { fontSize: 10.5, fontWeight: 800, color: "#fb923c",
     background: "rgba(249,115,22,0.16)", padding: "2px 7px", borderRadius: 6 },
-  signOutBtn: { marginTop: 12, padding: "10px 12px", borderRadius: 9, cursor: "pointer",
+  signedInAs: { marginTop: 10, padding: "0 6px", fontSize: 11, color: "#475569" },
+  signOutBtn: { marginTop: 6, padding: "10px 12px", borderRadius: 9, cursor: "pointer",
     fontSize: 13, fontWeight: 600, background: "rgba(148,163,184,0.08)",
     border: "1px solid rgba(148,163,184,0.14)", color: "#94a3b8" },
 

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException, Query, Depends
+from fastapi import FastAPI, Request, HTTPException, Query, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -5088,6 +5088,111 @@ def login(request: Request, data: LoginRequest):
     except Exception as e:
         logger.error("LOGIN ERROR: %s", str(e))
         raise HTTPException(status_code=500, detail="Server error")
+
+
+# =========================
+# ADMIN LOGIN (admin_agents-gated — DashXera and any other internal tool)
+#
+# Same public.users credentials as customer/agent login above. A correct
+# password alone is not enough: the account must also have an active row
+# in admin_agents. This is the exact scheme already running in evoshub and
+# XERA (see admin_auth.py) — one account works across the whole ecosystem.
+# =========================
+
+from admin_auth import (
+    AdminTokenInvalid,
+    clear_failures,
+    is_locked,
+    make_admin_token,
+    record_failure,
+    require_active_admin,
+)
+
+_ADMIN_DUMMY_HASH = "$2b$12$KIXzCq3C3T6tFkUd9nj6aO.WwSIFqh4fQieFzpxKx5Mj5.z1rklHC"
+_ADMIN_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._%+\-@]{1,120}$")
+
+
+class AdminLoginRequest(BaseModel):
+    identifier: str = Field(..., min_length=1, max_length=120, description="Username or email")
+    password: str = Field(..., min_length=1, max_length=200)
+
+
+@app.post("/admin/login")
+@limiter.limit("10/minute")
+def admin_login(request: Request, data: AdminLoginRequest):
+    identifier = data.identifier.strip().lower()
+    if not _ADMIN_IDENTIFIER_RE.match(identifier):
+        return {"status": "invalid_credentials"}
+    ip = get_remote_address(request)
+
+    # Both lockout dimensions are checked before any DB or bcrypt work runs.
+    id_locked, id_remaining = is_locked(f"id:{identifier}")
+    ip_locked, ip_remaining = is_locked(f"ip:{ip}")
+    if id_locked or ip_locked:
+        retry_after = max(id_remaining, ip_remaining)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed attempts. Try again in {retry_after} seconds.",
+        )
+
+    user_res = (
+        supabase.table("users").select("*")
+        .or_(f"username.eq.{identifier},email.eq.{identifier}")
+        .limit(1).execute()
+    )
+    user = user_res.data[0] if user_res.data else None
+    stored_hash = user.get("password") if user else _ADMIN_DUMMY_HASH
+
+    try:
+        password_ok = pwd_context.verify(data.password, stored_hash)
+    except Exception:
+        password_ok = False
+
+    if not user or not password_ok:
+        record_failure(f"id:{identifier}")
+        record_failure(f"ip:{ip}")
+        return {"status": "invalid_credentials"}
+
+    agent_res = (
+        supabase.table("admin_agents").select("is_active, display_name")
+        .eq("user_id", user["id"]).limit(1).execute()
+    )
+    agent = agent_res.data[0] if agent_res.data else None
+    if not agent or not agent.get("is_active"):
+        # Correct password but not an active admin agent. Still counted as a
+        # failure against both counters — valid credentials plus repeated
+        # attempts is exactly the "found the password, testing authorization"
+        # pattern lockout exists to slow down.
+        record_failure(f"id:{identifier}")
+        record_failure(f"ip:{ip}")
+        return {"status": "not_authorized"}
+
+    clear_failures(f"id:{identifier}")
+    clear_failures(f"ip:{ip}")
+
+    token = make_admin_token(user["id"])
+    return {
+        "status": "ok",
+        "token": token,
+        "user": {
+            "id": user["id"],
+            "username": user.get("username"),
+            "display_name": agent.get("display_name") or user.get("full_name"),
+        },
+    }
+
+
+@app.get("/admin/me")
+@limiter.limit("60/minute")
+def admin_me(request: Request, authorization: str = Header(default="")):
+    token = authorization.removeprefix("Bearer ").strip()
+    try:
+        user_id, display_name = require_active_admin(supabase, token)
+    except AdminTokenInvalid:
+        raise HTTPException(status_code=401, detail="Invalid or expired session. Please log in again.")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Admin access has been revoked.")
+    return {"status": "ok", "user": {"id": user_id, "display_name": display_name}}
 
 
 # =========================

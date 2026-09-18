@@ -29,7 +29,6 @@ half-applied migration degrades rather than breaks.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import importlib
 import json
 import logging
@@ -48,13 +47,14 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from admin_auth import AdminTokenInvalid, require_active_admin
+
 logger = logging.getLogger("dashxera")
 
 # ============================================================================
 # CONFIG
 # ============================================================================
 
-ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
 PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET_KEY", "")
 
 ALLOWED_WINDOWS = (7, 14, 30, 60, 90)
@@ -235,11 +235,28 @@ def _rpc(name: str, params: dict) -> Optional[list]:
 
 
 def require_dashxera_admin(request: Request) -> str:
-    secret = request.headers.get("X-Admin-Secret", "")
-    if not ADMIN_SECRET or not secret or not hmac.compare_digest(secret, ADMIN_SECRET):
-        raise HTTPException(status_code=403, detail="Forbidden")
-    label = (request.headers.get("X-Admin-Label") or "admin").strip()
-    return re.sub(r"[^\w .@-]", "", label)[:80] or "admin"
+    """
+    Gated by the same admin_agents roster as the rest of the Evoxera
+    ecosystem (see admin_auth.py) rather than a single shared secret: the
+    caller must present a bearer token from POST /admin/login, and that
+    token's account must still have an active admin_agents row. Revoking
+    that row takes effect on this admin's very next request, not just
+    after their 12-hour token expires.
+
+    The returned string is the audit-trail actor. It comes from
+    admin_agents.display_name — the verified identity — never from a
+    client-supplied header, so the audit log can't be spoofed by whoever
+    happens to hold a session.
+    """
+    authorization = request.headers.get("Authorization", "")
+    token = authorization.removeprefix("Bearer ").strip()
+    try:
+        user_id, display_name = require_active_admin(_db(), token)
+    except AdminTokenInvalid:
+        raise HTTPException(status_code=401, detail="Invalid or expired session. Please log in again.")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Admin access has been revoked.")
+    return (display_name or "").strip() or f"admin-{user_id}"
 
 
 router = APIRouter(prefix="/admin/dashxera", tags=["dashxera"])

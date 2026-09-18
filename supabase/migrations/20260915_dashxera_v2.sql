@@ -35,21 +35,12 @@ create table if not exists public.dashxera_actions (
     created_at  timestamptz not null default now()
 );
 
-alter table public.dashxera_actions
-    add column if not exists previous_status text;
+alter table public.dashxera_actions add column if not exists previous_status text;
+alter table public.dashxera_actions add column if not exists new_status      text;
+alter table public.dashxera_actions add column if not exists provider_ref    text;
 
-alter table public.dashxera_actions
-    add column if not exists new_status text;
-
-alter table public.dashxera_actions
-    add column if not exists provider_ref text;
-
-create index if not exists idx_dashxera_actions_created
-    on public.dashxera_actions (created_at desc);
-
-create index if not exists idx_dashxera_actions_order
-    on public.dashxera_actions (order_id);
-
+create index if not exists idx_dashxera_actions_created on public.dashxera_actions (created_at desc);
+create index if not exists idx_dashxera_actions_order   on public.dashxera_actions (order_id);
 alter table public.dashxera_actions enable row level security;
 
 -- ----------------------------------------------------------------------------
@@ -59,8 +50,7 @@ create table if not exists public.provider_incidents (
     id            bigserial primary key,
     provider      text not null,
     kind          text not null,
-    severity      text not null default 'warning'
-                  check (severity in ('critical','warning','info')),
+    severity      text not null default 'warning' check (severity in ('critical','warning','info')),
     message       text not null,
     fingerprint   text not null,
     order_id      bigint,
@@ -77,34 +67,23 @@ create table if not exists public.provider_incidents (
 
 create index if not exists idx_provider_incidents_seen
     on public.provider_incidents (last_seen_at desc);
-
 create index if not exists idx_provider_incidents_open
     on public.provider_incidents (resolved_at, severity, last_seen_at desc);
-
 create index if not exists idx_provider_incidents_provider
     on public.provider_incidents (provider, last_seen_at desc);
-
 create unique index if not exists uniq_provider_incidents_fingerprint_open
-    on public.provider_incidents (fingerprint)
-    where resolved_at is null;
+    on public.provider_incidents (fingerprint) where resolved_at is null;
 
 alter table public.provider_incidents enable row level security;
 
 -- ----------------------------------------------------------------------------
 -- 4. Indexes for the reporting windows.
 -- ----------------------------------------------------------------------------
-create index if not exists idx_orders_created_at
-    on public.orders (created_at desc);
-
-create index if not exists idx_orders_status_created
-    on public.orders (status, created_at desc);
-
-create index if not exists idx_orders_agent_created
-    on public.orders (agent_id, created_at desc)
+create index if not exists idx_orders_created_at     on public.orders (created_at desc);
+create index if not exists idx_orders_status_created on public.orders (status, created_at desc);
+create index if not exists idx_orders_agent_created  on public.orders (agent_id, created_at desc)
     where agent_id is not null;
-
-create index if not exists idx_orders_stranded
-    on public.orders (created_at desc)
+create index if not exists idx_orders_stranded       on public.orders (created_at desc)
     where datamart_ref is null;
 
 -- ----------------------------------------------------------------------------
@@ -153,142 +132,42 @@ as $$
     with scoped as (
         select
             o.*,
-            (o.status <> 'pending_payment') as collected,
-            (o.base_price is not null) as has_base,
-            (o.agent_id is not null) as is_agent
+            (o.status <> 'pending_payment')                       as collected,
+            (o.base_price is not null)                            as has_base,
+            (o.agent_id is not null)                              as is_agent
         from public.orders o
         where o.created_at >= since_ts
     )
     select
         count(*),
+        count(*) filter (where status = 'pending_payment'),
+        count(*) filter (where status in ('paid','processing')),
+        count(*) filter (where status = 'successful'),
+        count(*) filter (where status = 'failed'),
+        count(*) filter (where status not in
+            ('pending_payment','paid','processing','successful','failed')),
+        count(*) filter (where collected),
 
-        count(*) filter (
-            where status = 'pending_payment'
-        ),
+        coalesce(sum(price)      filter (where collected), 0),
+        coalesce(sum(base_price) filter (where collected and has_base), 0),
+        count(*)                 filter (where collected and has_base),
+        count(*)                 filter (where collected and not has_base),
+        coalesce(sum(price)      filter (where collected and not has_base), 0),
 
-        count(*) filter (
-            where status in ('paid', 'processing')
-        ),
+        coalesce(sum(price) filter (where status = 'failed'), 0),
 
-        count(*) filter (
-            where status = 'successful'
-        ),
+        count(*)            filter (where collected and datamart_ref is null and status <> 'successful'),
+        coalesce(sum(price) filter (where collected and datamart_ref is null and status <> 'successful'), 0),
 
-        count(*) filter (
-            where status = 'failed'
-        ),
-
-        count(*) filter (
-            where status not in (
-                'pending_payment',
-                'paid',
-                'processing',
-                'successful',
-                'failed'
-            )
-        ),
-
-        count(*) filter (
-            where collected
-        ),
-
-        coalesce(
-            sum(price) filter (
-                where collected
-            ),
-            0
-        ),
-
-        coalesce(
-            sum(base_price) filter (
-                where collected
-                  and has_base
-            ),
-            0
-        ),
-
-        count(*) filter (
-            where collected
-              and has_base
-        ),
-
-        count(*) filter (
-            where collected
-              and not has_base
-        ),
-
-        coalesce(
-            sum(price) filter (
-                where collected
-                  and not has_base
-            ),
-            0
-        ),
-
-        coalesce(
-            sum(price) filter (
-                where status = 'failed'
-            ),
-            0
-        ),
-
-        count(*) filter (
-            where collected
-              and datamart_ref is null
-              and status <> 'successful'
-        ),
-
-        coalesce(
-            sum(price) filter (
-                where collected
-                  and datamart_ref is null
-                  and status <> 'successful'
-            ),
-            0
-        ),
-
-        count(*) filter (
-            where collected
-              and is_agent
-        ),
-
-        -- FIXED: FILTER is inside SUM(), then COALESCE wraps the result.
-        coalesce(
-            sum(price) filter (
-                where collected
-                  and is_agent
-            ),
-            0
-        ),
-
-        coalesce(
-            sum(agent_price) filter (
-                where collected
-                  and is_agent
-            ),
-            0
-        ),
-
-        count(*) filter (
-            where collected
-              and not is_agent
-        ),
-
-        -- FIXED: FILTER is inside SUM(), then COALESCE wraps the result.
-        coalesce(
-            sum(price) filter (
-                where collected
-                  and not is_agent
-            ),
-            0
-        )
-
+        count(*)                  filter (where collected and is_agent),
+        coalesce(sum(price),       0) filter (where collected and is_agent),
+        coalesce(sum(agent_price), 0) filter (where collected and is_agent),
+        count(*)                  filter (where collected and not is_agent),
+        coalesce(sum(price),       0) filter (where collected and not is_agent)
     from scoped;
 $$;
 
-revoke all
-on function public.dashxera_order_summary(timestamptz)
-from public, anon, authenticated;
+revoke all on function public.dashxera_order_summary(timestamptz) from public, anon, authenticated;
 
 -- ----------------------------------------------------------------------------
 -- 6. Daily series for the chart — same rules, bucketed by day.
@@ -308,42 +187,18 @@ set search_path = public
 as $$
     select
         date_trunc('day', o.created_at)::date,
-
-        count(*) filter (
-            where o.status <> 'pending_payment'
-        ),
-
-        coalesce(
-            sum(o.price) filter (
-                where o.status <> 'pending_payment'
-            ),
-            0
-        ),
-
-        coalesce(
-            sum(o.base_price) filter (
-                where o.status <> 'pending_payment'
-                  and o.base_price is not null
-            ),
-            0
-        ),
-
-        count(*) filter (
-            where o.status = 'failed'
-        )
-
+        count(*) filter (where o.status <> 'pending_payment'),
+        coalesce(sum(o.price)      filter (where o.status <> 'pending_payment'), 0),
+        coalesce(sum(o.base_price) filter (where o.status <> 'pending_payment'
+                                             and o.base_price is not null), 0),
+        count(*) filter (where o.status = 'failed')
     from public.orders o
-
     where o.created_at >= since_ts
-
     group by 1
-
     order by 1;
 $$;
 
-revoke all
-on function public.dashxera_daily_series(timestamptz)
-from public, anon, authenticated;
+revoke all on function public.dashxera_daily_series(timestamptz) from public, anon, authenticated;
 
 -- ----------------------------------------------------------------------------
 -- 7. Per-agent rollup. agent_id references users(id); there is no separate
@@ -369,68 +224,25 @@ set search_path = public
 as $$
     select
         o.agent_id,
-
-        coalesce(
-            nullif(u.store_name, ''),
-            nullif(u.full_name, ''),
-            u.username,
-            'Agent ' || o.agent_id
-        ),
-
+        coalesce(nullif(u.store_name, ''), nullif(u.full_name, ''), u.username, 'Agent ' || o.agent_id),
         u.username,
-
         count(*),
-
-        coalesce(
-            sum(o.price),
-            0
-        ),
-
-        coalesce(
-            sum(o.agent_price),
-            0
-        ),
-
-        coalesce(
-            sum(o.base_price) filter (
-                where o.base_price is not null
-            ),
-            0
-        ),
-
-        count(*) filter (
-            where o.base_price is not null
-        ),
-
-        count(*) filter (
-            where o.status = 'successful'
-        ),
-
-        count(*) filter (
-            where o.status = 'failed'
-        )
-
+        coalesce(sum(o.price), 0),
+        coalesce(sum(o.agent_price), 0),
+        coalesce(sum(o.base_price) filter (where o.base_price is not null), 0),
+        count(*) filter (where o.base_price is not null),
+        count(*) filter (where o.status = 'successful'),
+        count(*) filter (where o.status = 'failed')
     from public.orders o
-
-    left join public.users u
-        on u.id = o.agent_id
-
+    left join public.users u on u.id = o.agent_id
     where o.created_at >= since_ts
       and o.agent_id is not null
       and o.status <> 'pending_payment'
-
-    group by
-        o.agent_id,
-        u.store_name,
-        u.full_name,
-        u.username
-
+    group by o.agent_id, u.store_name, u.full_name, u.username
     order by 5 desc;
 $$;
 
-revoke all
-on function public.dashxera_agent_summary(timestamptz)
-from public, anon, authenticated;
+revoke all on function public.dashxera_agent_summary(timestamptz) from public, anon, authenticated;
 
 -- ----------------------------------------------------------------------------
 -- 8. Provider activity, derived from real order outcomes rather than a
@@ -452,35 +264,16 @@ security definer
 set search_path = public
 as $$
     select
-        coalesce(
-            nullif(o.dispatch_provider, ''),
-            'UNRECORDED'
-        ),
-
+        coalesce(nullif(o.dispatch_provider, ''), 'UNRECORDED'),
         count(*),
-
-        count(*) filter (
-            where o.status = 'successful'
-        ),
-
-        count(*) filter (
-            where o.status = 'failed'
-        ),
-
-        max(o.created_at) filter (
-            where o.status = 'successful'
-        )
-
+        count(*) filter (where o.status = 'successful'),
+        count(*) filter (where o.status = 'failed'),
+        max(o.created_at) filter (where o.status = 'successful')
     from public.orders o
-
     where o.created_at >= since_ts
       and o.status <> 'pending_payment'
-
     group by 1
-
     order by 2 desc;
 $$;
 
-revoke all
-on function public.dashxera_provider_activity(timestamptz)
-from public, anon, authenticated;
+revoke all on function public.dashxera_provider_activity(timestamptz) from public, anon, authenticated;

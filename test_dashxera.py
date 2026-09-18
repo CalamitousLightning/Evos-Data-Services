@@ -15,7 +15,7 @@ import types
 import logging
 from datetime import datetime, timedelta, timezone
 
-os.environ["ADMIN_SECRET"] = "s3cret"
+os.environ["ADMIN_TOKEN_SECRET"] = "test-token-secret"
 os.environ["PAYSTACK_SECRET_KEY"] = ""
 os.environ["DATAMART_API_KEY"] = ""
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -769,6 +769,76 @@ check("audit endpoint survives", dx.dashxera_audit(
 check("providers endpoint survives", dx.dashxera_providers(days=7, _=ADMIN)["status"] is True)
 check("migration hint given", "migration" in dx.dashxera_audit(
     days=7, order_id=None, page=1, page_size=50, _=ADMIN)["note"])
+
+
+# ============================================================================
+section("[23] require_dashxera_admin — admin_agents-gated login")
+# ============================================================================
+import admin_auth as aa  # noqa: E402
+
+
+class FakeRequest:
+    def __init__(self, headers):
+        self.headers = headers
+
+
+reset_db(orders=[], admin_agents=[{"user_id": 7, "is_active": True, "display_name": "John Admin"}])
+
+good_token = aa.make_admin_token(7)
+actor = dx.require_dashxera_admin(FakeRequest({"Authorization": f"Bearer {good_token}"}))
+check("valid session returns the admin_agents display name", actor == "John Admin", actor)
+
+try:
+    dx.require_dashxera_admin(FakeRequest({}))
+    check("missing Authorization header rejected", False)
+except Exception as exc:
+    check("missing Authorization header rejected", getattr(exc, "status_code", None) == 401, exc)
+
+try:
+    dx.require_dashxera_admin(FakeRequest({"Authorization": "Bearer garbage.garbage"}))
+    check("malformed token rejected", False)
+except Exception as exc:
+    check("malformed token rejected", getattr(exc, "status_code", None) == 401, exc)
+
+try:
+    dx.require_dashxera_admin(FakeRequest({"Authorization": "Bearer " + good_token[:-3] + "xxx"}))
+    check("tampered signature rejected", False)
+except Exception as exc:
+    check("tampered signature rejected", getattr(exc, "status_code", None) == 401, exc)
+
+# The OLD shared-secret header must do nothing now — DashXera no longer
+# has any concept of X-Admin-Secret.
+try:
+    dx.require_dashxera_admin(FakeRequest({"X-Admin-Secret": "whatever-the-old-secret-was"}))
+    check("old shared secret header no longer works", False)
+except Exception as exc:
+    check("old shared secret header no longer works", getattr(exc, "status_code", None) == 401, exc)
+
+# Revocation takes effect on the very next request, same still-valid token.
+DB["admin_agents"][0]["is_active"] = False
+try:
+    dx.require_dashxera_admin(FakeRequest({"Authorization": f"Bearer {good_token}"}))
+    check("revoked admin_agents row blocks a still-valid token", False)
+except Exception as exc:
+    check("revoked admin_agents row blocks a still-valid token",
+          getattr(exc, "status_code", None) == 403, exc)
+DB["admin_agents"][0]["is_active"] = True
+
+# A user with no admin_agents row at all — token is well-formed, but there's
+# nothing to grant access.
+stranger_token = aa.make_admin_token(999)
+try:
+    dx.require_dashxera_admin(FakeRequest({"Authorization": f"Bearer {stranger_token}"}))
+    check("no admin_agents row at all is blocked", False)
+except Exception as exc:
+    check("no admin_agents row at all is blocked", getattr(exc, "status_code", None) == 403, exc)
+
+# A blank display_name still resolves to something usable for the audit log,
+# rather than an empty actor string.
+reset_db(orders=[], admin_agents=[{"user_id": 7, "is_active": True, "display_name": ""}])
+blank_name_token = aa.make_admin_token(7)
+actor = dx.require_dashxera_admin(FakeRequest({"Authorization": f"Bearer {blank_name_token}"}))
+check("blank display_name falls back to admin-<id>", actor == "admin-7", actor)
 
 
 print("\n" + ("ALL PASS" if not FAILS else f"{len(FAILS)} FAILURES:\n  - " + "\n  - ".join(FAILS)))
