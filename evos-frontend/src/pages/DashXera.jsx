@@ -111,6 +111,8 @@ export default function DashXera() {
   const [selected, setSelected] = useState([]);
   const [toast, setToast] = useState(null);
   const [lastSync, setLastSync] = useState(null);
+  const [providerChoice, setProviderChoice] = useState({}); // { [orderId]: "DATAMART" | "" }
+  const [bulkProvider, setBulkProvider] = useState("");
   const timer = useRef(null);
 
   const call = useCallback(
@@ -173,7 +175,11 @@ export default function DashXera() {
         if (section === "undispatched") {
           tasks.push(
             call(`/admin/dashxera/undispatched?days=${days}&page=${undispatchedPage}&page_size=${PAGE_SIZE}`)
-              .then(setUndispatched)
+              .then(setUndispatched),
+            // Needed to populate the "reassign provider" dropdowns below —
+            // the eligible provider list can change (routes get disabled),
+            // so it's fetched fresh rather than reused from another tab.
+            call(`/admin/dashxera/providers?days=${days}`).then(setProviders)
           );
         }
         if (section === "incidents") {
@@ -284,12 +290,22 @@ export default function DashXera() {
   const reprocess = async (orderId) => {
     setBusyIds((prev) => [...prev, orderId]);
     try {
+      // An explicit provider picked in that row's dropdown overrides the
+      // priority chain. The backend still refuses it if it isn't routed for
+      // that order's network, so a bad pick errors instead of silently
+      // falling back to auto.
+      const provider = providerChoice[orderId] || undefined;
       const res = await call(`/admin/dashxera/reprocess/${orderId}`, {
         method: "POST",
-        body: JSON.stringify({ force: false }),
+        body: JSON.stringify({ force: false, provider }),
       });
       if (res.outcome === "success") {
         flash(`Order ${orderId} dispatched via ${res.provider} — ${res.provider_ref}`);
+        setProviderChoice((prev) => {
+          const next = { ...prev };
+          delete next[orderId];
+          return next;
+        });
       } else {
         flash(`Order ${orderId} ${res.outcome}: ${res.reason}`, "warn");
       }
@@ -307,11 +323,16 @@ export default function DashXera() {
     try {
       const res = await call(`/admin/dashxera/reprocess-bulk`, {
         method: "POST",
-        body: JSON.stringify({ order_ids: selected, force: false }),
+        body: JSON.stringify({
+          order_ids: selected,
+          force: false,
+          provider: bulkProvider || undefined,
+        }),
       });
       const parts = Object.entries(res.summary || {}).map(([k, v]) => `${v} ${k}`);
       flash(`${selected.length} orders: ${parts.join(", ")}`);
       setSelected([]);
+      setBulkProvider("");
       await load(true);
     } catch (err) {
       flash(err.message, "warn");
@@ -735,6 +756,17 @@ export default function DashXera() {
             {selected.length > 0 && (
               <div style={styles.bulkBar}>
                 <span>{selected.length} selected</span>
+                <select
+                  style={styles.selectSmall}
+                  value={bulkProvider}
+                  onChange={(e) => setBulkProvider(e.target.value)}
+                  title="Provider to dispatch all selected orders through — leave on Auto to use each order's own priority chain"
+                >
+                  <option value="">Auto (priority chain)</option>
+                  {(providers?.providers || []).map((p) => (
+                    <option key={p.provider} value={p.provider}>{p.provider}</option>
+                  ))}
+                </select>
                 <button style={styles.primaryBtnSmall} onClick={reprocessSelected}>
                   Reprocess selected
                 </button>
@@ -816,10 +848,26 @@ export default function DashXera() {
                             <TdNum>{o.age_hours}h</TdNum>
                             <Td>
                               {o.eligible ? (
-                                <button style={styles.rowBtn(busy)} disabled={busy}
-                                        onClick={() => reprocess(o.id)}>
-                                  {busy ? "Sending…" : "Reprocess"}
-                                </button>
+                                <div style={styles.reprocessCell}>
+                                  <select
+                                    style={styles.selectSmall}
+                                    value={providerChoice[o.id] || ""}
+                                    disabled={busy}
+                                    onChange={(e) =>
+                                      setProviderChoice((prev) => ({ ...prev, [o.id]: e.target.value }))
+                                    }
+                                    title="Reassign the provider this order dispatches through — writes to orders.dispatch_provider on success"
+                                  >
+                                    <option value="">Auto ({o.network} chain)</option>
+                                    {(providers?.providers || []).map((p) => (
+                                      <option key={p.provider} value={p.provider}>{p.provider}</option>
+                                    ))}
+                                  </select>
+                                  <button style={styles.rowBtn(busy)} disabled={busy}
+                                          onClick={() => reprocess(o.id)}>
+                                    {busy ? "Sending…" : "Reprocess"}
+                                  </button>
+                                </div>
                               ) : (
                                 <span style={styles.dim} title={o.eligibility_reason}>
                                   {o.eligibility_reason}
@@ -1259,6 +1307,9 @@ const styles = {
 
   input: { padding: "11px 13px", borderRadius: 10, border: "1px solid rgba(148,163,184,0.2)",
     background: "rgba(2,6,23,0.6)", color: "#e2e8f0", fontSize: 14, outline: "none" },
+  selectSmall: { padding: "5px 8px", borderRadius: 8, border: "1px solid rgba(148,163,184,0.2)",
+    background: "#0f172a", color: "#e2e8f0", fontSize: 11, minWidth: 130 },
+  reprocessCell: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" },
   select: { padding: "10px 12px", borderRadius: 10, border: "1px solid rgba(148,163,184,0.2)",
     background: "rgba(2,6,23,0.6)", color: "#e2e8f0", fontSize: 13.5, outline: "none" },
 
