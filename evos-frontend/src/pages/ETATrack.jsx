@@ -254,7 +254,7 @@ export default function ETATrack({ setPage, backTo = "home" }) {
             </p>
             <button
               style={styles.chatBtn}
-              onClick={() => window.open("https://wa.me/233208718943", "_blank")}
+              onClick={() => window.open("https://wa.me/233537314125", "_blank")}
             >
               Open WhatsApp Chat
             </button>

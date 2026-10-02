@@ -5323,7 +5323,7 @@ async def ussd(request: Request):
         return "END Check orders at:\nhttps://evosdata.netlify.app"
 
     if user_input[0] == "3":
-        return "END EVOS Support:\nWhatsApp: +233208718943"
+        return "END EVOS Support:\nWhatsApp: +233537314125"
 
     return "END Invalid request"
 
@@ -5588,7 +5588,7 @@ async def whatsapp_webhook(request: Request):
         session["step"] = "menu"
         reply = "❌ Order cancelled. Type *menu* to restart."
     elif message == "3":
-        reply = "💬 Support: https://wa.me/233208718943"
+        reply = "💬 Support: https://wa.me/233537314125"
     else:
         reply = "❌ Invalid input. Type *menu*."
 

@@ -152,7 +152,7 @@ export default function Dashboard({ setPage, user }) {
           <div className="db-modal-c">
             <h3>Become an agent</h3>
             <p>You need 20 successful orders to qualify. Message us and we'll get you onboarded.</p>
-            <a className="db-btn db-btn-lime" href="https://wa.me/233208718943?text=Hi, I'd like to become an EVOS agent" target="_blank" rel="noreferrer">
+            <a className="db-btn db-btn-lime" href="https://wa.me/233537314125?text=Hi, I'd like to become an EVOS agent" target="_blank" rel="noreferrer">
               <WhatsAppIcon size={18} /> WhatsApp support
             </a>
             <button className="db-btn db-btn-ghost" onClick={() => setSupportOpen(false)}>Close</button>

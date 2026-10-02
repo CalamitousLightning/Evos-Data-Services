@@ -499,7 +499,7 @@ export default function Home({ setPage, theme }) {
             <div style={styles.agentBtns}>
               <button
                 style={styles.agentWaBtn}
-                onClick={() => window.open("https://wa.me/233208718943?text=Hi, I'd like to become an EVOS Data Service agent", "_blank")}
+                onClick={() => window.open("https://wa.me/233537314125?text=Hi, I'd like to become an EVOS Data Service agent", "_blank")}
               >
                 💬 WhatsApp Us
               </button>
@@ -553,7 +553,7 @@ export default function Home({ setPage, theme }) {
           </div>
           <div>
             <h3 style={styles.footerHead}>Support</h3>
-            <p style={styles.footerMuted}>WhatsApp: 0208718943</p>
+            <p style={styles.footerMuted}>WhatsApp: 0537314125</p>
             <p style={styles.footerMuted}>support@evosdata.xyz</p>
           </div>
         </div>
@@ -605,10 +605,10 @@ export default function Home({ setPage, theme }) {
             </div>
             <p style={styles.chatMsg}>Hi! How can we help you today? Choose an option below 👇</p>
             <div style={styles.chatOptions}>
-              <button style={styles.chatOption} onClick={() => window.open("https://wa.me/233208718943", "_blank")}>
+              <button style={styles.chatOption} onClick={() => window.open("https://wa.me/233537314125", "_blank")}>
                 💬 WhatsApp Chat
               </button>
-              <button style={styles.chatOption} onClick={() => window.open("https://chat.whatsapp.com/CYSA7PRIlK0JklgVtQfhnR", "_blank")}>
+              <button style={styles.chatOption} onClick={() => window.open("https://whatsapp.com/channel/0029VaTrnsZEgGfFXkIcjt1M", "_blank")}>
                 👥 Community
               </button>
               <button style={styles.chatOption} onClick={() => window.location.href = "mailto:support@evosdata.xyz"}>
@@ -629,7 +629,7 @@ export default function Home({ setPage, theme }) {
           <div style={styles.modal}>
             <h2 style={styles.modalTitle}>Support Center</h2>
             {[
-              { label: "💬 WhatsApp Support", url: "https://wa.me/233208718943" },
+              { label: "💬 WhatsApp Support", url: "https://wa.me/233537314125" },
               { label: "👥 Community", url: "https://whatsapp.com/channel/0029VaTrnsZEgGfFXkIcjt1M" },
               { label: "📧 Email Support", mailto: "support@evosdata.xyz" },
             ].map((item, i) => (

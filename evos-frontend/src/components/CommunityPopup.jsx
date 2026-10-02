@@ -99,7 +99,7 @@ export default function CommunityPopup() {
               {!joined && <span className="badge">1</span>}
             </div>
             <h2>Join the <em>EVOS Community</em></h2>
-            <p>Get price drops, restock alerts and quick help straight from our WhatsApp group.</p>
+            <p>Get price drops, restock alerts and quick help straight from our WhatsApp channel.</p>
             <div className="cm-perks">
               <div className="cm-perk"><i>⚡</i> Be first to know about cheap bundle deals</div>
               <div className="cm-perk"><i>🔔</i> Restock &amp; network-status alerts</div>

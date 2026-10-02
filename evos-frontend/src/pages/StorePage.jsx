@@ -1004,11 +1004,11 @@ export default function StorePage({ setPage }) {
             <p style={styles.chatMsg}>Hi! How can we help you? Choose an option 👇</p>
             <div style={styles.chatOptions}>
               <button style={styles.chatOption}
-                onClick={() => window.open("https://wa.me/233208718943", "_blank")}>
+                onClick={() => window.open("https://wa.me/233537314125", "_blank")}>
                 💬 WhatsApp Chat
               </button>
               <button style={styles.chatOption}
-                onClick={() => window.open("https://chat.whatsapp.com/CYSA7PRIlK0JklgVtQfhnR", "_blank")}>
+                onClick={() => window.open("https://whatsapp.com/channel/0029VaTrnsZEgGfFXkIcjt1M", "_blank")}>
                 👥 Community
               </button>
               <button style={styles.chatOption}
