@@ -15,9 +15,9 @@ const STATUS_CONFIG = {
   },
   paid: {
     label: "Payment Confirmed",
-    color: "#38bdf8",
-    bg: "rgba(56,189,248,0.1)",
-    border: "rgba(56,189,248,0.3)",
+    color: "#c8ff3e",
+    bg: "rgba(200,255,62,0.1)",
+    border: "rgba(200,255,62,0.3)",
     eta: "Your order is queued for delivery. Usually starts within 1-2 minutes.",
     icon: "✅",
   },
@@ -204,7 +204,7 @@ export default function ETATrack({ setPage, backTo = "home" }) {
               </div>
               <div style={styles.detailRow}>
                 <span style={styles.detailLabel}>Amount Paid</span>
-                <span style={{ ...styles.detailVal, color: "#38bdf8", fontWeight: 800 }}>
+                <span style={{ ...styles.detailVal, color: "#c8ff3e", fontWeight: 800 }}>
                   GH&#8373; {Number(order.price || 0).toFixed(2)}
                 </span>
               </div>
@@ -218,7 +218,7 @@ export default function ETATrack({ setPage, backTo = "home" }) {
               </div>
               <div style={{ ...styles.detailRow, borderBottom: "none" }}>
                 <span style={styles.detailLabel}>Reference</span>
-                <span style={{ ...styles.detailVal, fontSize: 11, color: "#64748b" }}>
+                <span style={{ ...styles.detailVal, fontSize: 11, color: "#9189b5" }}>
                   {order.evosdata_ref || order.paystack_ref || "—"}
                 </span>
               </div>
@@ -287,7 +287,7 @@ const styles = {
     textAlign: "center",
   },
   sub: {
-    color: "#94a3b8",
+    color: "#b4acd0",
     fontSize: 13,
     textAlign: "center",
     marginBottom: 16,
@@ -302,7 +302,7 @@ const styles = {
   backBtnTop: {
     background: "none",
     border: "none",
-    color: "#38bdf8",
+    color: "#c8ff3e",
     fontSize: 13,
     fontWeight: 700,
     cursor: "pointer",
@@ -328,7 +328,7 @@ const styles = {
     padding: "13px 14px",
     borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.1)",
-    background: "rgba(2,6,23,0.75)",
+    background: "rgba(10,8,20,0.75)",
     color: "white",
     fontSize: 15,
     outline: "none",
@@ -337,7 +337,7 @@ const styles = {
     padding: "13px 20px",
     borderRadius: 12,
     border: "none",
-    background: "linear-gradient(135deg,#38bdf8,#0ea5e9)",
+    background: "linear-gradient(135deg,#c8ff3e,#8fe600)",
     color: "#000",
     fontWeight: 900,
     fontSize: 14,
@@ -354,7 +354,7 @@ const styles = {
     marginBottom: 14,
   },
   card: {
-    background: "rgba(15,23,42,0.88)",
+    background: "rgba(22,17,38,0.88)",
     backdropFilter: "blur(16px)",
     WebkitBackdropFilter: "blur(16px)",
     borderRadius: 18,
@@ -374,7 +374,7 @@ const styles = {
   statusIcon: { fontSize: 18 },
   statusLabel: { fontWeight: 800, fontSize: 14 },
   detailGrid: {
-    background: "rgba(2,6,23,0.5)",
+    background: "rgba(10,8,20,0.5)",
     borderRadius: 12,
     padding: "4px 14px",
     marginBottom: 14,
@@ -387,7 +387,7 @@ const styles = {
     padding: "10px 0",
     borderBottom: "1px solid rgba(255,255,255,0.05)",
   },
-  detailLabel: { fontSize: 12, color: "#64748b" },
+  detailLabel: { fontSize: 12, color: "#9189b5" },
   detailVal: { fontSize: 13, fontWeight: 600, color: "#e5e7eb" },
   etaBox: { padding: "10px 14px", borderRadius: 10 },
   etaText: { fontSize: 12, margin: 0, lineHeight: 1.55, fontWeight: 500 },
@@ -402,7 +402,7 @@ const styles = {
     gap: 10,
   },
   chatPopup: {
-    background: "#0f172a",
+    background: "#161126",
     border: "1px solid rgba(255,255,255,0.1)",
     borderRadius: 16,
     padding: "16px",
@@ -421,14 +421,14 @@ const styles = {
   chatClose: {
     background: "none",
     border: "none",
-    color: "#64748b",
+    color: "#9189b5",
     cursor: "pointer",
     fontSize: 14,
     padding: "2px 6px",
   },
   chatMsg: {
     fontSize: 13,
-    color: "#94a3b8",
+    color: "#b4acd0",
     lineHeight: 1.55,
     margin: "0 0 14px",
   },

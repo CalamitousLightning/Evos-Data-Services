@@ -16,6 +16,15 @@ const FONTS = {
 };
 
 const THEMES = {
+  vybz: {
+    name: "Vybz",
+    accent: "#C8FF3E",
+    bg: "#0A0814", surface: "#161126", surfaceAlt: "#110D1F",
+    line: "rgba(200,255,62,0.22)", lineSoft: "rgba(243,240,251,0.09)", overlay: "243,240,251",
+    gold: "#FFC933", red: "#FF4D8D", green: "#3DDC97",
+    text: "#F3F0FB", muted: "#B4ACD0", faint: "#7A6FA3",
+    ...FONTS,
+  },
   forest: {
     name: "Forest",
     accent: "#FFC933",
@@ -104,22 +113,22 @@ export default function Home({ setPage, theme }) {
   const [imgErrors, setImgErrors] = useState({});
 
   // ===== Site theme (color scheme) picker =====
-  // Defaults to "forest" (the original look), remembers the visitor's
+  // Defaults to "vybz" (the new look), remembers the visitor's
   // choice across visits via localStorage.
   const [themeKey, setThemeKey] = useState(() => {
     try {
-      const saved = localStorage.getItem("evosSiteTheme");
-      return saved && THEMES[saved] ? saved : "forest";
+      const saved = localStorage.getItem("evosSiteTheme2");
+      return saved && THEMES[saved] ? saved : "vybz";
     } catch {
-      return "forest";
+      return "vybz";
     }
   });
   const [themePanelOpen, setThemePanelOpen] = useState(false);
-  const T = THEMES[themeKey] || THEMES.forest;
+  const T = THEMES[themeKey] || THEMES.vybz;
   const styles = useMemo(() => buildStyles(T), [themeKey]);
 
   useEffect(() => {
-    try { localStorage.setItem("evosSiteTheme", themeKey); } catch { /* ignore */ }
+    try { localStorage.setItem("evosSiteTheme2", themeKey); } catch { /* ignore */ }
   }, [themeKey]);
 
   // Two cross-promo notifications from the Evoxera Technology family.
@@ -670,10 +679,10 @@ export default function Home({ setPage, theme }) {
 
 function buildStyles(T) {
   return {
-  container: { position: "relative", fontFamily: T.body, color: T.text, background: T.bg, borderRadius: 24 },
+  container: { position: "relative", fontFamily: T.body, color: T.text, background: "transparent", padding: "14px 14px 0", maxWidth: "100%", overflowX: "clip" },
   // Full-viewport layer so switching themes recolors the whole visible page,
   // not just this rounded content card sitting on top of the app shell.
-  pageBackdrop: { position: "fixed", inset: 0, background: T.bg, zIndex: -1, pointerEvents: "none" },
+  pageBackdrop: { position: "fixed", inset: 0, zIndex: -1, pointerEvents: "none", background: `radial-gradient(60% 45% at 12% 0%, ${T.accent}1f, transparent 70%), radial-gradient(55% 45% at 100% 18%, #8b5cf633, transparent 70%), radial-gradient(50% 40% at 50% 100%, #ff4d8d1a, transparent 70%), ${T.bg}` },
 
   // ===================== EVOSGPT PROMO NOTIFICATION =====================
   promoNotif: {
@@ -682,7 +691,7 @@ function buildStyles(T) {
     right: 20,
     zIndex: 9998,
     width: 300,
-    background: `linear-gradient(145deg, ${T.surfaceAlt}, #1a1408)`,
+    background: `linear-gradient(145deg, ${T.surfaceAlt}, #1b1430)`,
     border: `1px solid ${T.accent}4d`,
     borderRadius: 20,
     padding: "18px 16px 14px",
@@ -711,8 +720,8 @@ function buildStyles(T) {
   // HERO
   hero: {
     textAlign: "center",
-    padding: "64px 20px 44px",
-    borderRadius: 28,
+    padding: "52px 18px 40px",
+    borderRadius: 32,
     marginBottom: 40,
     background: `radial-gradient(120% 100% at 50% 0%, ${T.surface} 0%, ${T.bg} 60%)`,
     border: `1px solid ${T.lineSoft}`,
@@ -737,14 +746,14 @@ function buildStyles(T) {
   title: {
     position: "relative",
     fontFamily: T.display,
-    fontSize: "clamp(36px, 6.4vw, 62px)",
-    fontWeight: 700,
+    fontSize: "clamp(38px, 9vw, 72px)",
+    fontWeight: 800,
     lineHeight: 1.06,
     letterSpacing: "-0.01em",
     marginBottom: 16,
     color: T.text,
   },
-  highlight: { color: T.accent },
+  highlight: { background: `linear-gradient(90deg, ${T.accent}, #ff4d8d 85%)`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" },
   subtitle: {
     position: "relative",
     fontSize: 16.5, color: T.muted, maxWidth: 480,
@@ -944,7 +953,7 @@ function buildStyles(T) {
   footerCopy: { textAlign: "center", fontSize: 12, color: T.faint, paddingTop: 16, borderTop: `1px solid ${T.lineSoft}` },
 
   // FLOATING SUPPORT
-  floatWrap: { position: "fixed", bottom: 24, right: 20, zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 },
+  floatWrap: { position: "fixed", bottom: "calc(var(--dock, 0px) + 20px)", right: 16, zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 },
   chatPopup: {
     background: T.surfaceAlt, border: `1px solid ${T.lineSoft}`, borderRadius: 18,
     padding: 18, width: 270, boxShadow: "0 8px 32px rgba(0,0,0,0.5)", fontFamily: T.body,
@@ -984,7 +993,7 @@ function buildStyles(T) {
   },
 
   // THEME SWITCHER
-  themeFloatWrap: { position: "fixed", bottom: 24, left: 20, zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 10 },
+  themeFloatWrap: { position: "fixed", bottom: "calc(var(--dock, 0px) + 86px)", left: "var(--fab-left, 14px)", zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 10 },
   themeFloatBtn: {
     width: 46, height: 46, borderRadius: "50%", border: `1px solid ${T.lineSoft}`,
     background: T.surfaceAlt, color: T.text, fontSize: 19, cursor: "pointer",

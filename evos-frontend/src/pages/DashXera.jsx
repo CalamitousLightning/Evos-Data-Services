@@ -44,11 +44,11 @@ const cedi = (n) =>
 
 const HEALTH = {
   HEALTHY: { color: "#4ade80", bg: "rgba(34,197,94,0.12)" },
-  IDLE: { color: "#64748b", bg: "rgba(100,116,139,0.12)" },
+  IDLE: { color: "#9189b5", bg: "rgba(100,116,139,0.12)" },
   DEGRADED: { color: "#fbbf24", bg: "rgba(245,158,11,0.12)" },
   LOW: { color: "#fb923c", bg: "rgba(249,115,22,0.14)" },
   ERROR: { color: "#f87171", bg: "rgba(239,68,68,0.12)" },
-  UNKNOWN: { color: "#64748b", bg: "rgba(100,116,139,0.12)" },
+  UNKNOWN: { color: "#9189b5", bg: "rgba(100,116,139,0.12)" },
 };
 
 const KIND_LABELS = {
@@ -488,11 +488,11 @@ export default function DashXera() {
             )}
 
             <div style={styles.kpiGrid}>
-              <Kpi label="Total orders" value={counts?.total} tone="#e2e8f0"
+              <Kpi label="Total orders" value={counts?.total} tone="#e9e5f6"
                    foot={`Last ${days} days`} />
               <Kpi label="Successful" value={counts?.successful} tone="#4ade80"
                    foot={`${summary?.quality?.success_rate ?? 0}% of settled`} />
-              <Kpi label="Processing" value={counts?.processing} tone="#38bdf8"
+              <Kpi label="Processing" value={counts?.processing} tone="#c8ff3e"
                    foot={counts?.awaiting_payment
                      ? `${counts.awaiting_payment} awaiting payment`
                      : "All payments settled"} />
@@ -501,9 +501,9 @@ export default function DashXera() {
             </div>
 
             <div style={styles.kpiGrid}>
-              <Kpi label="Total sold" value={fin && cedi(fin.total_sold)} tone="#e2e8f0"
+              <Kpi label="Total sold" value={fin && cedi(fin.total_sold)} tone="#e9e5f6"
                    foot={`${fin?.paid_orders ?? 0} paid orders`} small />
-              <Kpi label="Base cost" value={fin && cedi(fin.total_base_cost)} tone="#94a3b8"
+              <Kpi label="Base cost" value={fin && cedi(fin.total_base_cost)} tone="#b4acd0"
                    foot={fin?.estimated_base_cost
                      ? `${cedi(fin.estimated_base_cost)} estimated`
                      : "All recorded"} small />
@@ -511,7 +511,7 @@ export default function DashXera() {
                    tone={fin && fin.gross_margin >= 0 ? "#4ade80" : "#f87171"}
                    foot={fin ? `${fin.margin_pct}% of takings` : ""} small />
               <Kpi label="Paid / undispatched" value={counts?.undispatched}
-                   tone={counts?.undispatched ? "#fb923c" : "#64748b"}
+                   tone={counts?.undispatched ? "#fb923c" : "#9189b5"}
                    foot={fin ? cedi(fin.undispatched_value) : ""} small />
             </div>
 
@@ -534,17 +534,17 @@ export default function DashXera() {
         {section === "financials" && fin && (
           <>
             <div style={styles.explainer}>
-              Three different numbers. <strong style={{ color: "#e2e8f0" }}>Sold</strong> is what
-              the customer was charged. <strong style={{ color: "#e2e8f0" }}>Base cost</strong> is
-              what the bundle cost us. <strong style={{ color: "#e2e8f0" }}>Agent price</strong> is
+              Three different numbers. <strong style={{ color: "#e9e5f6" }}>Sold</strong> is what
+              the customer was charged. <strong style={{ color: "#e9e5f6" }}>Base cost</strong> is
+              what the bundle cost us. <strong style={{ color: "#e9e5f6" }}>Agent price</strong> is
               the agent's tier price. They are never substituted for one another.
             </div>
 
             <Panel title={`Selected period — last ${days} days`}>
               <Row label="Total sold" hint="SUM of orders.price, excluding abandoned checkouts"
-                   value={cedi(fin.total_sold)} tone="#e2e8f0" big />
+                   value={cedi(fin.total_sold)} tone="#e9e5f6" big />
               <Row label="Total base cost" hint="Recorded historical cost plus estimate for the gap"
-                   value={cedi(fin.total_base_cost)} tone="#94a3b8" />
+                   value={cedi(fin.total_base_cost)} tone="#b4acd0" />
               <Divider />
               <Row label="Gross margin" value={cedi(fin.gross_margin)}
                    tone={fin.gross_margin >= 0 ? "#4ade80" : "#f87171"}
@@ -553,7 +553,7 @@ export default function DashXera() {
 
             <Panel title="Cost breakdown"
                    note="Recorded and estimated are kept apart on purpose">
-              <Row label="Recorded base cost" value={cedi(fin.recorded_base_cost)} tone="#cbd5e1"
+              <Row label="Recorded base cost" value={cedi(fin.recorded_base_cost)} tone="#d9d4ec"
                    hint={`${fin.cost_coverage.orders_with_recorded_cost} orders carry their own historical cost`} />
               <Row label="Estimated base cost" value={cedi(fin.estimated_base_cost)} tone="#fbbf24"
                    hint={`${fin.cost_coverage.orders_without_recorded_cost} orders priced at today's cost list`} />
@@ -569,13 +569,13 @@ export default function DashXera() {
             </Panel>
 
             <Panel title="Averages and split">
-              <Row label="Average selling price" value={cedi(fin.average_sold)} tone="#cbd5e1" />
-              <Row label="Average base price" value={cedi(fin.average_base_cost)} tone="#94a3b8"
+              <Row label="Average selling price" value={cedi(fin.average_sold)} tone="#d9d4ec" />
+              <Row label="Average base price" value={cedi(fin.average_base_cost)} tone="#b4acd0"
                    hint="Across orders with a recorded cost" />
               <Divider />
               <Row label="Agent sales" value={cedi(fin.agent_sold)} tone="#a78bfa"
                    hint={`${fin.agent_orders} orders · agent price total ${cedi(fin.agent_price_total)}`} />
-              <Row label="Direct sales" value={cedi(fin.direct_sold)} tone="#38bdf8"
+              <Row label="Direct sales" value={cedi(fin.direct_sold)} tone="#c8ff3e"
                    hint={`${fin.direct_orders} orders`} />
             </Panel>
 
@@ -591,9 +591,9 @@ export default function DashXera() {
             <div style={styles.kpiGrid}>
               <Kpi label="Agents with sales" value={agents?.agent_count} tone="#a78bfa" small />
               <Kpi label="Sold through agents" value={agents && cedi(agents.total_agent_sold)}
-                   tone="#e2e8f0" small />
+                   tone="#e9e5f6" small />
               <Kpi label="Agent price total" value={agents && cedi(agents.total_agent_price)}
-                   tone="#94a3b8" small foot="What agents were charged" />
+                   tone="#b4acd0" small foot="What agents were charged" />
             </div>
 
             <Panel title="Agent sales" note={agents?.note}>
@@ -622,7 +622,7 @@ export default function DashXera() {
                         <TdNum>{a.orders}</TdNum>
                         <TdNum>{cedi(a.sold)}</TdNum>
                         <TdNum style={{ color: "#a78bfa" }}>{cedi(a.agent_price_total)}</TdNum>
-                        <TdNum style={{ color: "#94a3b8" }}>
+                        <TdNum style={{ color: "#b4acd0" }}>
                           {cedi(a.recorded_base_cost)}
                           {a.cost_coverage_pct < 100 && (
                             <div style={styles.dim}>{a.cost_coverage_pct}% recorded</div>
@@ -707,7 +707,7 @@ export default function DashXera() {
                           </Td>
                           <Td>{o.network} {o.bundle}</Td>
                           <TdNum>{cedi(o.price)}</TdNum>
-                          <TdNum style={{ color: "#94a3b8" }}>
+                          <TdNum style={{ color: "#b4acd0" }}>
                             {o.base_cost_source === "missing" ? "—" : cedi(o.base_cost)}
                             {o.base_cost_source === "estimated" && (
                               <div style={styles.estTag}>estimated</div>
@@ -825,7 +825,7 @@ export default function DashXera() {
                             </Td>
                             <Td>{o.network} {o.bundle}</Td>
                             <TdNum>{cedi(o.price)}</TdNum>
-                            <TdNum style={{ color: "#94a3b8" }}>
+                            <TdNum style={{ color: "#b4acd0" }}>
                               {o.base_cost_source === "missing" ? "—" : cedi(o.base_cost)}
                             </TdNum>
                             <Td>
@@ -913,11 +913,11 @@ export default function DashXera() {
                            ? `Below the ${cedi(providers.paystack.threshold)} floor`
                            : providers.paystack.note} />
                   ) : (
-                    <Row label="Balance" value="Unavailable" tone="#64748b"
+                    <Row label="Balance" value="Unavailable" tone="#9189b5"
                          hint={providers.paystack.reason} />
                   )}
                   <Row label="Open incidents" value={providers.paystack.open_incidents}
-                       tone={providers.paystack.open_incidents ? "#fbbf24" : "#64748b"} />
+                       tone={providers.paystack.open_incidents ? "#fbbf24" : "#9189b5"} />
                 </>
               )}
             </Panel>
@@ -979,7 +979,7 @@ export default function DashXera() {
             <EcosystemGrid ecosystem={ecosystem} detailed />
             <div style={styles.totalLine}>
               Connected products total{" "}
-              <strong style={{ color: "#e2e8f0" }}>{cedi(ecosystem?.total_revenue)}</strong>
+              <strong style={{ color: "#e9e5f6" }}>{cedi(ecosystem?.total_revenue)}</strong>
             </div>
           </Panel>
         )}
@@ -1104,11 +1104,11 @@ function StatusPill({ status }) {
   const map = {
     successful: "#4ade80",
     failed: "#f87171",
-    processing: "#38bdf8",
-    paid: "#38bdf8",
-    pending_payment: "#94a3b8",
+    processing: "#c8ff3e",
+    paid: "#c8ff3e",
+    pending_payment: "#b4acd0",
   };
-  const color = map[status] || "#94a3b8";
+  const color = map[status] || "#b4acd0";
   return (
     <span style={{ ...styles.pill, color, background: `${color}1f` }}>{status}</span>
   );
@@ -1161,7 +1161,7 @@ function ProviderTable({ providers, detailed }) {
                 )}
               </Td>
               <TdNum>{p.orders}</TdNum>
-              <TdNum style={{ color: p.failed_orders ? "#f87171" : "#64748b" }}>
+              <TdNum style={{ color: p.failed_orders ? "#f87171" : "#9189b5" }}>
                 {p.failed_orders}
                 {p.orders > 0 && <div style={styles.dim}>{p.failure_rate_pct}%</div>}
               </TdNum>
@@ -1207,7 +1207,7 @@ function ProviderTable({ providers, detailed }) {
 
 function EcosystemGrid({ ecosystem, detailed }) {
   const meta = [
-    ["evosdata", "EVOSDATA", "#38bdf8", "orders"],
+    ["evosdata", "EVOSDATA", "#c8ff3e", "orders"],
     ["evosgpt", "EVOSGPT", "#a78bfa", "upgrades"],
     ["evoshub", "EVOSHUB", "#fbbf24", "projects"],
     ["xera", "XERA", "#34d399", "purchases"],
@@ -1266,14 +1266,14 @@ function Chart({ series }) {
   return (
     <div>
       <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={styles.chartSvg}>
-        <polyline points={line("sold")} fill="none" stroke="#38bdf8" strokeWidth="2"
+        <polyline points={line("sold")} fill="none" stroke="#c8ff3e" strokeWidth="2"
                   vectorEffect="non-scaling-stroke" />
-        <polyline points={line("base_cost")} fill="none" stroke="#64748b" strokeWidth="1.5"
+        <polyline points={line("base_cost")} fill="none" stroke="#9189b5" strokeWidth="1.5"
                   strokeDasharray="4 4" vectorEffect="non-scaling-stroke" />
       </svg>
       <div style={styles.chartLegend}>
-        <span><span style={{ ...styles.swatch, background: "#38bdf8" }} />Sold</span>
-        <span><span style={{ ...styles.swatch, background: "#64748b" }} />Base cost</span>
+        <span><span style={{ ...styles.swatch, background: "#c8ff3e" }} />Sold</span>
+        <span><span style={{ ...styles.swatch, background: "#9189b5" }} />Base cost</span>
         <span style={{ marginLeft: "auto" }}>Best day: {peak.date} · {cedi(peak.sold)}</span>
       </div>
     </div>
@@ -1283,8 +1283,8 @@ function Chart({ series }) {
 /* ================================ styles ================================ */
 
 const card = {
-  background: "rgba(15,23,42,0.72)",
-  border: "1px solid rgba(56,189,248,0.12)",
+  background: "rgba(22,17,38,0.72)",
+  border: "1px solid rgba(200,255,62,0.12)",
   borderRadius: 14,
 };
 
@@ -1292,54 +1292,54 @@ const styles = {
   shell: {
     display: "flex",
     minHeight: "100vh",
-    color: "#e2e8f0",
+    color: "#e9e5f6",
     fontFamily: "ui-sans-serif, system-ui, Arial",
   },
 
   gate: { minHeight: "70vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 },
   gateCard: { ...card, padding: 28, width: "100%", maxWidth: 380, display: "flex", flexDirection: "column", gap: 12 },
   gateMark: { width: 44, height: 44, borderRadius: 12, display: "grid", placeItems: "center",
-    background: "linear-gradient(135deg,#38bdf8,#6366f1)", color: "#020617", fontWeight: 900, fontSize: 16 },
+    background: "linear-gradient(135deg,#c8ff3e,#8b5cf6)", color: "#0a0814", fontWeight: 900, fontSize: 16 },
   gateTitle: { margin: 0, fontSize: 24, fontWeight: 800, letterSpacing: "-0.5px" },
-  gateSub: { margin: 0, fontSize: 13, color: "#94a3b8", lineHeight: 1.5 },
+  gateSub: { margin: 0, fontSize: 13, color: "#b4acd0", lineHeight: 1.5 },
   gateError: { fontSize: 13, color: "#f87171" },
-  gateFoot: { margin: "4px 0 0", fontSize: 11.5, color: "#475569", lineHeight: 1.5 },
+  gateFoot: { margin: "4px 0 0", fontSize: 11.5, color: "#7a6fa3", lineHeight: 1.5 },
 
   input: { padding: "11px 13px", borderRadius: 10, border: "1px solid rgba(148,163,184,0.2)",
-    background: "rgba(2,6,23,0.6)", color: "#e2e8f0", fontSize: 14, outline: "none" },
+    background: "rgba(10,8,20,0.6)", color: "#e9e5f6", fontSize: 14, outline: "none" },
   selectSmall: { padding: "5px 8px", borderRadius: 8, border: "1px solid rgba(148,163,184,0.2)",
-    background: "#0f172a", color: "#e2e8f0", fontSize: 11, minWidth: 130 },
+    background: "#161126", color: "#e9e5f6", fontSize: 11, minWidth: 130 },
   reprocessCell: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" },
   select: { padding: "10px 12px", borderRadius: 10, border: "1px solid rgba(148,163,184,0.2)",
-    background: "rgba(2,6,23,0.6)", color: "#e2e8f0", fontSize: 13.5, outline: "none" },
+    background: "rgba(10,8,20,0.6)", color: "#e9e5f6", fontSize: 13.5, outline: "none" },
 
   navScrim: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 190 },
   sidebar: (open) => ({
     position: "fixed", top: 0, left: 0, height: "100vh", width: 230, zIndex: 200,
-    background: "rgba(2,6,23,0.97)", borderRight: "1px solid rgba(56,189,248,0.12)",
+    background: "rgba(10,8,20,0.97)", borderRight: "1px solid rgba(200,255,62,0.12)",
     display: "flex", flexDirection: "column", padding: "18px 12px",
     transform: open ? "translateX(0)" : "translateX(-100%)",
     transition: "transform 0.25s ease",
   }),
   sidebarTop: { display: "flex", alignItems: "center", gap: 10, padding: "0 6px 16px" },
   mark: { width: 32, height: 32, borderRadius: 9, display: "grid", placeItems: "center",
-    background: "linear-gradient(135deg,#38bdf8,#6366f1)", color: "#020617", fontWeight: 900, fontSize: 13 },
+    background: "linear-gradient(135deg,#c8ff3e,#8b5cf6)", color: "#0a0814", fontWeight: 900, fontSize: 13 },
   sidebarBrand: { fontWeight: 800, fontSize: 15, letterSpacing: "-0.3px" },
-  sidebarSub: { fontSize: 10.5, color: "#475569" },
+  sidebarSub: { fontSize: 10.5, color: "#7a6fa3" },
   nav: { display: "flex", flexDirection: "column", gap: 2, flex: 1, overflowY: "auto" },
   navBtn: (active) => ({
     display: "flex", alignItems: "center", gap: 10, padding: "10px 11px", borderRadius: 9,
     border: "none", cursor: "pointer", fontSize: 13.5, width: "100%",
-    background: active ? "rgba(56,189,248,0.12)" : "transparent",
-    color: active ? "#38bdf8" : "#94a3b8", fontWeight: active ? 700 : 500,
+    background: active ? "rgba(200,255,62,0.12)" : "transparent",
+    color: active ? "#c8ff3e" : "#b4acd0", fontWeight: active ? 700 : 500,
   }),
   navIcon: { width: 16, textAlign: "center", fontSize: 13, opacity: 0.8 },
   navBadge: { fontSize: 10.5, fontWeight: 800, color: "#fb923c",
     background: "rgba(249,115,22,0.16)", padding: "2px 7px", borderRadius: 6 },
-  signedInAs: { marginTop: 10, padding: "0 6px", fontSize: 11, color: "#475569" },
+  signedInAs: { marginTop: 10, padding: "0 6px", fontSize: 11, color: "#7a6fa3" },
   signOutBtn: { marginTop: 6, padding: "10px 12px", borderRadius: 9, cursor: "pointer",
     fontSize: 13, fontWeight: 600, background: "rgba(148,163,184,0.08)",
-    border: "1px solid rgba(148,163,184,0.14)", color: "#94a3b8" },
+    border: "1px solid rgba(148,163,184,0.14)", color: "#b4acd0" },
 
   main: { flex: 1, padding: "18px 16px 80px", display: "flex", flexDirection: "column",
     gap: 18, maxWidth: 1280, margin: "0 auto", width: "100%", minWidth: 0 },
@@ -1347,16 +1347,16 @@ const styles = {
   header: { display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "space-between", alignItems: "flex-end" },
   headerLeft: { display: "flex", alignItems: "center", gap: 12 },
   navToggle: { width: 38, height: 38, borderRadius: 10, cursor: "pointer", fontSize: 16,
-    background: "rgba(148,163,184,0.08)", border: "1px solid rgba(148,163,184,0.16)", color: "#94a3b8" },
+    background: "rgba(148,163,184,0.08)", border: "1px solid rgba(148,163,184,0.16)", color: "#b4acd0" },
   title: { margin: 0, fontSize: 22, fontWeight: 800, letterSpacing: "-0.5px" },
-  subtitle: { margin: "4px 0 0", fontSize: 11.5, color: "#64748b" },
+  subtitle: { margin: "4px 0 0", fontSize: 11.5, color: "#9189b5" },
 
   rangeGroup: { display: "flex", gap: 4, padding: 4, borderRadius: 11,
-    background: "rgba(15,23,42,0.8)", border: "1px solid rgba(148,163,184,0.12)" },
+    background: "rgba(22,17,38,0.8)", border: "1px solid rgba(148,163,184,0.12)" },
   rangeBtn: (active) => ({ padding: "6px 12px", borderRadius: 8, border: "none", cursor: "pointer",
     fontSize: 13, fontWeight: 700,
-    background: active ? "rgba(56,189,248,0.16)" : "transparent",
-    color: active ? "#38bdf8" : "#64748b" }),
+    background: active ? "rgba(200,255,62,0.16)" : "transparent",
+    color: active ? "#c8ff3e" : "#9189b5" }),
 
   errorBar: { ...card, padding: "12px 14px", borderColor: "rgba(239,68,68,0.3)",
     background: "rgba(239,68,68,0.08)", color: "#f87171", fontSize: 13 },
@@ -1371,26 +1371,26 @@ const styles = {
 
   kpiGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 },
   kpi: { ...card, padding: "15px 15px 13px" },
-  kpiLabel: { fontSize: 11.5, color: "#64748b", fontWeight: 600 },
+  kpiLabel: { fontSize: 11.5, color: "#9189b5", fontWeight: 600 },
   kpiValue: { fontSize: 30, fontWeight: 800, letterSpacing: "-1px", marginTop: 6, lineHeight: 1 },
   kpiValueSmall: { fontSize: 20, fontWeight: 800, letterSpacing: "-0.5px", marginTop: 6, lineHeight: 1.15 },
-  kpiFoot: { fontSize: 11, color: "#475569", marginTop: 7, lineHeight: 1.4 },
+  kpiFoot: { fontSize: 11, color: "#7a6fa3", marginTop: 7, lineHeight: 1.4 },
 
   panel: { ...card, padding: 17 },
   panelHead: { display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "space-between",
     alignItems: "baseline", marginBottom: 12 },
-  panelTitle: { margin: 0, fontSize: 15, fontWeight: 700, color: "#cbd5e1" },
-  panelNote: { fontSize: 11.5, color: "#475569", maxWidth: 420, textAlign: "right" },
+  panelTitle: { margin: 0, fontSize: 15, fontWeight: 700, color: "#d9d4ec" },
+  panelNote: { fontSize: 11.5, color: "#7a6fa3", maxWidth: 420, textAlign: "right" },
 
-  explainer: { ...card, padding: "13px 15px", fontSize: 13, color: "#94a3b8", lineHeight: 1.6,
-    borderColor: "rgba(56,189,248,0.16)" },
+  explainer: { ...card, padding: "13px 15px", fontSize: 13, color: "#b4acd0", lineHeight: 1.6,
+    borderColor: "rgba(200,255,62,0.16)" },
   caveat: { marginTop: 12, padding: "10px 12px", borderRadius: 10, fontSize: 12,
     color: "#fcd34d", background: "rgba(245,158,11,0.08)",
     border: "1px solid rgba(245,158,11,0.22)", lineHeight: 1.5 },
 
   row: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", gap: 12 },
-  rowLabel: { fontSize: 13.5, color: "#94a3b8", fontWeight: 600 },
-  rowHint: { fontSize: 11.5, color: "#475569", marginTop: 2, maxWidth: 420, lineHeight: 1.4 },
+  rowLabel: { fontSize: 13.5, color: "#b4acd0", fontWeight: 600 },
+  rowHint: { fontSize: 11.5, color: "#7a6fa3", marginTop: 2, maxWidth: 420, lineHeight: 1.4 },
   rowValue: { fontSize: 17, fontWeight: 700, whiteSpace: "nowrap" },
   rowValueBig: { fontSize: 25, fontWeight: 800, letterSpacing: "-0.5px", whiteSpace: "nowrap" },
   divider: { height: 1, background: "rgba(148,163,184,0.12)", margin: "6px 0" },
@@ -1399,19 +1399,19 @@ const styles = {
 
   tableWrap: { overflowX: "auto" },
   table: { width: "100%", borderCollapse: "collapse", fontSize: 12.5 },
-  th: { textAlign: "left", padding: "10px 12px", color: "#64748b", fontWeight: 600, fontSize: 11.5,
+  th: { textAlign: "left", padding: "10px 12px", color: "#9189b5", fontWeight: 600, fontSize: 11.5,
     borderBottom: "1px solid rgba(148,163,184,0.12)", whiteSpace: "nowrap" },
-  thNum: { textAlign: "right", padding: "10px 12px", color: "#64748b", fontWeight: 600, fontSize: 11.5,
+  thNum: { textAlign: "right", padding: "10px 12px", color: "#9189b5", fontWeight: 600, fontSize: 11.5,
     borderBottom: "1px solid rgba(148,163,184,0.12)", whiteSpace: "nowrap" },
   td: { padding: "10px 12px", borderBottom: "1px solid rgba(148,163,184,0.06)",
-    color: "#cbd5e1", verticalAlign: "top" },
+    color: "#d9d4ec", verticalAlign: "top" },
   tdNum: { padding: "10px 12px", borderBottom: "1px solid rgba(148,163,184,0.06)",
-    color: "#cbd5e1", textAlign: "right", whiteSpace: "nowrap", verticalAlign: "top" },
+    color: "#d9d4ec", textAlign: "right", whiteSpace: "nowrap", verticalAlign: "top" },
   rowMuted: { opacity: 0.55 },
 
-  strong: { fontWeight: 700, color: "#e2e8f0" },
-  dim: { fontSize: 11, color: "#64748b" },
-  ref: { fontSize: 10.5, color: "#475569", marginTop: 2, wordBreak: "break-all", maxWidth: 150 },
+  strong: { fontWeight: 700, color: "#e9e5f6" },
+  dim: { fontSize: 11, color: "#9189b5" },
+  ref: { fontSize: 10.5, color: "#7a6fa3", marginTop: 2, wordBreak: "break-all", maxWidth: 150 },
   estTag: { fontSize: 10, color: "#fbbf24", marginTop: 3 },
   walletTag: { fontSize: 10, color: "#a78bfa", marginTop: 3 },
   rowError: { fontSize: 10.5, color: "#f87171", marginTop: 4, maxWidth: 170, lineHeight: 1.35 },
@@ -1419,38 +1419,38 @@ const styles = {
   pill: { display: "inline-block", padding: "3px 9px", borderRadius: 7, fontSize: 10.5, fontWeight: 700 },
   outcomePill: (outcome) => ({
     display: "inline-block", padding: "3px 9px", borderRadius: 7, fontSize: 10.5, fontWeight: 700,
-    color: outcome === "success" ? "#4ade80" : outcome === "failed" ? "#f87171" : "#94a3b8",
+    color: outcome === "success" ? "#4ade80" : outcome === "failed" ? "#f87171" : "#b4acd0",
     background: outcome === "success" ? "rgba(34,197,94,0.12)"
       : outcome === "failed" ? "rgba(239,68,68,0.12)" : "rgba(148,163,184,0.12)",
   }),
 
   rowBtn: (busy) => ({ padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700,
     cursor: busy ? "default" : "pointer", opacity: busy ? 0.55 : 1,
-    background: "rgba(56,189,248,0.12)", border: "1px solid rgba(56,189,248,0.3)",
-    color: "#38bdf8", whiteSpace: "nowrap" }),
+    background: "rgba(200,255,62,0.12)", border: "1px solid rgba(200,255,62,0.3)",
+    color: "#c8ff3e", whiteSpace: "nowrap" }),
   primaryBtn: { padding: "12px 16px", borderRadius: 10, border: "none", cursor: "pointer",
-    fontSize: 14, fontWeight: 800, background: "linear-gradient(135deg,#38bdf8,#0ea5e9)", color: "#020617" },
+    fontSize: 14, fontWeight: 800, background: "linear-gradient(135deg,#c8ff3e,#8fe600)", color: "#0a0814" },
   primaryBtnSmall: { padding: "7px 14px", borderRadius: 9, border: "none", cursor: "pointer",
-    fontSize: 12.5, fontWeight: 700, background: "linear-gradient(135deg,#38bdf8,#0ea5e9)", color: "#020617" },
-  linkBtn: { background: "none", border: "none", color: "#38bdf8", cursor: "pointer",
+    fontSize: 12.5, fontWeight: 700, background: "linear-gradient(135deg,#c8ff3e,#8fe600)", color: "#0a0814" },
+  linkBtn: { background: "none", border: "none", color: "#c8ff3e", cursor: "pointer",
     fontSize: 11.5, fontWeight: 600, padding: 0, marginLeft: 10 },
 
   pager: { display: "flex", alignItems: "center", justifyContent: "space-between",
     gap: 10, marginTop: 12, flexWrap: "wrap" },
   pagerBtn: (disabled) => ({ padding: "7px 14px", borderRadius: 9, fontSize: 12.5, fontWeight: 600,
     cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.4 : 1,
-    background: "rgba(148,163,184,0.08)", border: "1px solid rgba(148,163,184,0.16)", color: "#94a3b8" }),
+    background: "rgba(148,163,184,0.08)", border: "1px solid rgba(148,163,184,0.16)", color: "#b4acd0" }),
 
   bulkBar: { ...card, padding: "10px 14px", display: "flex", alignItems: "center", gap: 12,
-    fontSize: 13, color: "#94a3b8" },
+    fontSize: 13, color: "#b4acd0" },
 
   productGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 },
-  product: { padding: 14, borderRadius: 12, background: "rgba(2,6,23,0.5)",
+  product: { padding: 14, borderRadius: 12, background: "rgba(10,8,20,0.5)",
     border: "1px solid rgba(148,163,184,0.1)" },
   productName: { fontSize: 12, fontWeight: 800, letterSpacing: "0.3px" },
-  productValue: { fontSize: 20, fontWeight: 800, marginTop: 7, color: "#e2e8f0", letterSpacing: "-0.5px" },
-  productOffline: { fontSize: 15, fontWeight: 700, marginTop: 7, color: "#475569" },
-  totalLine: { fontSize: 13, color: "#64748b", marginTop: 14 },
+  productValue: { fontSize: 20, fontWeight: 800, marginTop: 7, color: "#e9e5f6", letterSpacing: "-0.5px" },
+  productOffline: { fontSize: 15, fontWeight: 700, marginTop: 7, color: "#7a6fa3" },
+  totalLine: { fontSize: 13, color: "#9189b5", marginTop: 14 },
 
   incidentList: { display: "flex", flexDirection: "column", gap: 9 },
   incident: (severity) => ({
@@ -1461,17 +1461,17 @@ const styles = {
   incidentHead: { display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" },
   incidentKind: (severity) => ({ fontSize: 12.5, fontWeight: 800,
     color: severity === "critical" ? "#f87171" : "#fbbf24" }),
-  incidentCount: { fontSize: 10.5, color: "#e2e8f0", background: "rgba(148,163,184,0.16)",
+  incidentCount: { fontSize: 10.5, color: "#e9e5f6", background: "rgba(148,163,184,0.16)",
     padding: "2px 7px", borderRadius: 6, fontWeight: 700 },
-  incidentMessage: { fontSize: 12.5, color: "#cbd5e1", marginTop: 7, lineHeight: 1.5, wordBreak: "break-word" },
-  incidentFoot: { fontSize: 11, color: "#475569", marginTop: 8, display: "flex",
+  incidentMessage: { fontSize: 12.5, color: "#d9d4ec", marginTop: 7, lineHeight: 1.5, wordBreak: "break-word" },
+  incidentFoot: { fontSize: 11, color: "#7a6fa3", marginTop: 8, display: "flex",
     alignItems: "center", flexWrap: "wrap" },
 
   chartSvg: { width: "100%", height: 120, display: "block" },
-  chartLegend: { display: "flex", gap: 14, fontSize: 11, color: "#64748b", marginTop: 8, flexWrap: "wrap" },
+  chartLegend: { display: "flex", gap: 14, fontSize: 11, color: "#9189b5", marginTop: 8, flexWrap: "wrap" },
   swatch: { display: "inline-block", width: 10, height: 2, marginRight: 6, verticalAlign: "middle" },
 
-  empty: { padding: "22px 16px", color: "#64748b", fontSize: 13, textAlign: "center", lineHeight: 1.5 },
+  empty: { padding: "22px 16px", color: "#9189b5", fontSize: 13, textAlign: "center", lineHeight: 1.5 },
 
   toast: (tone) => ({ position: "fixed", left: 16, right: 16, bottom: 20, maxWidth: 480,
     margin: "0 auto", padding: "13px 16px", borderRadius: 12, cursor: "pointer", zIndex: 400,

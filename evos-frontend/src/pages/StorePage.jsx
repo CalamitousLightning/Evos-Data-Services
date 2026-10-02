@@ -16,10 +16,10 @@ const NETWORK_CONFIG = {
     tag: "Reliable", tagColor: "#ef4444",
   },
   AirtelTigo: {
-    label: "AirtelTigo", logo: "/images/airteltigo.png", color: "#6366f1",
-    bg: "linear-gradient(135deg, rgba(99,102,241,0.18), rgba(99,102,241,0.06))",
-    border: "rgba(99,102,241,0.4)", shadow: "0 4px 20px rgba(99,102,241,0.2)",
-    tag: "Affordable", tagColor: "#6366f1",
+    label: "AirtelTigo", logo: "/images/airteltigo.png", color: "#8b5cf6",
+    bg: "linear-gradient(135deg, rgba(139,92,246,0.18), rgba(139,92,246,0.06))",
+    border: "rgba(139,92,246,0.4)", shadow: "0 4px 20px rgba(139,92,246,0.2)",
+    tag: "Affordable", tagColor: "#8b5cf6",
   },
 };
 
@@ -33,7 +33,7 @@ const CHECKERS_TILE = {
 
 const bundleAccents = [
   { border: "rgba(34,197,94,0.3)", price: "#22c55e" },
-  { border: "rgba(56,189,248,0.3)", price: "#38bdf8" },
+  { border: "rgba(200,255,62,0.3)", price: "#c8ff3e" },
   { border: "rgba(167,139,250,0.3)", price: "#a78bfa" },
   { border: "rgba(245,158,11,0.3)", price: "#f59e0b" },
   { border: "rgba(20,184,166,0.3)", price: "#14b8a6" },
@@ -51,9 +51,9 @@ const CHECKER_CONFIG = {
     desc: "Result checker card for WASSCE results",
   },
   BECE: {
-    label: "BECE Checker", emoji: "📘", color: "#38bdf8",
-    bg: "linear-gradient(135deg, rgba(56,189,248,0.18), rgba(56,189,248,0.06))",
-    border: "rgba(56,189,248,0.4)",
+    label: "BECE Checker", emoji: "📘", color: "#c8ff3e",
+    bg: "linear-gradient(135deg, rgba(200,255,62,0.18), rgba(200,255,62,0.06))",
+    border: "rgba(200,255,62,0.4)",
     desc: "Result checker card for BECE results",
   },
 };
@@ -76,9 +76,9 @@ const STATUS_CONFIG = {
   },
   paid: {
     label: "Payment Confirmed",
-    color: "#38bdf8",
-    bg: "rgba(56,189,248,0.1)",
-    border: "rgba(56,189,248,0.3)",
+    color: "#c8ff3e",
+    bg: "rgba(200,255,62,0.1)",
+    border: "rgba(200,255,62,0.3)",
     eta: "Your order is queued for delivery. Usually starts within 1-2 minutes.",
     icon: "✅",
   },
@@ -289,7 +289,7 @@ function ConfirmModal({ selected, networkLabel, networkCfg, onClose, onConfirm, 
             checked={accepted}
             onChange={(e) => setAccepted(e.target.checked)}
             disabled={processing}
-            style={{ marginRight: 8, accentColor: "#38bdf8", width: 15, height: 15, flexShrink: 0, marginTop: 2 }}
+            style={{ marginRight: 8, accentColor: "#c8ff3e", width: 15, height: 15, flexShrink: 0, marginTop: 2 }}
           />
           <span style={modal.checkText}>
             I confirm this phone number is correct.{" "}
@@ -298,11 +298,11 @@ function ConfirmModal({ selected, networkLabel, networkCfg, onClose, onConfirm, 
         </label>
 
         {checkingBlocking ? (
-          <button disabled style={{ ...modal.buyBtn, opacity: 0.4, cursor: "not-allowed", background: "linear-gradient(135deg, #334155, #1e293b)" }}>
+          <button disabled style={{ ...modal.buyBtn, opacity: 0.4, cursor: "not-allowed", background: "linear-gradient(135deg, #3d3460, #241c3d)" }}>
             🔎 Verifying number...
           </button>
         ) : showVerifyResult ? (
-          <button disabled style={{ ...modal.buyBtn, opacity: 0.4, cursor: "not-allowed", background: "linear-gradient(135deg, #334155, #1e293b)" }}>
+          <button disabled style={{ ...modal.buyBtn, opacity: 0.4, cursor: "not-allowed", background: "linear-gradient(135deg, #3d3460, #241c3d)" }}>
             See popup to continue
           </button>
         ) : (
@@ -445,7 +445,7 @@ function CheckerConfirmModal({ selected, checkerCfg, onClose, onConfirm, process
             checked={accepted}
             onChange={(e) => setAccepted(e.target.checked)}
             disabled={processing}
-            style={{ marginRight: 8, accentColor: "#38bdf8", width: 15, height: 15, flexShrink: 0, marginTop: 2 }}
+            style={{ marginRight: 8, accentColor: "#c8ff3e", width: 15, height: 15, flexShrink: 0, marginTop: 2 }}
           />
           <span style={modal.checkText}>
             I confirm this phone number is correct.{" "}
@@ -568,7 +568,7 @@ function TrackModal({ onClose }) {
                   </div>
                   <div style={trackStyles.detailRow}>
                     <span style={trackStyles.detailLabel}>Amount Paid</span>
-                    <span style={{ ...trackStyles.detailVal, color: "#38bdf8", fontWeight: 800 }}>
+                    <span style={{ ...trackStyles.detailVal, color: "#c8ff3e", fontWeight: 800 }}>
                       GH&#8373; {Number(order.price || 0).toFixed(2)}
                     </span>
                   </div>
@@ -582,7 +582,7 @@ function TrackModal({ onClose }) {
                   </div>
                   <div style={{ ...trackStyles.detailRow, borderBottom: "none" }}>
                     <span style={trackStyles.detailLabel}>Reference</span>
-                    <span style={{ ...trackStyles.detailVal, fontSize: 11, color: "#64748b" }}>
+                    <span style={{ ...trackStyles.detailVal, fontSize: 11, color: "#9189b5" }}>
                       {order.evosdata_ref || order.paystack_ref || "—"}
                     </span>
                   </div>
@@ -734,15 +734,15 @@ export default function StorePage({ setPage }) {
   if (loading) return (
     <div style={styles.centerWrap}>
       <div style={{ fontSize: 40, marginBottom: 12 }}>⏳</div>
-      <p style={{ fontSize: 15, color: "#64748b", fontWeight: 700 }}>Loading store...</p>
+      <p style={{ fontSize: 15, color: "#9189b5", fontWeight: 700 }}>Loading store...</p>
     </div>
   );
 
   if (!store) return (
     <div style={styles.centerWrap}>
       <div style={{ fontSize: 48, marginBottom: 12 }}>😕</div>
-      <h2 style={{ fontSize: 22, fontWeight: 900, color: "#f1f5f9", marginBottom: 8 }}>Store Not Found</h2>
-      <p style={{ fontSize: 14, color: "#64748b", fontWeight: 600 }}>This store link may be invalid or inactive.</p>
+      <h2 style={{ fontSize: 22, fontWeight: 900, color: "#f3f0fb", marginBottom: 8 }}>Store Not Found</h2>
+      <p style={{ fontSize: 14, color: "#9189b5", fontWeight: 600 }}>This store link may be invalid or inactive.</p>
     </div>
   );
 
@@ -771,7 +771,7 @@ export default function StorePage({ setPage }) {
         <div style={styles.headerBadge}>🏪 Agent Store</div>
         <h1 style={styles.title}>{store.agent_name}'s Store</h1>
         <p style={styles.sub}>
-          Fast Data Purchase · Powered by <span style={{ color: "#38bdf8", fontWeight: 900 }}>EVOS HUB</span>
+          Fast Data Purchase · Powered by <span style={{ color: "#c8ff3e", fontWeight: 900 }}>EVOS HUB</span>
         </p>
       </div>
 
@@ -784,15 +784,15 @@ export default function StorePage({ setPage }) {
               <div key={i} style={styles.progressItem}>
                 <div style={{
                   ...styles.progressDot,
-                  background: active ? "#38bdf8" : "rgba(255,255,255,0.1)",
-                  border: active ? "2px solid #38bdf8" : "2px solid rgba(255,255,255,0.1)",
-                  color: active ? "white" : "#475569",
+                  background: active ? "#c8ff3e" : "rgba(255,255,255,0.1)",
+                  border: active ? "2px solid #c8ff3e" : "2px solid rgba(255,255,255,0.1)",
+                  color: active ? "white" : "#7a6fa3",
                 }}>
                   {i + 1}
                 </div>
                 <span style={{
                   ...styles.progressLabel,
-                  color: active ? "#38bdf8" : "#475569",
+                  color: active ? "#c8ff3e" : "#7a6fa3",
                 }}>{label}</span>
               </div>
             );
@@ -811,7 +811,7 @@ export default function StorePage({ setPage }) {
             <div style={styles.landingGrid}>
               {availableNetworks.map((netKey) => {
                 const c = NETWORK_CONFIG[netKey] || {
-                  label: netKey, logo: null, color: "#64748b",
+                  label: netKey, logo: null, color: "#9189b5",
                   bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.1)",
                 };
                 return (
@@ -898,7 +898,7 @@ export default function StorePage({ setPage }) {
             {bundles.length === 0 && (
               <div style={{ textAlign: "center", padding: "30px 0 10px" }}>
                 <div style={{ fontSize: 36, marginBottom: 8 }}>📭</div>
-                <p style={{ color: "#475569", fontSize: 14, margin: 0 }}>No bundles available.</p>
+                <p style={{ color: "#7a6fa3", fontSize: 14, margin: 0 }}>No bundles available.</p>
               </div>
             )}
 
@@ -933,14 +933,14 @@ export default function StorePage({ setPage }) {
             {checkerProducts.length === 0 && (
               <div style={{ textAlign: "center", padding: "30px 0 10px" }}>
                 <div style={{ fontSize: 36, marginBottom: 8 }}>📭</div>
-                <p style={{ color: "#475569", fontSize: 14, margin: 0 }}>No checkers available.</p>
+                <p style={{ color: "#7a6fa3", fontSize: 14, margin: 0 }}>No checkers available.</p>
               </div>
             )}
 
             <div style={styles.checkerGrid}>
               {checkerProducts.map((item, i) => {
                 const c = CHECKER_CONFIG[item.checker_type] || {
-                  label: item.checker_type, emoji: "🎫", color: "#64748b",
+                  label: item.checker_type, emoji: "🎫", color: "#9189b5",
                   bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.1)",
                 };
                 return (
@@ -1028,25 +1028,25 @@ export default function StorePage({ setPage }) {
 }
 
 const styles = {
-  container: { padding: "28px 18px 80px", minHeight: "100vh", fontFamily: "ui-sans-serif, system-ui, Arial", color: "#e5e7eb" },
+  container: { padding: "28px 18px 80px", minHeight: "auto", fontFamily: "ui-sans-serif, system-ui, Arial", color: "#e5e7eb" },
   centerWrap: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh", textAlign: "center", padding: 24, color: "#e5e7eb" },
   header: { textAlign: "center", marginBottom: 24 },
   storeLogo: {
     width: 72, height: 72, objectFit: "contain", borderRadius: 18,
-    background: "rgba(15,23,42,0.9)", border: "1px solid rgba(255,255,255,0.08)",
+    background: "rgba(22,17,38,0.9)", border: "1px solid rgba(255,255,255,0.08)",
     padding: 8, marginBottom: 10,
   },
-  headerBadge: { display: "inline-block", padding: "5px 18px", borderRadius: 50, background: "rgba(56,189,248,0.15)", border: "1px solid rgba(56,189,248,0.3)", color: "#38bdf8", fontSize: 12, fontWeight: 800, marginBottom: 10, letterSpacing: "0.5px" },
-  title: { fontSize: "clamp(22px, 5vw, 30px)", fontWeight: 900, color: "#f1f5f9", margin: "0 0 6px" },
-  sub: { fontSize: 13, color: "#64748b", margin: 0, fontWeight: 600 },
+  headerBadge: { display: "inline-block", padding: "5px 18px", borderRadius: 50, background: "rgba(200,255,62,0.15)", border: "1px solid rgba(200,255,62,0.3)", color: "#c8ff3e", fontSize: 12, fontWeight: 800, marginBottom: 10, letterSpacing: "0.5px" },
+  title: { fontSize: "clamp(22px, 5vw, 30px)", fontWeight: 900, color: "#f3f0fb", margin: "0 0 6px" },
+  sub: { fontSize: 13, color: "#9189b5", margin: 0, fontWeight: 600 },
   progressWrap: { display: "flex", justifyContent: "center", alignItems: "center", position: "relative", maxWidth: 340, margin: "0 auto 24px" },
   progressItem: { display: "flex", flexDirection: "column", alignItems: "center", gap: 6, flex: 1, position: "relative", zIndex: 1 },
   progressDot: { width: 34, height: 34, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800, transition: "all 0.35s" },
   progressLabel: { fontSize: 11, fontWeight: 700, transition: "color 0.3s" },
   progressLine: { position: "absolute", top: 17, left: "16%", right: "16%", height: 2, background: "rgba(255,255,255,0.08)", zIndex: 0 },
   wrapper: { maxWidth: 480, margin: "0 auto" },
-  box: { background: "rgba(15,23,42,0.9)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", padding: "24px 20px", borderRadius: 22, border: "1px solid rgba(255,255,255,0.07)", boxShadow: "0 25px 60px rgba(0,0,0,0.4)" },
-  stepLabel: { fontSize: 12, color: "#38bdf8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.8px", margin: "0 0 18px" },
+  box: { background: "rgba(22,17,38,0.9)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", padding: "24px 20px", borderRadius: 22, border: "1px solid rgba(255,255,255,0.07)", boxShadow: "0 25px 60px rgba(0,0,0,0.4)" },
+  stepLabel: { fontSize: 12, color: "#c8ff3e", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.8px", margin: "0 0 18px" },
   landingGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(2, 1fr)",
@@ -1078,28 +1078,28 @@ const styles = {
   },
   landingLogo: { width: 34, height: 34, objectFit: "contain" },
   landingName: { fontWeight: 800, fontSize: 14, lineHeight: 1.2 },
-  landingDesc: { fontSize: 10.5, color: "#64748b", fontWeight: 600, marginTop: -4 },
+  landingDesc: { fontSize: 10.5, color: "#9189b5", fontWeight: 600, marginTop: -4 },
   networkName: { fontWeight: 800, fontSize: 16, flex: 1 },
   infoRow: { display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap", marginBottom: 16 },
-  infoChip: { fontSize: 11, color: "#475569", fontWeight: 700, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", padding: "4px 10px", borderRadius: 50 },
-  trackBtn: { width: "100%", padding: "12px", borderRadius: 14, background: "rgba(56,189,248,0.1)", border: "1px solid rgba(56,189,248,0.25)", color: "#38bdf8", fontWeight: 800, fontSize: 14, cursor: "pointer" },
-  backBtn: { background: "rgba(255,255,255,0.06)", border: "none", color: "#38bdf8", fontSize: 13, fontWeight: 800, cursor: "pointer", padding: "6px 14px", borderRadius: 50, marginBottom: 16, display: "inline-block" },
+  infoChip: { fontSize: 11, color: "#7a6fa3", fontWeight: 700, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", padding: "4px 10px", borderRadius: 50 },
+  trackBtn: { width: "100%", padding: "12px", borderRadius: 14, background: "rgba(200,255,62,0.1)", border: "1px solid rgba(200,255,62,0.25)", color: "#c8ff3e", fontWeight: 800, fontSize: 14, cursor: "pointer" },
+  backBtn: { background: "rgba(255,255,255,0.06)", border: "none", color: "#c8ff3e", fontSize: 13, fontWeight: 800, cursor: "pointer", padding: "6px 14px", borderRadius: 50, marginBottom: 16, display: "inline-block" },
   networkPill: { display: "inline-flex", alignItems: "center", gap: 8, padding: "7px 18px", borderRadius: 50, fontSize: 13, fontWeight: 900, marginBottom: 20 },
   networkPillLogo: { width: 20, height: 20, objectFit: "contain", borderRadius: "50%", background: "#fff" },
   bundleGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
-  bundleCard: { background: "rgba(2,6,23,0.7)", borderRadius: 16, padding: "18px 14px 14px", cursor: "pointer", textAlign: "center", transition: "transform 0.15s", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
-  bundleSize: { fontWeight: 900, fontSize: 20, color: "#f1f5f9" },
+  bundleCard: { background: "rgba(10,8,20,0.7)", borderRadius: 16, padding: "18px 14px 14px", cursor: "pointer", textAlign: "center", transition: "transform 0.15s", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
+  bundleSize: { fontWeight: 900, fontSize: 20, color: "#f3f0fb" },
   bundlePrice: { fontWeight: 900, fontSize: 17 },
   bundleCta: { fontSize: 11, fontWeight: 800, opacity: 0.7 },
   productTypeEmoji: { fontSize: 32, marginBottom: 2 },
-  productTypeDesc: { fontSize: 12, color: "#64748b", fontWeight: 600 },
+  productTypeDesc: { fontSize: 12, color: "#9189b5", fontWeight: 600 },
   checkerGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
   checkerCard: { borderRadius: 16, padding: "18px 14px 14px", cursor: "pointer", textAlign: "center", transition: "transform 0.15s", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
-  floatWrap: { position: "fixed", bottom: 24, right: 20, zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 },
-  chatPopup: { background: "#0f172a", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 18, padding: 18, width: 270, boxShadow: "0 8px 40px rgba(0,0,0,0.5)" },
+  floatWrap: { position: "fixed", bottom: "calc(var(--dock, 0px) + 20px)", right: 16, zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 },
+  chatPopup: { background: "#161126", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 18, padding: 18, width: 270, boxShadow: "0 8px 40px rgba(0,0,0,0.5)" },
   chatHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
-  chatClose: { background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 14, fontWeight: 800 },
-  chatMsg: { fontSize: 13, color: "#94a3b8", lineHeight: 1.55, margin: "0 0 12px" },
+  chatClose: { background: "none", border: "none", color: "#9189b5", cursor: "pointer", fontSize: 14, fontWeight: 800 },
+  chatMsg: { fontSize: 13, color: "#b4acd0", lineHeight: 1.55, margin: "0 0 12px" },
   chatOptions: { display: "flex", flexDirection: "column", gap: 8 },
   chatOption: { padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.04)", color: "#e5e7eb", fontSize: 13, fontWeight: 700, cursor: "pointer", textAlign: "left" },
   floatBtn: { width: 54, height: 54, borderRadius: "50%", background: "linear-gradient(135deg, #25D366, #128C7E)", border: "none", color: "white", fontSize: 22, cursor: "pointer", boxShadow: "0 4px 20px rgba(37,211,102,0.45)", display: "flex", alignItems: "center", justifyContent: "center" },
@@ -1107,49 +1107,49 @@ const styles = {
 
 const modal = {
   overlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 1000 },
-  box: { width: "100%", maxWidth: 480, background: "#0f172a", borderRadius: "24px 24px 0 0", padding: "22px 20px 36px", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 -8px 40px rgba(0,0,0,0.5)", fontFamily: "ui-sans-serif, system-ui, Arial", maxHeight: "88vh", overflowY: "auto" },
+  box: { width: "100%", maxWidth: 480, background: "#161126", borderRadius: "24px 24px 0 0", padding: "22px 20px 36px", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 -8px 40px rgba(0,0,0,0.5)", fontFamily: "ui-sans-serif, system-ui, Arial", maxHeight: "88vh", overflowY: "auto" },
   header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 },
-  headerLabel: { fontWeight: 900, fontSize: 16, color: "#f1f5f9" },
-  closeBtn: { background: "rgba(255,255,255,0.08)", border: "none", color: "#94a3b8", fontSize: 13, cursor: "pointer", padding: "6px 10px", borderRadius: 50, fontWeight: 800 },
+  headerLabel: { fontWeight: 900, fontSize: 16, color: "#f3f0fb" },
+  closeBtn: { background: "rgba(255,255,255,0.08)", border: "none", color: "#b4acd0", fontSize: 13, cursor: "pointer", padding: "6px 10px", borderRadius: 50, fontWeight: 800 },
   summary: { borderRadius: 16, padding: "10px 16px", marginBottom: 18 },
   summaryHeader: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10, paddingBottom: 8, borderBottom: "1px solid rgba(255,255,255,0.06)" },
   summaryRow: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" },
-  summaryLabel: { fontSize: 12, color: "#64748b", fontWeight: 600 },
+  summaryLabel: { fontSize: 12, color: "#9189b5", fontWeight: 600 },
   summaryValue: { fontSize: 14, fontWeight: 700, color: "#e5e7eb" },
-  label: { display: "block", fontSize: 12, color: "#64748b", fontWeight: 800, marginBottom: 6 },
-  input: { width: "100%", padding: "13px 14px", borderRadius: 14, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(2,6,23,0.75)", color: "#fff", fontSize: 14, fontWeight: 600, marginBottom: 14, boxSizing: "border-box", outline: "none" },
+  label: { display: "block", fontSize: 12, color: "#9189b5", fontWeight: 800, marginBottom: 6 },
+  input: { width: "100%", padding: "13px 14px", borderRadius: 14, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(10,8,20,0.75)", color: "#fff", fontSize: 14, fontWeight: 600, marginBottom: 14, boxSizing: "border-box", outline: "none" },
   checkRow: { display: "flex", alignItems: "flex-start", background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)", padding: "12px 14px", borderRadius: 14, marginBottom: 18, cursor: "pointer" },
-  checkText: { fontSize: 12, color: "#94a3b8", lineHeight: 1.55, fontWeight: 600 },
+  checkText: { fontSize: 12, color: "#b4acd0", lineHeight: 1.55, fontWeight: 600 },
   buyBtn: { width: "100%", padding: 15, borderRadius: 16, border: "none", background: "linear-gradient(135deg, #22c55e, #16a34a)", color: "white", fontWeight: 900, fontSize: 15, cursor: "pointer", boxShadow: "0 6px 24px rgba(34,197,94,0.3)", marginBottom: 10 },
-  secureNote: { textAlign: "center", fontSize: 12, color: "#475569", margin: 0, fontWeight: 600 },
+  secureNote: { textAlign: "center", fontSize: 12, color: "#7a6fa3", margin: 0, fontWeight: 600 },
 
   verifyOverlay: {
-    position: "fixed", inset: 0, background: "rgba(2,6,23,0.75)",
+    position: "fixed", inset: 0, background: "rgba(10,8,20,0.75)",
     backdropFilter: "blur(2px)", display: "flex",
     alignItems: "center", justifyContent: "center", zIndex: 2000,
   },
   verifyPopup: {
-    background: "#0f172a", border: "1px solid rgba(255,255,255,0.1)",
+    background: "#161126", border: "1px solid rgba(255,255,255,0.1)",
     borderRadius: 20, padding: "28px 32px", textAlign: "center",
     boxShadow: "0 20px 60px rgba(0,0,0,0.5)", maxWidth: 280,
   },
   verifySpinner: {
     width: 34, height: 34, margin: "0 auto 14px", borderRadius: "50%",
-    border: "3px solid rgba(56,189,248,0.2)", borderTopColor: "#38bdf8",
+    border: "3px solid rgba(200,255,62,0.2)", borderTopColor: "#c8ff3e",
     animation: "evos-spin 0.8s linear infinite",
   },
-  verifyPopupText: { fontSize: 15, fontWeight: 800, color: "#f1f5f9", margin: "0 0 4px" },
-  verifyPopupSub: { fontSize: 12, color: "#64748b", margin: 0 },
+  verifyPopupText: { fontSize: 15, fontWeight: 800, color: "#f3f0fb", margin: "0 0 4px" },
+  verifyPopupSub: { fontSize: 12, color: "#9189b5", margin: 0 },
   verifyPopupActions: {
     display: "flex", flexDirection: "column", gap: 8, marginTop: 18,
   },
   verifyPopupProceedBtn: {
-    background: "linear-gradient(135deg, #38bdf8, #0ea5e9)", color: "#fff",
+    background: "linear-gradient(135deg, #c8ff3e, #8fe600)", color: "#fff",
     border: "none", borderRadius: 12, padding: "12px 16px",
     fontSize: 14, fontWeight: 800, cursor: "pointer",
   },
   verifyPopupCancelBtn: {
-    background: "transparent", color: "#94a3b8",
+    background: "transparent", color: "#b4acd0",
     border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
     padding: "10px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer",
   },
@@ -1162,12 +1162,12 @@ const trackStyles = {
   searchRow: { display: "flex", gap: 10, marginBottom: 14 },
   searchInput: {
     flex: 1, padding: "13px 14px", borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.08)", background: "rgba(2,6,23,0.75)",
+    border: "1px solid rgba(255,255,255,0.08)", background: "rgba(10,8,20,0.75)",
     color: "#fff", fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none",
   },
   searchBtn: {
     padding: "13px 20px", borderRadius: 14, border: "none",
-    background: "linear-gradient(135deg,#38bdf8,#0ea5e9)", color: "#000",
+    background: "linear-gradient(135deg,#c8ff3e,#8fe600)", color: "#000",
     fontWeight: 900, fontSize: 14, cursor: "pointer", flexShrink: 0,
   },
   errorBox: {
@@ -1176,23 +1176,23 @@ const trackStyles = {
   },
   resultsWrap: { display: "flex", flexDirection: "column", gap: 14 },
   card: {
-    background: "rgba(2,6,23,0.6)", borderRadius: 18, padding: "18px 16px",
+    background: "rgba(10,8,20,0.6)", borderRadius: 18, padding: "18px 16px",
     border: "1px solid rgba(255,255,255,0.07)",
   },
   statusBadge: { display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderRadius: 10, marginBottom: 16 },
   statusIcon: { fontSize: 18 },
   statusLabel: { fontWeight: 800, fontSize: 14 },
   detailGrid: {
-    background: "rgba(15,23,42,0.6)", borderRadius: 12, padding: "4px 14px",
+    background: "rgba(22,17,38,0.6)", borderRadius: 12, padding: "4px 14px",
     marginBottom: 14, border: "1px solid rgba(255,255,255,0.05)",
   },
   detailRow: {
     display: "flex", justifyContent: "space-between", alignItems: "center",
     padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,0.05)",
   },
-  detailLabel: { fontSize: 12, color: "#64748b" },
+  detailLabel: { fontSize: 12, color: "#9189b5" },
   detailVal: { fontSize: 13, fontWeight: 600, color: "#e5e7eb" },
   etaBox: { padding: "10px 14px", borderRadius: 10 },
   etaText: { fontSize: 12, margin: 0, lineHeight: 1.55, fontWeight: 500 },
-  emptyNote: { textAlign: "center", color: "#475569", fontSize: 13, fontWeight: 600, margin: "10px 0 0" },
+  emptyNote: { textAlign: "center", color: "#7a6fa3", fontSize: 13, fontWeight: 600, margin: "10px 0 0" },
 };

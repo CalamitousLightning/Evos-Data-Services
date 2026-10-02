@@ -159,10 +159,10 @@ export default function AgentStore({ setPage }) {
         {step === 2 && (
           <div style={styles.box}>
             <button style={styles.back} onClick={() => setStep(1)}>← Back</button>
-            <h3 style={styles.step}>Select Bundle — <span style={{ color: "#38bdf8" }}>{network}</span></h3>
+            <h3 style={styles.step}>Select Bundle — <span style={{ color: "#c8ff3e" }}>{network}</span></h3>
 
             {bundles.length === 0 && (
-              <p style={{ color: "#64748b", fontSize: 13 }}>No bundles available.</p>
+              <p style={{ color: "#9189b5", fontSize: 13 }}>No bundles available.</p>
             )}
 
             <div style={styles.bundleGrid}>
@@ -192,9 +192,9 @@ export default function AgentStore({ setPage }) {
             <h3 style={styles.step}>Complete Order</h3>
 
             <div style={styles.summary}>
-              <p style={{ margin: "0 0 4px", color: "#94a3b8", fontSize: 13 }}>{network}</p>
+              <p style={{ margin: "0 0 4px", color: "#b4acd0", fontSize: 13 }}>{network}</p>
               <h3 style={{ margin: "0 0 4px", color: "#e5e7eb" }}>{bundle}</h3>
-              <p style={{ margin: 0, color: "#38bdf8", fontWeight: 800, fontSize: 18 }}>
+              <p style={{ margin: 0, color: "#c8ff3e", fontWeight: 800, fontSize: 18 }}>
                 GH₵ {Number(finalPrice).toFixed(2)}
               </p>
             </div>
@@ -221,7 +221,7 @@ export default function AgentStore({ setPage }) {
                   type="checkbox"
                   checked={agree}
                   onChange={() => setAgree(!agree)}
-                  style={{ accentColor: "#38bdf8", flexShrink: 0, marginTop: 2 }}
+                  style={{ accentColor: "#c8ff3e", flexShrink: 0, marginTop: 2 }}
                 />
                 <span style={styles.checkText}>
                   I confirm this number is correct.{" "}
@@ -251,7 +251,7 @@ const styles = {
     padding: "24px",
     color: "#e5e7eb",
     textAlign: "center",
-    minHeight: "100vh",
+    minHeight: "auto",
   },
   title: {
     marginBottom: "6px",
@@ -259,7 +259,7 @@ const styles = {
     fontWeight: "900",
   },
   subTitle: {
-    color: "#94a3b8",
+    color: "#b4acd0",
     marginBottom: "22px",
     fontSize: "14px",
   },
@@ -268,7 +268,7 @@ const styles = {
     margin: "0 auto",
   },
   box: {
-    background: "rgba(15, 23, 42, 0.88)",
+    background: "rgba(22,17,38, 0.88)",
     backdropFilter: "blur(16px)",
     WebkitBackdropFilter: "blur(16px)",
     padding: "22px",
@@ -279,7 +279,7 @@ const styles = {
   },
   step: {
     marginBottom: "16px",
-    color: "#38bdf8",
+    color: "#c8ff3e",
     fontWeight: "700",
     fontSize: "14px",
     textTransform: "uppercase",
@@ -308,7 +308,7 @@ const styles = {
     gap: 10,
   },
   bundleCard: {
-    background: "rgba(2,6,23,0.65)",
+    background: "rgba(10,8,20,0.65)",
     border: "1px solid rgba(255,255,255,0.07)",
     borderRadius: 12,
     padding: "14px 12px",
@@ -318,10 +318,10 @@ const styles = {
     gap: 4,
   },
   bundleName: { fontWeight: 700, fontSize: 13, color: "#e5e7eb" },
-  bundlePrice: { fontWeight: 800, fontSize: 16, color: "#38bdf8" },
-  bundleArrow: { fontSize: 10, color: "#38bdf8", opacity: 0.6, marginTop: 2 },
+  bundlePrice: { fontWeight: 800, fontSize: 16, color: "#c8ff3e" },
+  bundleArrow: { fontSize: 10, color: "#c8ff3e", opacity: 0.6, marginTop: 2 },
   summary: {
-    background: "rgba(2, 6, 23, 0.65)",
+    background: "rgba(10,8,20, 0.65)",
     padding: "14px",
     borderRadius: "12px",
     marginBottom: "15px",
@@ -333,7 +333,7 @@ const styles = {
     marginBottom: "12px",
     borderRadius: "12px",
     border: "1px solid rgba(255,255,255,0.08)",
-    background: "rgba(2, 6, 23, 0.75)",
+    background: "rgba(10,8,20, 0.75)",
     color: "#ffffff",
     outline: "none",
     fontSize: "14px",
@@ -355,12 +355,12 @@ const styles = {
     lineHeight: "1.5",
     cursor: "pointer",
   },
-  checkText: { fontSize: 13, color: "#94a3b8", lineHeight: 1.55 },
+  checkText: { fontSize: 13, color: "#b4acd0", lineHeight: 1.55 },
   buyBtn: {
     width: "100%",
     padding: "14px",
     borderRadius: "14px",
-    background: "linear-gradient(135deg,#38bdf8,#0ea5e9)",
+    background: "linear-gradient(135deg,#c8ff3e,#8fe600)",
     border: "none",
     color: "#000",
     fontWeight: "900",
@@ -371,7 +371,7 @@ const styles = {
     marginBottom: "12px",
     background: "transparent",
     border: "none",
-    color: "#38bdf8",
+    color: "#c8ff3e",
     cursor: "pointer",
     fontWeight: "700",
     fontSize: "14px",
@@ -382,7 +382,7 @@ const styles = {
     width: "100%",
     padding: "12px",
     borderRadius: "12px",
-    background: "#1e293b",
+    background: "#241c3d",
     color: "white",
     border: "none",
     cursor: "pointer",

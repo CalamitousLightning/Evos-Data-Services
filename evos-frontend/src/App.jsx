@@ -20,6 +20,9 @@ import Checkers           from "./pages/Checkers";
 import AgentBuyChecker    from "./pages/AgentBuyChecker";
 import AgentCheckerPricing from "./pages/AgentCheckerPricing";
 import DashXera           from "./pages/DashXera";
+import CommunityPopup     from "./components/CommunityPopup";
+import { InstallBanner, InstallHelp, useInstall } from "./components/InstallApp";
+import { Icon } from "./components/Icons";
 
 export default function App() {
     const [page, setPage]         = useState("home");
@@ -57,7 +60,7 @@ export default function App() {
 
     // Close sidebar on Escape key
     useEffect(() => {
-        const onKey = (e) => { if (e.key === "Escape") setMenuOpen(false); };
+        const onKey = (e) => { if (e.key === "Escape") { setMenuOpen(false); setSheetOpen(false); } };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
     }, []);
@@ -107,6 +110,20 @@ export default function App() {
     // leaving mid-checkout and losing their place. See logoWrap and the
     // hamburger button below.
     const isStorePage   = page === "store";
+    const isBare        = page === "dashxera";           // admin console draws its own chrome
+    const hasChrome     = !isBare;
+    const hasRail       = hasChrome && !isStorePage;      // desktop sidebar
+    const hasDock       = hasChrome && !isStorePage;      // phone/tablet bottom bar
+    const [sheetOpen, setSheetOpen] = useState(false);
+    const inst = useInstall();
+
+    useEffect(() => {
+        document.documentElement.classList.toggle("has-dock", hasDock);
+        document.documentElement.classList.toggle("has-rail", hasRail);
+        return () => document.documentElement.classList.remove("has-dock", "has-rail");
+    }, [hasDock, hasRail]);
+
+    useEffect(() => { window.scrollTo({ top: 0 }); setSheetOpen(false); }, [page]);
 
     // =========================
     // LOGOUT
@@ -209,515 +226,178 @@ export default function App() {
         }
     };
 
-    return (
-        <div style={appStyle}>
-            {/* Background overlay */}
-            <div style={overlayStyle} />
+    // ---------- navigation model (shared by the desktop rail + the phone sheet) ----------
+    const groups = [
+        { label: "Main", items: [
+            { icon: "home",   label: "Home",            target: "home" },
+            { icon: "bolt",   label: "Buy Data",        target: "shop" },
+            { icon: "box",    label: "My Orders",       target: "orders" },
+            { icon: "chart",  label: "Dashboard",       target: "dashboard" },
+            { icon: "pin",    label: "Track Order",     target: "eta-track" },
+            { icon: "cap",    label: "Result Checkers", target: "checkers", green: true },
+        ] },
+        ...(user ? [{ label: "Agent", items: [
+            { icon: "rocket", label: isAgentActive ? "Agent Dashboard" : "Become Agent", target: "agent-dashboard" },
+            ...(isAgentActive ? [
+                { icon: "store",  label: "Store Settings",        target: "agent-store-settings" },
+                { icon: "signal", label: "Buy Data (Base Price)", target: "agent-buy-data" },
+                { icon: "tag",    label: "Manage Pricing",        target: "agent-pricing" },
+                { icon: "cap",    label: "Buy Checker (Base)",    target: "agent-buy-checker" },
+                { icon: "tag",    label: "Checker Pricing",       target: "agent-checker-pricing" },
+                { icon: "wallet", label: "Withdraw Funds",        target: "agent-withdraw" },
+            ] : []),
+        ] }] : []),
+        ...(isAdmin ? [{ label: "Admin", items: [{ icon: "chart", label: "DashXera", target: "dashxera" }] }] : []),
+    ];
 
-            <div style={{ position: "relative", zIndex: 2 }}>
-
-                {/* ======= NAVBAR ======= */}
-                <nav style={navStyle}>
-                    {/* LOGO + BRAND */}
-                    <div
-                        style={logoWrap}
-                        onClick={() => {
-                            // On a store page, going "home" would pull the customer
-                            // out of the agent's store. Just refresh in place instead.
-                            if (isStorePage) { window.location.reload(); return; }
-                            navigate("home");
-                        }}
-                    >
-                        <img
-                            src="/evosdata.png"
-                            alt="EVOS Logo"
-                            style={logoImg}
-                            onError={(e) => { e.target.style.display = "none"; }}
-                        />
-                        <div style={brandText}>
-                            <span style={brandName}>EVOSDATA</span>
-                            <span style={brandSub}>by EVOS Business HUB</span>
-                        </div>
-                    </div>
-
-                    {/* HAMBURGER / CLOSE — hidden on store pages so a customer
-                        can never open the full site nav and wander off */}
-                    {!isStorePage && (
+    const NavList = () => (
+        <>
+            {groups.map((g) => (
+                <div key={g.label}>
+                    <div className="vy-sec">{g.label}</div>
+                    {g.items.map((it) => (
                         <button
-                            style={menuIconStyle}
-                            onClick={() => setMenuOpen(!menuOpen)}
-                            aria-label="Toggle menu"
+                            key={it.target + it.label}
+                            className={`vy-nav ${g.items && it.green ? "green" : ""} ${page === it.target ? "on" : ""}`}
+                            onClick={() => navigate(it.target)}
                         >
-                            <span style={burgerLine(menuOpen, 0)} />
-                            <span style={burgerLine(menuOpen, 1)} />
-                            <span style={burgerLine(menuOpen, 2)} />
+                            <Icon name={it.icon} size={19} />
+                            <span>{it.label}</span>
                         </button>
-                    )}
-                </nav>
-
-                {/* ======= SIDEBAR OVERLAY (dim background) ======= */}
-                {menuOpen && !isStorePage && (
-                    <div style={sidebarOverlay} onClick={() => setMenuOpen(false)} />
-                )}
-
-                {/* ======= SIDEBAR ======= */}
-                {!isStorePage && (
-                <div style={sidebar(menuOpen)}>
-
-                    {/* Sidebar header */}
-                    <div style={sidebarHeader}>
-                        <div style={sidebarBrand}>
-                            <img
-                                src="/evosdata.png"
-                                alt="EVOS Logo"
-                                style={{ width: 32, height: 32, objectFit: "contain", borderRadius: 8 }}
-                                onError={(e) => { e.target.style.display = "none"; }}
-                            />
-                            <div>
-                                <div style={{ color: "#38bdf8", fontWeight: 900, fontSize: 15, letterSpacing: "0.5px" }}>EVOSDATA</div>
-                                <div style={{ color: "#475569", fontSize: 9, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>by EVOS Business HUB</div>
-                            </div>
-                        </div>
-                        <button style={sidebarCloseBtn} onClick={() => setMenuOpen(false)}>✕</button>
-                    </div>
-
-                    {/* User badge */}
-                    {user && (
-                        <div style={sidebarUserBadge}>
-                            <div style={sidebarAvatar}>{user.username?.[0]?.toUpperCase() || "U"}</div>
-                            <div>
-                                <div style={{ fontWeight: 800, fontSize: 13, color: "#f1f5f9" }}>@{user.username}</div>
-                                <div style={{ fontSize: 11, color: isAgentActive ? "#22c55e" : "#64748b", fontWeight: 600 }}>
-                                    {isAgentActive ? "✅ Active Agent" : isAdmin ? "🛠 Admin" : "Customer"}
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    <div style={sidebarDivider} />
-
-                    {/* MAIN NAV */}
-                    <div style={sidebarSection}>
-                        <div style={sidebarSectionLabel}>Main</div>
-                        {[
-                            { icon: "🏠", label: "Home",         target: "home"       },
-                            { icon: "🛒", label: "Buy Data",     target: "shop"       },
-                            { icon: "📦", label: "My Orders",    target: "orders"     },
-                            { icon: "📊", label: "Dashboard",    target: "dashboard"  },
-                            { icon: "📍", label: "Track Order",  target: "eta-track"  },
-                        ].map((item) => (
-                            <button
-                                key={item.target}
-                                style={sidebarBtn(page === item.target)}
-                                onClick={() => navigate(item.target)}
-                            >
-                                <span style={sidebarBtnIcon}>{item.icon}</span>
-                                {item.label}
-                            </button>
-                        ))}
-                        <button
-                            style={sidebarBtnGreen(page === "checkers")}
-                            onClick={() => navigate("checkers")}
-                        >
-                            <span style={sidebarBtnIcon}>🎓</span>
-                            Result Checkers
-                        </button>
-                    </div>
-
-                    {/* AGENT NAV */}
-                    {user && (
-                        <>
-                            <div style={sidebarDivider} />
-                            <div style={sidebarSection}>
-                                <div style={sidebarSectionLabel}>Agent</div>
-                                <button
-                                    style={sidebarBtn(page === "agent-dashboard")}
-                                    onClick={() => navigate("agent-dashboard")}
-                                >
-                                    <span style={sidebarBtnIcon}>🚀</span>
-                                    {isAgentActive ? "Agent Dashboard" : "Become Agent"}
-                                </button>
-                                {isAgentActive && (
-                                    <>
-                                        <button
-                                            style={sidebarBtn(page === "agent-store-settings")}
-                                            onClick={() => navigate("agent-store-settings")}
-                                        >
-                                            <span style={sidebarBtnIcon}>🎨</span>
-                                            Store Settings
-                                        </button>
-                                        <button
-                                            style={sidebarBtn(page === "agent-buy-data")}
-                                            onClick={() => navigate("agent-buy-data")}
-                                        >
-                                            <span style={sidebarBtnIcon}>📡</span>
-                                            Buy Data (Base Price)
-                                        </button>
-                                        <button
-                                            style={sidebarBtn(page === "agent-pricing")}
-                                            onClick={() => navigate("agent-pricing")}
-                                        >
-                                            <span style={sidebarBtnIcon}>💰</span>
-                                            Manage Pricing
-                                        </button>
-                                        <button
-                                            style={sidebarBtn(page === "agent-buy-checker")}
-                                            onClick={() => navigate("agent-buy-checker")}
-                                        >
-                                            <span style={sidebarBtnIcon}>🎓</span>
-                                            Buy Checker (Base Price)
-                                        </button>
-                                        <button
-                                            style={sidebarBtn(page === "agent-checker-pricing")}
-                                            onClick={() => navigate("agent-checker-pricing")}
-                                        >
-                                            <span style={sidebarBtnIcon}>🏷️</span>
-                                            Manage Checker Pricing
-                                        </button>
-                                        <button
-                                            style={sidebarBtn(page === "agent-withdraw")}
-                                            onClick={() => navigate("agent-withdraw")}
-                                        >
-                                            <span style={sidebarBtnIcon}>💳</span>
-                                            Withdraw Funds
-                                        </button>
-                                    </>
-                                )}
-                            </div>
-                        </>
-                    )}
-
-
-
-                    {/* ADMIN NAV */}
-                    {isAdmin && (
-                        <>
-                            <div style={sidebarDivider} />
-                            <div style={sidebarSection}>
-                                <div style={sidebarSectionLabel}>Admin</div>
-                                <button
-                                    style={sidebarBtn(page === "dashxera")}
-                                    onClick={() => navigate("dashxera")}
-                                >
-                                    <span style={sidebarBtnIcon}>📈</span>
-                                    DashXera
-                                </button>
-                            </div>
-                        </>
-                    )}
-
-                    {/* AUTH */}
-                    <div style={{ marginTop: "auto" }}>
-                        <div style={sidebarDivider} />
-                        <div style={{ padding: "12px 16px 24px", display: "flex", flexDirection: "column", gap: 8 }}>
-                            {user ? (
-                                <button style={sidebarLogoutBtn} onClick={logout}>
-                                    🚪 Sign Out
-                                </button>
-                            ) : (
-                                <>
-                                    <button style={sidebarBtn(false)} onClick={() => navigate("login")}>
-                                        <span style={sidebarBtnIcon}>🔑</span> Login
-                                    </button>
-                                    <button style={sidebarPrimaryBtn} onClick={() => navigate("register")}>
-                                        ✨ Register
-                                    </button>
-                                </>
-                            )}
-                        </div>
-                    </div>
+                    ))}
                 </div>
-                )}
+            ))}
+        </>
+    );
 
-                {/* ======= PAGE CONTENT ======= */}
-                <main style={contentStyle}>
-                    {renderPage()}
-                </main>
+    const UserCard = () => user ? (
+        <div className="vy-user">
+            <div className="vy-avatar">{user.username?.[0]?.toUpperCase() || "U"}</div>
+            <div style={{ minWidth: 0 }}>
+                <b style={{ overflow: "hidden", textOverflow: "ellipsis" }}>@{user.username}</b>
+                <small>{isAgentActive ? "Active agent" : isAdmin ? "Admin" : "Customer"}</small>
             </div>
+        </div>
+    ) : null;
+
+    const InstallCard = () => (!inst.standalone ? (
+        <div className="vy-install-card">
+            <b>Get the app</b>
+            <p>Install EVOS Data on your phone or PC for one-tap ordering.</p>
+            <button className="vy-pill vy-pill-solid" style={{ width: "100%", justifyContent: "center" }} onClick={() => { setSheetOpen(false); inst.install(); }}>
+                <Icon name="download" size={16} /> Install app
+            </button>
+        </div>
+    ) : null);
+
+    const AuthButtons = () => user ? (
+        <button className="vy-nav danger" data-no-community onClick={logout}><Icon name="logout" size={19} /><span>Sign Out</span></button>
+    ) : (
+        <>
+            <button className="vy-nav" onClick={() => navigate("login")}><Icon name="login" size={19} /><span>Login</span></button>
+            <button className="vy-pill vy-pill-solid" style={{ width: "100%", justifyContent: "center", height: 44 }} onClick={() => navigate("register")}>Create account</button>
+        </>
+    );
+
+    const Brand = ({ onClick }) => (
+        <button className="vy-brand" onClick={onClick} aria-label="EVOS Data home">
+            <img className="vy-logo" src="/evosdata.png" alt="" onError={(e) => { e.target.style.display = "none"; }} />
+            <span className="vy-brand-t">
+                <span className="vy-brand-n">EVOSDATA</span>
+                <span className="vy-brand-s">by EVOS Business HUB</span>
+            </span>
+        </button>
+    );
+
+    const goHome = () => {
+        // On a public agent store, "home" would pull the customer out mid-checkout.
+        if (isStorePage) { window.location.reload(); return; }
+        navigate("home");
+    };
+
+    if (isBare) {
+        return (
+            <div className="vy-app">
+                <div className="vy-aurora"><i /></div>
+                {renderPage()}
+            </div>
+        );
+    }
+
+    return (
+        <div className={`vy-app ${hasRail ? "with-rail" : ""}`}>
+            <div className="vy-aurora"><i /></div>
+            <div className="vy-grain" />
+
+            {/* ======= DESKTOP RAIL ======= */}
+            {hasRail && (
+                <aside className="vy-rail" aria-label="Main navigation">
+                    <div className="vy-rail-inner">
+                        <div className="vy-rail-brand">{Brand({ onClick: goHome })}</div>
+                        {UserCard()}
+                        {NavList()}
+                        <div className="vy-grow" />
+                        {InstallCard()}
+                        <div style={{ display: "grid", gap: 8, paddingTop: 6 }}>{AuthButtons()}</div>
+                    </div>
+                </aside>
+            )}
+
+            {/* ======= TOP BAR (phones / tablets, and store pages everywhere) ======= */}
+            <header className="vy-top">
+                {Brand({ onClick: goHome })}
+                <div className="vy-top-r">
+                    {!isStorePage && !inst.standalone && (
+                        <button className="vy-pill" onClick={inst.install} aria-label="Install app">
+                            <Icon name="download" size={15} /><span className="t">Install</span>
+                        </button>
+                    )}
+                    {!isStorePage && (user ? (
+                        <button className="vy-avatar" onClick={() => setSheetOpen(true)} aria-label="Account menu">{user.username?.[0]?.toUpperCase() || "U"}</button>
+                    ) : (
+                        <button className="vy-pill vy-pill-solid" onClick={() => navigate("login")}>Login</button>
+                    ))}
+                </div>
+            </header>
+
+            {/* ======= PAGE ======= */}
+            <main className="vy-main">{renderPage()}</main>
+
+            {/* ======= BOTTOM DOCK ======= */}
+            {hasDock && (
+                <nav className="vy-dock" aria-label="Quick navigation">
+                    <button className={`vy-tab ${page === "home" ? "on" : ""}`} onClick={() => navigate("home")}><Icon name="home" size={22} /><span>Home</span></button>
+                    <button className={`vy-tab ${page === "orders" ? "on" : ""}`} onClick={() => navigate("orders")}><Icon name="box" size={22} /><span>Orders</span></button>
+                    <button className="vy-tab vy-tab-cta" onClick={() => navigate("shop")} aria-label="Buy data">
+                        <span className="orb"><Icon name="bolt" size={26} /></span>
+                        <span style={{ position: "relative", top: -2 }}>Buy</span>
+                    </button>
+                    <button className={`vy-tab ${page === "eta-track" ? "on" : ""}`} onClick={() => navigate("eta-track")}><Icon name="pin" size={22} /><span>Track</span></button>
+                    <button className={`vy-tab ${sheetOpen ? "on" : ""}`} onClick={() => setSheetOpen(true)}><Icon name="menu" size={22} /><span>More</span></button>
+                </nav>
+            )}
+
+            {/* ======= MORE SHEET ======= */}
+            {sheetOpen && (
+                <>
+                    <div className="vy-scrim" onClick={() => setSheetOpen(false)} />
+                    <div className="vy-sheet" role="dialog" aria-label="Menu">
+                        <div className="vy-grab" />
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>{UserCard()}</div>
+                            <button className="cm-x" style={{ position: "static", flexShrink: 0 }} data-no-community onClick={() => setSheetOpen(false)} aria-label="Close menu">✕</button>
+                        </div>
+                        {NavList()}
+                        {InstallCard()}
+                        <div style={{ display: "grid", gap: 8, marginTop: 12 }}>{AuthButtons()}</div>
+                    </div>
+                </>
+            )}
+
+            {/* ======= INSTALL + COMMUNITY ======= */}
+            {!isStorePage && <InstallBanner {...inst} hidden={sheetOpen} />}
+            {inst.help && <InstallHelp ios={inst.ios} onClose={() => inst.setHelp(false)} />}
+            <CommunityPopup />
         </div>
     );
 }
-
-/* ================= STYLES ================= */
-
-const appStyle = {
-    minHeight:           "100vh",
-    fontFamily:          "ui-sans-serif, system-ui, Arial",
-    backgroundImage:     "url('/evosdata.png')",
-    backgroundSize:      "cover",
-    backgroundPosition:  "center",
-    backgroundRepeat:    "no-repeat",
-    backgroundColor:     "#020617",
-    color:               "#e5e7eb",
-};
-
-const overlayStyle = {
-    position:       "fixed",
-    inset:          0,
-    background:     "rgba(2,6,23,0.82)",
-    zIndex:         0,
-    pointerEvents:  "none",
-};
-
-const navStyle = {
-    display:            "flex",
-    justifyContent:     "space-between",
-    alignItems:         "center",
-    padding:            "10px 16px",
-    position:           "sticky",
-    top:                0,
-    zIndex:             200,
-    backdropFilter:     "blur(16px)",
-    WebkitBackdropFilter: "blur(16px)",
-    background:         "rgba(2,6,23,0.75)",
-    borderBottom:       "1px solid rgba(56,189,248,0.12)",
-    boxShadow:          "0 2px 20px rgba(0,0,0,0.4)",
-};
-
-const logoWrap = {
-    display:    "flex",
-    alignItems: "center",
-    gap:        10,
-    cursor:     "pointer",
-};
-
-const logoImg = {
-    width:        36,
-    height:       36,
-    objectFit:    "contain",
-    borderRadius: 8,
-};
-
-const brandText = {
-    display:       "flex",
-    flexDirection: "column",
-    lineHeight:    1.2,
-};
-
-const brandName = {
-    color:         "#38bdf8",
-    fontWeight:    900,
-    fontSize:      16,
-    letterSpacing: "1px",
-};
-
-const brandSub = {
-    color:          "#475569",
-    fontSize:       9,
-    fontWeight:     600,
-    letterSpacing:  "0.5px",
-    textTransform:  "uppercase",
-};
-
-const menuIconStyle = {
-    width:          38,
-    height:         38,
-    display:        "flex",
-    flexDirection:  "column",
-    alignItems:     "center",
-    justifyContent: "center",
-    gap:            5,
-    borderRadius:   10,
-    background:     "rgba(255,255,255,0.06)",
-    border:         "1px solid rgba(255,255,255,0.08)",
-    cursor:         "pointer",
-    padding:        0,
-};
-
-const burgerLine = (open, index) => {
-    const base = {
-        display:         "block",
-        width:           18,
-        height:          2,
-        borderRadius:    2,
-        background:      "#e5e7eb",
-        transition:      "all 0.25s ease",
-        transformOrigin: "center",
-    };
-    if (open) {
-        if (index === 0) return { ...base, transform: "translateY(7px) rotate(45deg)"  };
-        if (index === 1) return { ...base, opacity: 0, transform: "scaleX(0)"          };
-        if (index === 2) return { ...base, transform: "translateY(-7px) rotate(-45deg)"};
-    }
-    return base;
-};
-
-const sidebarOverlay = {
-    position:       "fixed",
-    inset:          0,
-    background:     "rgba(0,0,0,0.55)",
-    zIndex:         299,
-    backdropFilter: "blur(2px)",
-};
-
-const sidebar = (open) => ({
-    position:           "fixed",
-    top:                0,
-    right:              0,
-    height:             "100vh",
-    width:              280,
-    background:         "rgba(10,15,30,0.98)",
-    backdropFilter:     "blur(24px)",
-    WebkitBackdropFilter: "blur(24px)",
-    borderLeft:         "1px solid rgba(56,189,248,0.12)",
-    boxShadow:          open ? "-8px 0 40px rgba(0,0,0,0.6)" : "none",
-    zIndex:             300,
-    transform:          open ? "translateX(0)" : "translateX(100%)",
-    transition:         "transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
-    display:            "flex",
-    flexDirection:      "column",
-    overflowY:          "auto",
-});
-
-const sidebarHeader = {
-    display:        "flex",
-    justifyContent: "space-between",
-    alignItems:     "center",
-    padding:        "16px 16px 12px",
-    borderBottom:   "1px solid rgba(255,255,255,0.06)",
-    flexShrink:     0,
-};
-
-const sidebarBrand = {
-    display:    "flex",
-    alignItems: "center",
-    gap:        10,
-};
-
-const sidebarCloseBtn = {
-    width:          32,
-    height:         32,
-    borderRadius:   8,
-    border:         "1px solid rgba(255,255,255,0.08)",
-    background:     "rgba(255,255,255,0.05)",
-    color:          "#94a3b8",
-    fontSize:       13,
-    cursor:         "pointer",
-    fontWeight:     800,
-    display:        "flex",
-    alignItems:     "center",
-    justifyContent: "center",
-};
-
-const sidebarUserBadge = {
-    display:    "flex",
-    alignItems: "center",
-    gap:        10,
-    margin:     "12px 16px 0",
-    padding:    "10px 12px",
-    borderRadius: 12,
-    background: "rgba(56,189,248,0.06)",
-    border:     "1px solid rgba(56,189,248,0.12)",
-};
-
-const sidebarAvatar = {
-    width:          36,
-    height:         36,
-    borderRadius:   "50%",
-    background:     "linear-gradient(135deg, #38bdf8, #6366f1)",
-    display:        "flex",
-    alignItems:     "center",
-    justifyContent: "center",
-    fontWeight:     900,
-    fontSize:       15,
-    color:          "white",
-    flexShrink:     0,
-};
-
-const sidebarDivider = {
-    height:     1,
-    background: "rgba(255,255,255,0.05)",
-    margin:     "10px 16px",
-    flexShrink: 0,
-};
-
-const sidebarSection = {
-    padding:       "0 10px",
-    display:       "flex",
-    flexDirection: "column",
-    gap:           2,
-};
-
-const sidebarSectionLabel = {
-    fontSize:      10,
-    fontWeight:    800,
-    color:         "#334155",
-    textTransform: "uppercase",
-    letterSpacing: "1px",
-    padding:       "6px 6px 4px",
-};
-
-const sidebarBtn = (active) => ({
-    display:    "flex",
-    alignItems: "center",
-    gap:        10,
-    padding:    "10px 12px",
-    borderRadius: 10,
-    border:     active ? "1px solid rgba(56,189,248,0.25)" : "1px solid transparent",
-    background: active ? "rgba(56,189,248,0.1)" : "transparent",
-    color:      active ? "#38bdf8" : "#94a3b8",
-    fontSize:   14,
-    fontWeight: active ? 800 : 600,
-    cursor:     "pointer",
-    textAlign:  "left",
-    width:      "100%",
-    transition: "all 0.15s",
-});
-
-const sidebarBtnGreen = (active) => ({
-    display:    "flex",
-    alignItems: "center",
-    gap:        10,
-    padding:    "10px 12px",
-    borderRadius: 10,
-    border:     active ? "1px solid rgba(34,197,94,0.3)" : "1px solid transparent",
-    background: active ? "rgba(34,197,94,0.12)" : "transparent",
-    color:      active ? "#22c55e" : "#94a3b8",
-    fontSize:   14,
-    fontWeight: active ? 800 : 600,
-    cursor:     "pointer",
-    textAlign:  "left",
-    width:      "100%",
-    transition: "all 0.15s",
-});
-
-const sidebarBtnIcon = {
-    fontSize:   16,
-    flexShrink: 0,
-    width:      20,
-    textAlign:  "center",
-};
-
-const sidebarLogoutBtn = {
-    display:    "flex",
-    alignItems: "center",
-    gap:        10,
-    width:      "100%",
-    padding:    "11px 14px",
-    borderRadius: 10,
-    border:     "1px solid rgba(239,68,68,0.25)",
-    background: "rgba(239,68,68,0.08)",
-    color:      "#f87171",
-    fontWeight: 700,
-    fontSize:   14,
-    cursor:     "pointer",
-    textAlign:  "left",
-};
-
-const sidebarPrimaryBtn = {
-    width:        "100%",
-    padding:      "11px 14px",
-    borderRadius: 10,
-    border:       "none",
-    background:   "linear-gradient(135deg, #38bdf8, #0ea5e9)",
-    color:        "#000",
-    fontWeight:   800,
-    fontSize:     14,
-    cursor:       "pointer",
-};
-
-const contentStyle = {
-    padding:   0,
-    maxWidth:  1200,
-    margin:    "0 auto",
-};

@@ -16,16 +16,16 @@ const NETWORK_CONFIG = {
     tag: "Reliable", tagColor: "#ef4444",
   },
   AirtelTigo: {
-    label: "AirtelTigo", emoji: "🔵", color: "#6366f1",
-    bg: "linear-gradient(135deg, rgba(99,102,241,0.18), rgba(99,102,241,0.06))",
-    border: "rgba(99,102,241,0.4)",
-    tag: "Affordable", tagColor: "#6366f1",
+    label: "AirtelTigo", emoji: "🔵", color: "#8b5cf6",
+    bg: "linear-gradient(135deg, rgba(139,92,246,0.18), rgba(139,92,246,0.06))",
+    border: "rgba(139,92,246,0.4)",
+    tag: "Affordable", tagColor: "#8b5cf6",
   },
 };
 
 const bundleAccents = [
   { border: "rgba(34,197,94,0.3)", price: "#22c55e" },
-  { border: "rgba(56,189,248,0.3)", price: "#38bdf8" },
+  { border: "rgba(200,255,62,0.3)", price: "#c8ff3e" },
   { border: "rgba(167,139,250,0.3)", price: "#a78bfa" },
   { border: "rgba(245,158,11,0.3)", price: "#f59e0b" },
   { border: "rgba(20,184,166,0.3)", price: "#14b8a6" },
@@ -138,7 +138,7 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
           </div>
           {[
             { label: "Network", value: cfg?.label || network, color: cfg?.color },
-            { label: "Bundle", value: bundle.bundle, color: "#f1f5f9" },
+            { label: "Bundle", value: bundle.bundle, color: "#f3f0fb" },
             { label: "Cost (base price)", value: `GH₵ ${cost.toFixed(2)}`, color: "#22c55e", big: true },
           ].map((row, i) => (
             <div key={i} style={{ ...modal.summaryRow, borderBottom: i < 2 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
@@ -201,7 +201,7 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
             checked={accepted}
             onChange={(e) => setAccepted(e.target.checked)}
             disabled={processing}
-            style={{ marginRight: 8, accentColor: "#38bdf8", width: 15, height: 15, flexShrink: 0, marginTop: 2 }}
+            style={{ marginRight: 8, accentColor: "#c8ff3e", width: 15, height: 15, flexShrink: 0, marginTop: 2 }}
           />
           <span style={modal.checkText}>
             I confirm this number is correct.{" "}
@@ -210,11 +210,11 @@ function ConfirmModal({ bundle, network, cfg, walletBalance, onClose, onConfirm,
         </label>
 
         {checkingBlocking ? (
-          <button disabled style={{ ...modal.buyBtn, opacity: 0.4, cursor: "not-allowed", background: "linear-gradient(135deg, #334155, #1e293b)" }}>
+          <button disabled style={{ ...modal.buyBtn, opacity: 0.4, cursor: "not-allowed", background: "linear-gradient(135deg, #3d3460, #241c3d)" }}>
             🔎 Verifying number...
           </button>
         ) : showVerifyResult ? (
-          <button disabled style={{ ...modal.buyBtn, opacity: 0.4, cursor: "not-allowed", background: "linear-gradient(135deg, #334155, #1e293b)" }}>
+          <button disabled style={{ ...modal.buyBtn, opacity: 0.4, cursor: "not-allowed", background: "linear-gradient(135deg, #3d3460, #241c3d)" }}>
             See popup to continue
           </button>
         ) : (
@@ -479,15 +479,15 @@ export default function AgentBuyData({ user, setPage, authLoading }) {
                   <div key={i} style={styles.progressItem}>
                     <div style={{
                       ...styles.progressDot,
-                      background: done ? "#22c55e" : active ? "#38bdf8" : "rgba(255,255,255,0.08)",
-                      border: active ? "2px solid #38bdf8" : done ? "2px solid #22c55e" : "2px solid rgba(255,255,255,0.1)",
-                      color: done || active ? "white" : "#475569",
+                      background: done ? "#22c55e" : active ? "#c8ff3e" : "rgba(255,255,255,0.08)",
+                      border: active ? "2px solid #c8ff3e" : done ? "2px solid #22c55e" : "2px solid rgba(255,255,255,0.1)",
+                      color: done || active ? "white" : "#7a6fa3",
                     }}>
                       {done ? "✓" : i + 1}
                     </div>
                     <span style={{
                       ...styles.progressLabel,
-                      color: active ? "#38bdf8" : done ? "#22c55e" : "#475569",
+                      color: active ? "#c8ff3e" : done ? "#22c55e" : "#7a6fa3",
                     }}>{label}</span>
                   </div>
                 );
@@ -503,9 +503,9 @@ export default function AgentBuyData({ user, setPage, authLoading }) {
                 <div style={styles.networkGrid}>
                   {availableNetworks.map((netKey) => {
                     const c = NETWORK_CONFIG[netKey] || {
-                      label: netKey, emoji: "📡", color: "#64748b",
+                      label: netKey, emoji: "📡", color: "#9189b5",
                       bg: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.1)",
-                      tag: "", tagColor: "#64748b",
+                      tag: "", tagColor: "#9189b5",
                     };
                     const netBundles = bundles.filter((b) => b.network === netKey);
                     const cheapest = Math.min(...netBundles.map((b) => Number(b.cost_price)));
@@ -540,7 +540,7 @@ export default function AgentBuyData({ user, setPage, authLoading }) {
 
                 {/* Wallet reminder */}
                 <div style={styles.balanceReminder}>
-                  <span style={{ color: "#64748b", fontSize: 12, fontWeight: 600 }}>
+                  <span style={{ color: "#9189b5", fontSize: 12, fontWeight: 600 }}>
                     💡 You're buying at base (cost) price — no markup
                   </span>
                 </div>
@@ -559,7 +559,7 @@ export default function AgentBuyData({ user, setPage, authLoading }) {
                   }}>
                     {cfg.emoji} {cfg.label || network}
                   </div>
-                  <span style={{ fontSize: 12, color: "#475569", fontWeight: 600 }}>
+                  <span style={{ fontSize: 12, color: "#7a6fa3", fontWeight: 600 }}>
                     {networkBundles.length} bundles available
                   </span>
                 </div>
@@ -569,7 +569,7 @@ export default function AgentBuyData({ user, setPage, authLoading }) {
                 {networkBundles.length === 0 ? (
                   <div style={{ textAlign: "center", padding: "30px 0" }}>
                     <div style={{ fontSize: 36, marginBottom: 8 }}>📭</div>
-                    <p style={{ color: "#475569", fontSize: 14 }}>No bundles available.</p>
+                    <p style={{ color: "#7a6fa3", fontSize: 14 }}>No bundles available.</p>
                   </div>
                 ) : (
                   <div style={styles.bundleGrid}>
@@ -632,15 +632,15 @@ export default function AgentBuyData({ user, setPage, authLoading }) {
 // STYLES
 // =========================
 const styles = {
-  container: { minHeight: "100vh", color: "#e5e7eb", fontFamily: "ui-sans-serif, system-ui, Arial" },
+  container: { minHeight: "auto", color: "#e5e7eb", fontFamily: "ui-sans-serif, system-ui, Arial" },
 
-  header: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(15,23,42,0.9)", backdropFilter: "blur(12px)", position: "sticky", top: 0, zIndex: 100 },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(22,17,38,0.9)", backdropFilter: "blur(12px)", position: "sticky", top: 0, zIndex: 100 },
   headerLeft: { display: "flex", alignItems: "center", gap: 12 },
-  backBtn: { width: 36, height: 36, borderRadius: 10, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.05)", color: "#94a3b8", fontSize: 16, cursor: "pointer", fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" },
-  brand: { fontSize: 16, fontWeight: 900, color: "#f1f5f9" },
-  brandSub: { fontSize: 11, color: "#475569", fontWeight: 600, marginTop: 1 },
+  backBtn: { width: 36, height: 36, borderRadius: 10, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.05)", color: "#b4acd0", fontSize: 16, cursor: "pointer", fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" },
+  brand: { fontSize: 16, fontWeight: 900, color: "#f3f0fb" },
+  brandSub: { fontSize: 11, color: "#7a6fa3", fontWeight: 600, marginTop: 1 },
   walletChip: { display: "flex", flexDirection: "column", alignItems: "flex-end", background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 12, padding: "6px 12px" },
-  walletChipLabel: { fontSize: 10, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px" },
+  walletChipLabel: { fontSize: 10, color: "#9189b5", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px" },
   walletChipVal: { fontSize: 15, fontWeight: 900, color: "#22c55e" },
 
   main: { maxWidth: 520, margin: "0 auto", padding: "20px 16px 80px" },
@@ -648,7 +648,7 @@ const styles = {
   successToast: { background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.35)", color: "#86efac", padding: "13px 16px", borderRadius: 14, fontSize: 14, fontWeight: 700, marginBottom: 16, textAlign: "center" },
   errorBox: { background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#f87171", padding: "12px 16px", borderRadius: 12, fontSize: 14, marginBottom: 16 },
   loadingWrap: { textAlign: "center", padding: "60px 0" },
-  loadingText: { fontSize: 15, color: "#64748b", fontWeight: 600 },
+  loadingText: { fontSize: 15, color: "#9189b5", fontWeight: 600 },
 
   progressWrap: { display: "flex", justifyContent: "center", alignItems: "center", position: "relative", maxWidth: 340, margin: "0 auto 22px" },
   progressItem: { display: "flex", flexDirection: "column", alignItems: "center", gap: 6, flex: 1, position: "relative", zIndex: 1 },
@@ -656,8 +656,8 @@ const styles = {
   progressLabel: { fontSize: 10, fontWeight: 700, transition: "color 0.3s" },
   progressLine: { position: "absolute", top: 16, left: "16%", right: "16%", height: 2, background: "rgba(255,255,255,0.06)", zIndex: 0 },
 
-  card: { background: "rgba(15,23,42,0.9)", backdropFilter: "blur(20px)", borderRadius: 22, border: "1px solid rgba(255,255,255,0.07)", padding: "22px 18px", boxShadow: "0 20px 50px rgba(0,0,0,0.35)" },
-  stepLabel: { fontSize: 11, color: "#38bdf8", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.8px", margin: "0 0 16px" },
+  card: { background: "rgba(22,17,38,0.9)", backdropFilter: "blur(20px)", borderRadius: 22, border: "1px solid rgba(255,255,255,0.07)", padding: "22px 18px", boxShadow: "0 20px 50px rgba(0,0,0,0.35)" },
+  stepLabel: { fontSize: 11, color: "#c8ff3e", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.8px", margin: "0 0 16px" },
 
   networkGrid: { display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 },
   networkCard: { padding: "14px 16px", borderRadius: 16, cursor: "pointer", display: "flex", alignItems: "center", gap: 14, position: "relative", transition: "transform 0.15s" },
@@ -665,7 +665,7 @@ const styles = {
   networkEmoji: { fontSize: 28, flexShrink: 0 },
   networkInfo: { flex: 1 },
   networkName: { fontWeight: 800, fontSize: 15 },
-  networkMeta: { fontSize: 11, color: "#64748b", fontWeight: 600, marginTop: 2 },
+  networkMeta: { fontSize: 11, color: "#9189b5", fontWeight: 600, marginTop: 2 },
   networkArrow: { fontSize: 18, fontWeight: 900, flexShrink: 0 },
 
   balanceReminder: { textAlign: "center", padding: "10px 0 2px" },
@@ -673,13 +673,13 @@ const styles = {
   networkPill: { display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 50, fontSize: 13, fontWeight: 900 },
 
   bundleGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 },
-  bundleCard: { background: "rgba(2,6,23,0.7)", borderRadius: 16, padding: "16px 12px 12px", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 5, transition: "transform 0.15s" },
-  bundleSize: { fontWeight: 900, fontSize: 18, color: "#f1f5f9" },
+  bundleCard: { background: "rgba(10,8,20,0.7)", borderRadius: 16, padding: "16px 12px 12px", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 5, transition: "transform 0.15s" },
+  bundleSize: { fontWeight: 900, fontSize: 18, color: "#f3f0fb" },
   bundlePrice: { fontWeight: 900, fontSize: 16 },
   bundleCta: { fontSize: 11, fontWeight: 800, opacity: 0.75 },
   bundleInsufficient: { fontSize: 10, fontWeight: 800, color: "#ef4444", opacity: 0.8 },
 
-  topUpBtn: { width: "100%", padding: "11px", borderRadius: 14, border: "1px solid rgba(56,189,248,0.2)", background: "rgba(56,189,248,0.06)", color: "#38bdf8", fontWeight: 800, fontSize: 13, cursor: "pointer", textAlign: "center" },
+  topUpBtn: { width: "100%", padding: "11px", borderRadius: 14, border: "1px solid rgba(200,255,62,0.2)", background: "rgba(200,255,62,0.06)", color: "#c8ff3e", fontWeight: 800, fontSize: 13, cursor: "pointer", textAlign: "center" },
 };
 
 const banner = {
@@ -694,53 +694,53 @@ const banner = {
 
 const modal = {
   overlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 1000 },
-  box: { width: "100%", maxWidth: 480, background: "#0f172a", borderRadius: "24px 24px 0 0", padding: "22px 20px 40px", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 -8px 40px rgba(0,0,0,0.5)", fontFamily: "ui-sans-serif, system-ui, Arial" },
+  box: { width: "100%", maxWidth: 480, background: "#161126", borderRadius: "24px 24px 0 0", padding: "22px 20px 40px", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 -8px 40px rgba(0,0,0,0.5)", fontFamily: "ui-sans-serif, system-ui, Arial" },
   header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 },
-  headerLabel: { fontWeight: 900, fontSize: 16, color: "#f1f5f9" },
-  closeBtn: { background: "rgba(255,255,255,0.08)", border: "none", color: "#94a3b8", fontSize: 13, cursor: "pointer", padding: "6px 10px", borderRadius: 50, fontWeight: 800 },
+  headerLabel: { fontWeight: 900, fontSize: 16, color: "#f3f0fb" },
+  closeBtn: { background: "rgba(255,255,255,0.08)", border: "none", color: "#b4acd0", fontSize: 13, cursor: "pointer", padding: "6px 10px", borderRadius: 50, fontWeight: 800 },
   summary: { borderRadius: 16, padding: "10px 16px", marginBottom: 14 },
   summaryHeader: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10, paddingBottom: 8, borderBottom: "1px solid rgba(255,255,255,0.06)" },
   summaryRow: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0" },
-  summaryLabel: { fontSize: 12, color: "#64748b", fontWeight: 600 },
+  summaryLabel: { fontSize: 12, color: "#9189b5", fontWeight: 600 },
   summaryValue: { fontSize: 14, fontWeight: 700, color: "#e5e7eb" },
   walletRow: { borderRadius: 12, padding: "10px 14px", marginBottom: 16, display: "flex", flexDirection: "column", gap: 4 },
-  label: { display: "block", fontSize: 12, color: "#64748b", fontWeight: 800, marginBottom: 6 },
-  input: { width: "100%", padding: "13px 14px", borderRadius: 14, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(2,6,23,0.75)", color: "#fff", fontSize: 14, fontWeight: 600, marginBottom: 14, boxSizing: "border-box", outline: "none" },
-  verifyChecking: { fontSize: 12, color: "#64748b", margin: "-8px 0 14px", paddingLeft: 2 },
+  label: { display: "block", fontSize: 12, color: "#9189b5", fontWeight: 800, marginBottom: 6 },
+  input: { width: "100%", padding: "13px 14px", borderRadius: 14, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(10,8,20,0.75)", color: "#fff", fontSize: 14, fontWeight: 600, marginBottom: 14, boxSizing: "border-box", outline: "none" },
+  verifyChecking: { fontSize: 12, color: "#9189b5", margin: "-8px 0 14px", paddingLeft: 2 },
   verifyWarning: { fontSize: 12, color: "#f59e0b", margin: "-8px 0 14px", paddingLeft: 2, lineHeight: 1.5 },
   verifyGood: { fontSize: 12, color: "#22c55e", margin: "-8px 0 14px", paddingLeft: 2 },
   checkRow: { display: "flex", alignItems: "flex-start", background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)", padding: "12px 14px", borderRadius: 14, marginBottom: 18, cursor: "pointer" },
-  checkText: { fontSize: 12, color: "#94a3b8", lineHeight: 1.55, fontWeight: 600 },
+  checkText: { fontSize: 12, color: "#b4acd0", lineHeight: 1.55, fontWeight: 600 },
   buyBtn: { width: "100%", padding: 15, borderRadius: 16, border: "none", color: "white", fontWeight: 900, fontSize: 15, cursor: "pointer", boxShadow: "0 6px 24px rgba(34,197,94,0.25)", marginBottom: 10, transition: "opacity 0.2s" },
-  note: { textAlign: "center", fontSize: 11, color: "#475569", margin: 0, fontWeight: 600 },
+  note: { textAlign: "center", fontSize: 11, color: "#7a6fa3", margin: 0, fontWeight: 600 },
 
   verifyOverlay: {
-    position: "fixed", inset: 0, background: "rgba(2,6,23,0.75)",
+    position: "fixed", inset: 0, background: "rgba(10,8,20,0.75)",
     backdropFilter: "blur(2px)", display: "flex",
     alignItems: "center", justifyContent: "center", zIndex: 2000,
   },
   verifyPopup: {
-    background: "#0f172a", border: "1px solid rgba(255,255,255,0.1)",
+    background: "#161126", border: "1px solid rgba(255,255,255,0.1)",
     borderRadius: 20, padding: "28px 32px", textAlign: "center",
     boxShadow: "0 20px 60px rgba(0,0,0,0.5)", maxWidth: 280,
   },
   verifySpinner: {
     width: 34, height: 34, margin: "0 auto 14px", borderRadius: "50%",
-    border: "3px solid rgba(56,189,248,0.2)", borderTopColor: "#38bdf8",
+    border: "3px solid rgba(200,255,62,0.2)", borderTopColor: "#c8ff3e",
     animation: "evos-spin 0.8s linear infinite",
   },
-  verifyPopupText: { fontSize: 15, fontWeight: 800, color: "#f1f5f9", margin: "0 0 4px" },
-  verifyPopupSub: { fontSize: 12, color: "#64748b", margin: 0 },
+  verifyPopupText: { fontSize: 15, fontWeight: 800, color: "#f3f0fb", margin: "0 0 4px" },
+  verifyPopupSub: { fontSize: 12, color: "#9189b5", margin: 0 },
   verifyPopupActions: {
     display: "flex", flexDirection: "column", gap: 8, marginTop: 18,
   },
   verifyPopupProceedBtn: {
-    background: "linear-gradient(135deg, #38bdf8, #0ea5e9)", color: "#fff",
+    background: "linear-gradient(135deg, #c8ff3e, #8fe600)", color: "#fff",
     border: "none", borderRadius: 12, padding: "12px 16px",
     fontSize: 14, fontWeight: 800, cursor: "pointer",
   },
   verifyPopupCancelBtn: {
-    background: "transparent", color: "#94a3b8",
+    background: "transparent", color: "#b4acd0",
     border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
     padding: "10px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer",
   },

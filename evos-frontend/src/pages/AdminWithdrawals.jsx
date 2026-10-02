@@ -118,17 +118,17 @@ export default function AdminWithdrawals() {
               onClick={() => setFilter(f)}
               style={{
                 ...styles.filterTab,
-                background: filter === f ? "rgba(56,189,248,0.15)" : "rgba(255,255,255,0.04)",
-                color: filter === f ? "#38bdf8" : "#64748b",
-                border: filter === f ? "1px solid rgba(56,189,248,0.4)" : "1px solid rgba(255,255,255,0.06)",
+                background: filter === f ? "rgba(200,255,62,0.15)" : "rgba(255,255,255,0.04)",
+                color: filter === f ? "#c8ff3e" : "#9189b5",
+                border: filter === f ? "1px solid rgba(200,255,62,0.4)" : "1px solid rgba(255,255,255,0.06)",
                 fontWeight: filter === f ? 800 : 600,
               }}
             >
               {f.charAt(0).toUpperCase() + f.slice(1)}
               <span style={{
                 ...styles.filterCount,
-                background: filter === f ? "rgba(56,189,248,0.2)" : "rgba(255,255,255,0.06)",
-                color: filter === f ? "#38bdf8" : "#475569",
+                background: filter === f ? "rgba(200,255,62,0.2)" : "rgba(255,255,255,0.06)",
+                color: filter === f ? "#c8ff3e" : "#7a6fa3",
               }}>
                 {counts[f]}
               </span>
@@ -262,21 +262,21 @@ const styles = {
   header: { textAlign: "center", marginBottom: 24 },
   headerBadge: {
     display: "inline-block", padding: "5px 18px", borderRadius: 50,
-    background: "rgba(56,189,248,0.15)", border: "1px solid rgba(56,189,248,0.3)",
-    color: "#38bdf8", fontSize: 12, fontWeight: 800, marginBottom: 10, letterSpacing: "0.5px",
+    background: "rgba(200,255,62,0.15)", border: "1px solid rgba(200,255,62,0.3)",
+    color: "#c8ff3e", fontSize: 12, fontWeight: 800, marginBottom: 10, letterSpacing: "0.5px",
   },
-  title: { fontSize: 26, fontWeight: 900, color: "#f1f5f9", margin: "0 0 6px" },
-  subtitle: { fontSize: 13, color: "#64748b", margin: 0, fontWeight: 600 },
+  title: { fontSize: 26, fontWeight: 900, color: "#f3f0fb", margin: "0 0 6px" },
+  subtitle: { fontSize: 13, color: "#9189b5", margin: 0, fontWeight: 600 },
 
   // STATS
   statsRow: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 16 },
   statCard: {
-    background: "rgba(15,23,42,0.8)", border: "1px solid rgba(255,255,255,0.07)",
+    background: "rgba(22,17,38,0.8)", border: "1px solid rgba(255,255,255,0.07)",
     borderRadius: 16, padding: "14px 10px", textAlign: "center",
   },
   statIcon: { fontSize: 20, marginBottom: 6 },
-  statVal: { fontWeight: 900, fontSize: 20, color: "#f1f5f9", marginBottom: 2 },
-  statLabel: { fontSize: 11, color: "#475569", fontWeight: 700 },
+  statVal: { fontWeight: 900, fontSize: 20, color: "#f3f0fb", marginBottom: 2 },
+  statLabel: { fontSize: 11, color: "#7a6fa3", fontWeight: 700 },
 
   // PENDING BANNER
   pendingBanner: {
@@ -297,8 +297,8 @@ const styles = {
   filterCount: { fontSize: 11, fontWeight: 800, padding: "1px 6px", borderRadius: 50 },
   refreshBtn: {
     padding: "8px 16px", borderRadius: 10,
-    background: "rgba(56,189,248,0.12)", border: "1px solid rgba(56,189,248,0.25)",
-    color: "#38bdf8", fontWeight: 800, fontSize: 13, cursor: "pointer",
+    background: "rgba(200,255,62,0.12)", border: "1px solid rgba(200,255,62,0.25)",
+    color: "#c8ff3e", fontWeight: 800, fontSize: 13, cursor: "pointer",
   },
 
   // ERROR
@@ -310,12 +310,12 @@ const styles = {
 
   // EMPTY / LOADING
   centerBox: { textAlign: "center", padding: "48px 0" },
-  centerText: { fontSize: 14, color: "#475569", fontWeight: 600, margin: 0 },
+  centerText: { fontSize: 14, color: "#7a6fa3", fontWeight: 600, margin: 0 },
 
   // CARDS
   cardList: { display: "flex", flexDirection: "column", gap: 14 },
   card: {
-    background: "rgba(15,23,42,0.9)", backdropFilter: "blur(16px)",
+    background: "rgba(22,17,38,0.9)", backdropFilter: "blur(16px)",
     WebkitBackdropFilter: "blur(16px)", borderRadius: 20,
     border: "1px solid rgba(255,255,255,0.07)",
     boxShadow: "0 4px 24px rgba(0,0,0,0.3)", overflow: "hidden",
@@ -328,28 +328,28 @@ const styles = {
   agentInfo: { display: "flex", alignItems: "center", gap: 12 },
   agentAvatar: {
     width: 40, height: 40, borderRadius: "50%",
-    background: "linear-gradient(135deg, #38bdf8, #6366f1)",
+    background: "linear-gradient(135deg, #c8ff3e, #8b5cf6)",
     display: "flex", alignItems: "center", justifyContent: "center",
     fontWeight: 900, fontSize: 16, color: "white",
   },
-  agentId: { fontWeight: 800, fontSize: 15, color: "#f1f5f9" },
-  cardId: { fontSize: 11, color: "#475569", fontWeight: 600, marginTop: 2 },
+  agentId: { fontWeight: 800, fontSize: 15, color: "#f3f0fb" },
+  cardId: { fontSize: 11, color: "#7a6fa3", fontWeight: 600, marginTop: 2 },
   statusBadge: { fontSize: 12, fontWeight: 800, padding: "4px 12px", borderRadius: 50 },
 
   amountRow: {
     display: "flex", justifyContent: "space-between", alignItems: "center",
-    padding: "14px 18px", background: "rgba(2,6,23,0.4)",
+    padding: "14px 18px", background: "rgba(10,8,20,0.4)",
     borderBottom: "1px solid rgba(255,255,255,0.05)",
   },
-  amountLabel: { fontSize: 12, color: "#64748b", fontWeight: 700 },
-  amountVal: { fontSize: 22, fontWeight: 900, color: "#38bdf8" },
+  amountLabel: { fontSize: 12, color: "#9189b5", fontWeight: 700 },
+  amountVal: { fontSize: 22, fontWeight: 900, color: "#c8ff3e" },
 
   detailsGrid: {
     display: "grid", gridTemplateColumns: "1fr 1fr",
     gap: 0, padding: "4px 18px 10px",
   },
   detailItem: { padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" },
-  detailLabel: { display: "block", fontSize: 11, color: "#475569", fontWeight: 700, marginBottom: 3 },
+  detailLabel: { display: "block", fontSize: 11, color: "#7a6fa3", fontWeight: 700, marginBottom: 3 },
   detailVal: { fontSize: 13, color: "#e5e7eb", fontWeight: 600 },
 
   actions: { display: "flex", gap: 10, padding: "14px 18px 18px" },
@@ -366,7 +366,7 @@ const styles = {
   },
 
   resolvedNote: {
-    padding: "12px 18px 16px", fontSize: 13, color: "#475569",
+    padding: "12px 18px 16px", fontSize: 13, color: "#7a6fa3",
     fontWeight: 600, textAlign: "center",
   },
 };

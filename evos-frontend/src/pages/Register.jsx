@@ -193,7 +193,7 @@ export default function Register({ setPage }) {
 
 const s = {
   page: {
-    minHeight: "100vh",
+    minHeight: "calc(100dvh - var(--dock, 0px) - 58px)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -202,7 +202,7 @@ const s = {
   card: {
     width: "100%",
     maxWidth: 420,
-    background: "rgba(15,23,42,0.92)",
+    background: "rgba(22,17,38,0.92)",
     backdropFilter: "blur(20px)",
     WebkitBackdropFilter: "blur(20px)",
     borderRadius: 24,
@@ -222,21 +222,21 @@ const s = {
   },
   brandDot: {
     width: 10, height: 10, borderRadius: "50%",
-    background: "#38bdf8", boxShadow: "0 0 10px #38bdf8",
+    background: "#c8ff3e", boxShadow: "0 0 10px #c8ff3e",
   },
   brandName: {
-    fontSize: 18, fontWeight: 900, color: "#38bdf8", letterSpacing: "0.15em",
+    fontSize: 18, fontWeight: 900, color: "#c8ff3e", letterSpacing: "0.15em",
   },
   title: {
     fontSize: 22, fontWeight: 900, color: "#e5e7eb",
     margin: "0 0 4px", textAlign: "center",
   },
   sub: {
-    fontSize: 13, color: "#64748b", textAlign: "center", margin: "0 0 22px",
+    fontSize: 13, color: "#9189b5", textAlign: "center", margin: "0 0 22px",
   },
   field: { marginBottom: 14 },
   label: {
-    display: "block", fontSize: 11, color: "#94a3b8",
+    display: "block", fontSize: 11, color: "#b4acd0",
     marginBottom: 5, letterSpacing: "0.05em", textTransform: "uppercase",
   },
   iconWrap: { position: "relative", display: "flex", alignItems: "center" },
@@ -249,7 +249,7 @@ const s = {
     padding: "12px 14px 12px 36px",
     borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.08)",
-    background: "rgba(2,6,23,0.7)",
+    background: "rgba(10,8,20,0.7)",
     color: "#e5e7eb",
     fontSize: 14,
     outline: "none",
@@ -278,14 +278,14 @@ const s = {
   },
   btn: {
     width: "100%", padding: 14, borderRadius: 14, border: "none",
-    background: "linear-gradient(135deg,#38bdf8,#0ea5e9)",
+    background: "linear-gradient(135deg,#c8ff3e,#8fe600)",
     color: "#000", fontWeight: 900, fontSize: 15, marginBottom: 16,
   },
   divider: {
     display: "flex", alignItems: "center", gap: 10, marginBottom: 16,
   },
   dividerLine: { flex: 1, height: 1, background: "rgba(255,255,255,0.07)" },
-  dividerText: { fontSize: 11, color: "#475569", whiteSpace: "nowrap" },
+  dividerText: { fontSize: 11, color: "#7a6fa3", whiteSpace: "nowrap" },
   loginBtn: {
     width: "100%", padding: 13, borderRadius: 14,
     border: "1px solid rgba(255,255,255,0.1)",

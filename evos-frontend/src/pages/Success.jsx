@@ -176,10 +176,10 @@ export default function Success() {
         {/* ── ORDER SUCCESS ── */}
         {status === "order_success" && (
           <>
-            <div style={{ ...s.iconCircle, background: "rgba(56,189,248,0.15)", border: "2px solid rgba(56,189,248,0.3)" }}>
+            <div style={{ ...s.iconCircle, background: "rgba(200,255,62,0.15)", border: "2px solid rgba(200,255,62,0.3)" }}>
               📦
             </div>
-            <h2 style={{ ...s.title, color: "#38bdf8" }}>Order Placed!</h2>
+            <h2 style={{ ...s.title, color: "#c8ff3e" }}>Order Placed!</h2>
             <p style={s.sub}>Your data bundle is being processed ✅</p>
 
             <div style={s.summaryBox}>
@@ -199,7 +199,7 @@ export default function Success() {
               </p>
               <p style={s.promoBody}>
                 Need help with CVs, business plans, school work, coding, or ideas?
-                Meet <strong style={{ color: "#f1f5f9" }}>EVOSGPT</strong> — your AI assistant.
+                Meet <strong style={{ color: "#f3f0fb" }}>EVOSGPT</strong> — your AI assistant.
               </p>
               <p style={s.promoSub}>
                 Login with your EvosData details and start for free.
@@ -234,7 +234,7 @@ const s = {
   },
   card: {
     width: "100%", maxWidth: 400,
-    background: "rgba(15,23,42,0.95)",
+    background: "rgba(22,17,38,0.95)",
     backdropFilter: "blur(20px)",
     borderRadius: 24, padding: "32px 24px",
     border: "1px solid rgba(255,255,255,0.08)",
@@ -247,10 +247,10 @@ const s = {
     display: "flex", alignItems: "center", justifyContent: "center",
     fontSize: 32, margin: "0 auto 18px",
   },
-  title: { fontSize: 22, fontWeight: 900, color: "#f1f5f9", margin: "0 0 8px" },
-  sub: { fontSize: 14, color: "#64748b", fontWeight: 600, margin: "0 0 20px", lineHeight: 1.5 },
+  title: { fontSize: 22, fontWeight: 900, color: "#f3f0fb", margin: "0 0 8px" },
+  sub: { fontSize: 14, color: "#9189b5", fontWeight: 600, margin: "0 0 20px", lineHeight: 1.5 },
   summaryBox: {
-    background: "rgba(2,6,23,0.5)",
+    background: "rgba(10,8,20,0.5)",
     border: "1px solid rgba(255,255,255,0.06)",
     borderRadius: 16, padding: "4px 16px", marginBottom: 22,
   },
@@ -258,12 +258,12 @@ const s = {
     display: "flex", justifyContent: "space-between", alignItems: "center",
     padding: "12px 0", borderBottom: "1px solid rgba(255,255,255,0.05)",
   },
-  summaryLabel: { fontSize: 13, color: "#64748b", fontWeight: 600 },
+  summaryLabel: { fontSize: 13, color: "#9189b5", fontWeight: 600 },
   summaryVal: { fontSize: 15, fontWeight: 700, color: "#e5e7eb" },
 
   /* ── EVOSGPT PROMO BLOCK STYLES ── */
   promoBox: {
-    background: "linear-gradient(135deg, rgba(124,58,237,0.15), rgba(56,189,248,0.1))",
+    background: "linear-gradient(135deg, rgba(124,58,237,0.15), rgba(200,255,62,0.1))",
     border: "1px solid rgba(124,58,237,0.3)",
     borderRadius: 18,
     padding: "20px 18px",
@@ -285,21 +285,21 @@ const s = {
   promoHeadline: {
     fontSize: 15,
     fontWeight: 800,
-    color: "#f1f5f9",
+    color: "#f3f0fb",
     margin: "0 0 8px",
     lineHeight: 1.4,
   },
   promoBody: {
     fontSize: 13.5,
     fontWeight: 600,
-    color: "#cbd5e1",
+    color: "#d9d4ec",
     margin: "0 0 6px",
     lineHeight: 1.5,
   },
   promoSub: {
     fontSize: 12.5,
     fontWeight: 600,
-    color: "#64748b",
+    color: "#9189b5",
     margin: "0 0 16px",
     lineHeight: 1.4,
   },
@@ -326,9 +326,9 @@ const s = {
     borderRadius: 12, padding: "10px 12px", textAlign: "left",
   },
   checkerCardRow: { display: "flex", alignItems: "center", gap: 8, padding: "4px 0" },
-  checkerCardLabel: { fontSize: 11, color: "#64748b", fontWeight: 700, width: 44, flexShrink: 0 },
+  checkerCardLabel: { fontSize: 11, color: "#9189b5", fontWeight: 700, width: 44, flexShrink: 0 },
   checkerCardValue: {
-    fontSize: 13, color: "#f1f5f9", fontWeight: 800, fontFamily: "monospace",
+    fontSize: 13, color: "#f3f0fb", fontWeight: 800, fontFamily: "monospace",
     flex: 1, wordBreak: "break-all",
   },
   checkerCopyBtn: {
@@ -349,7 +349,7 @@ const s = {
     width: "100%", padding: "13px", borderRadius: 14,
     border: "1px solid rgba(255,255,255,0.1)",
     background: "rgba(255,255,255,0.05)",
-    color: "#94a3b8", fontWeight: 700, fontSize: 14, cursor: "pointer",
+    color: "#b4acd0", fontWeight: 700, fontSize: 14, cursor: "pointer",
     fontFamily: "inherit",
   },
 };

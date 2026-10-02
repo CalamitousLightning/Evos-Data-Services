@@ -119,7 +119,7 @@ export default function Orders() {
 const styles = {
   container: {
     padding: "24px",
-    minHeight: "100vh",
+    minHeight: "auto",
   },
 
   title: {
@@ -139,7 +139,7 @@ const styles = {
   card: {
     padding: "16px",
     borderRadius: "14px",
-    background: "rgba(15, 23, 42, 0.85)",
+    background: "rgba(22,17,38, 0.85)",
     backdropFilter: "blur(14px)",
     WebkitBackdropFilter: "blur(14px)",
     boxShadow: "0 20px 50px rgba(0,0,0,0.35)",
@@ -149,13 +149,13 @@ const styles = {
 
   phone: {
     fontSize: "12px",
-    color: "#94a3b8",
+    color: "#b4acd0",
     marginTop: "6px",
   },
 
   info: {
     textAlign: "center",
-    color: "#94a3b8",
+    color: "#b4acd0",
     fontSize: "14px",
     marginTop: "20px",
   },

@@ -118,16 +118,16 @@ export default function ForgotPassword({ setPage }) {
               <div style={{
                 ...s.stepCircle,
                 background: step >= n
-                  ? "linear-gradient(135deg,#38bdf8,#0ea5e9)"
+                  ? "linear-gradient(135deg,#c8ff3e,#8fe600)"
                   : "rgba(255,255,255,0.07)",
-                color: step >= n ? "#000" : "#475569",
+                color: step >= n ? "#000" : "#7a6fa3",
                 fontWeight: step >= n ? 900 : 500,
               }}>
                 {step > n ? "✓" : n}
               </div>
               <span style={{
                 ...s.stepText,
-                color: step >= n ? "#94a3b8" : "#334155",
+                color: step >= n ? "#b4acd0" : "#3d3460",
               }}>
                 {stepLabel[n - 1]}
               </span>
@@ -273,7 +273,7 @@ export default function ForgotPassword({ setPage }) {
 
 const s = {
   page: {
-    minHeight: "100vh",
+    minHeight: "calc(100dvh - var(--dock, 0px) - 58px)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -282,7 +282,7 @@ const s = {
   card: {
     width: "100%",
     maxWidth: 400,
-    background: "rgba(15,23,42,0.92)",
+    background: "rgba(22,17,38,0.92)",
     backdropFilter: "blur(20px)",
     WebkitBackdropFilter: "blur(20px)",
     borderRadius: 24,
@@ -304,13 +304,13 @@ const s = {
     width: 10,
     height: 10,
     borderRadius: "50%",
-    background: "#38bdf8",
-    boxShadow: "0 0 10px #38bdf8",
+    background: "#c8ff3e",
+    boxShadow: "0 0 10px #c8ff3e",
   },
   brandName: {
     fontSize: 18,
     fontWeight: 900,
-    color: "#38bdf8",
+    color: "#c8ff3e",
     letterSpacing: "0.15em",
   },
   steps: {
@@ -352,7 +352,7 @@ const s = {
   },
   sub: {
     fontSize: 13,
-    color: "#64748b",
+    color: "#9189b5",
     textAlign: "center",
     margin: "0 0 24px",
   },
@@ -372,7 +372,7 @@ const s = {
   label: {
     display: "block",
     fontSize: 12,
-    color: "#94a3b8",
+    color: "#b4acd0",
     marginBottom: 6,
     letterSpacing: "0.04em",
     textTransform: "uppercase",
@@ -382,7 +382,7 @@ const s = {
     padding: "13px 14px",
     borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.08)",
-    background: "rgba(2,6,23,0.7)",
+    background: "rgba(10,8,20,0.7)",
     color: "#e5e7eb",
     fontSize: 14,
     outline: "none",
@@ -419,7 +419,7 @@ const s = {
     padding: "14px",
     borderRadius: 14,
     border: "none",
-    background: "linear-gradient(135deg,#38bdf8,#0ea5e9)",
+    background: "linear-gradient(135deg,#c8ff3e,#8fe600)",
     color: "#000",
     fontWeight: 900,
     fontSize: 15,
@@ -429,13 +429,13 @@ const s = {
   },
   resend: {
     fontSize: 12,
-    color: "#64748b",
+    color: "#9189b5",
     textAlign: "center",
     marginBottom: 16,
     marginTop: -8,
   },
   resendLink: {
-    color: "#38bdf8",
+    color: "#c8ff3e",
     cursor: "pointer",
     fontWeight: 700,
   },
