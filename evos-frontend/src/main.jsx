@@ -7,7 +7,7 @@ createRoot(document.getElementById('root')).render(
   <StrictMode>
     <App />
   </StrictMode>,
-)
+);
 
 // Dismiss the launch splash (defined in index.html). On an agent store link it
 // stays up until StorePage reports the store has loaded (capped so a slow API
