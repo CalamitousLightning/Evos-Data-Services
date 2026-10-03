@@ -5,6 +5,7 @@ import { smartFetch } from "../config";
 export default function Success() {
   const [status, setStatus] = useState("verifying");
   const [checkerData, setCheckerData] = useState(null);
+  const [afaData, setAfaData] = useState(null);
   const [copiedKey, setCopiedKey] = useState("");
 
   const params    = new URLSearchParams(window.location.search);
@@ -47,6 +48,15 @@ export default function Success() {
           setStatus(data?.status === "successful" ? "checker_success" : "checker_pending");
         })
         .catch(() => setStatus("checker_pending"));
+    } else if (type === "afa") {
+      setStatus("afa_verifying");
+      smartFetch(`/afa/status/${reference}`)
+        .then((res) => res.json())
+        .then((data) => {
+          setAfaData(data);
+          setStatus(data?.status === "rejected" ? "afa_rejected" : "afa_success");
+        })
+        .catch(() => setStatus("afa_success"));
     } else {
       // fire-and-forget
       smartFetch(`/orders/sync/${reference}`, {
@@ -87,6 +97,39 @@ export default function Success() {
               <button style={s.secondaryBtn} onClick={() => window.location.href = "/agent-dashboard"}>
                 🏠 Dashboard
               </button>
+            </div>
+          </>
+        )}
+
+        {/* ── AFA ── */}
+        {status === "afa_verifying" && (
+          <>
+            <div style={s.spinner}>⏳</div>
+            <h2 style={s.title}>Verifying Payment</h2>
+            <p style={s.sub}>Submitting your AFA registration, this takes a few seconds...</p>
+          </>
+        )}
+        {status === "afa_success" && (
+          <>
+            <div style={{ ...s.iconCircle, background: "rgba(34,197,94,0.15)", border: "2px solid rgba(34,197,94,0.3)" }}>📝</div>
+            <h2 style={{ ...s.title, color: "#22c55e" }}>AFA Registration Submitted</h2>
+            <p style={s.sub}>
+              {afaData?.phone_number ? `${afaData.phone_number} is being registered. ` : ""}
+              Approval can take a little while. Check progress anytime on the AFA page with the MTN number.
+            </p>
+            <div style={s.btnGroup}>
+              <button style={s.primaryBtn} onClick={() => window.location.href = "/afa"}>🔎 Check Status</button>
+              <button style={s.secondaryBtn} onClick={() => window.location.href = "/"}>🏠 Go Home</button>
+            </div>
+          </>
+        )}
+        {status === "afa_rejected" && (
+          <>
+            <div style={{ ...s.iconCircle, background: "rgba(239,68,68,0.15)", border: "2px solid rgba(239,68,68,0.3)" }}>⚠️</div>
+            <h2 style={{ ...s.title, color: "#f87171" }}>Registration Rejected</h2>
+            <p style={s.sub}>{afaData?.failure_reason || "The details could not be accepted."} Contact support with your payment reference for a refund or correction.</p>
+            <div style={s.btnGroup}>
+              <button style={s.secondaryBtn} onClick={() => window.location.href = "/"}>🏠 Go Home</button>
             </div>
           </>
         )}

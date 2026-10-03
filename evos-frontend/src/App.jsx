@@ -20,6 +20,8 @@ import Checkers           from "./pages/Checkers";
 import AgentBuyChecker    from "./pages/AgentBuyChecker";
 import AgentCheckerPricing from "./pages/AgentCheckerPricing";
 import DashXera           from "./pages/DashXera";
+import Afa                from "./pages/Afa";
+import AgentBuyAfa        from "./pages/AgentBuyAfa";
 import CommunityPopup     from "./components/CommunityPopup";
 import { InstallBanner, InstallHelp, useInstall } from "./components/InstallApp";
 import { Icon } from "./components/Icons";
@@ -80,6 +82,7 @@ export default function App() {
             "/":                   "home",
             "/shop":               "shop",
             "/checkers":           "checkers",
+            "/afa":                "afa",
             "/orders":             "orders",
             "/dashboard":          "dashboard",
             "/login":              "login",
@@ -91,6 +94,7 @@ export default function App() {
             "/agent-withdraw":     "agent-withdraw",
             "/agent-buy-data":     "agent-buy-data",
             "/agent-buy-checker":  "agent-buy-checker",
+            "/agent-buy-afa":      "agent-buy-afa",
             "/agent-checker-pricing": "agent-checker-pricing",
             "/agent-deposit":      "agent-deposit",
             "/track":              "track-order",
@@ -147,6 +151,7 @@ export default function App() {
             home:               "/",
             shop:               "/shop",
             checkers:           "/checkers",
+            afa:                "/afa",
             orders:             "/orders",
             dashboard:          "/dashboard",
             login:              "/login",
@@ -158,6 +163,7 @@ export default function App() {
             "agent-withdraw":   "/agent-withdraw",
             "agent-buy-data":   "/agent-buy-data",
             "agent-buy-checker":      "/agent-buy-checker",
+            "agent-buy-afa":          "/agent-buy-afa",
             "agent-checker-pricing":  "/agent-checker-pricing",
             "agent-deposit":    "/agent-deposit",
             store:              "/store",
@@ -182,6 +188,8 @@ export default function App() {
                 return <Shop user={user} theme={theme} />;
             case "checkers":
                 return <Checkers user={user} theme={theme} />;
+            case "afa":
+                return <Afa />;
             case "orders":
                 return <Orders user={user} theme={theme} />;
             case "login":
@@ -202,6 +210,8 @@ export default function App() {
                 return <AgentBuyData user={user} setPage={navigate} />;
             case "agent-buy-checker":
                 return <AgentBuyChecker user={user} setPage={navigate} />;
+            case "agent-buy-afa":
+                return <AgentBuyAfa user={user} setPage={navigate} />;
             case "agent-checker-pricing":
                 return <AgentCheckerPricing user={user} setPage={navigate} />;
             case "agent-deposit":
@@ -235,6 +245,7 @@ export default function App() {
             { icon: "chart",  label: "Dashboard",       target: "dashboard" },
             { icon: "pin",    label: "Track Order",     target: "eta-track" },
             { icon: "cap",    label: "Result Checkers", target: "checkers", green: true },
+            { icon: "user",   label: "AFA Registration", target: "afa" },
         ] },
         ...(user ? [{ label: "Agent", items: [
             { icon: "rocket", label: isAgentActive ? "Agent Dashboard" : "Become Agent", target: "agent-dashboard" },
@@ -244,6 +255,7 @@ export default function App() {
                 { icon: "tag",    label: "Manage Pricing",        target: "agent-pricing" },
                 { icon: "cap",    label: "Buy Checker (Base)",    target: "agent-buy-checker" },
                 { icon: "tag",    label: "Checker Pricing",       target: "agent-checker-pricing" },
+                { icon: "user",   label: "AFA Registration",      target: "agent-buy-afa" },
                 { icon: "wallet", label: "Withdraw Funds",        target: "agent-withdraw" },
             ] : []),
         ] }] : []),

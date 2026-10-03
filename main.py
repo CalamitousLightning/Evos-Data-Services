@@ -1722,6 +1722,463 @@ async def agent_buy_checker(request: Request, payload: AgentBuyCheckerRequest):
         return {"status": "error", "message": "Something went wrong. Please try again."}
         
 # =========================
+# AFA REGISTRATION (MTN SIM) — fulfilled through Swift Data Link
+# Customers pay via Paystack; approved agents pay their base price from wallet.
+# Statuses: pending_payment → paid → processing → successful
+#           failed   = our call to SDL didn't land (retryable, picked up by retry job)
+#           rejected = SDL refused the details (needs a fix, not a retry; agents auto-refunded)
+# =========================
+AFA_SELL_PRICE  = float(os.getenv("AFA_SELL_PRICE", "20.00"))   # customer price
+AFA_AGENT_PRICE = float(os.getenv("AFA_AGENT_PRICE", "17.00"))  # agent wallet cost
+AFA_WEBHOOK_URL = os.getenv("AFA_WEBHOOK_URL", SWIFT_DATA_LINK_WEBHOOK)
+
+GHANA_CARD_RE = re.compile(r"^GHA-\d{9}-\d$")
+MTN_PREFIXES  = ("024", "025", "053", "054", "055", "059")
+GHANA_REGIONS = [
+    "Greater Accra", "Ashanti", "Western", "Western North", "Central", "Eastern",
+    "Volta", "Oti", "Northern", "Savannah", "North East", "Upper East",
+    "Upper West", "Bono", "Bono East", "Ahafo",
+]
+
+
+def _afa_clean_fields(v: dict) -> dict:
+    name = re.sub(r"\s+", " ", (v.get("name") or "").strip())
+    phone = re.sub(r"[\s\-\(\)]", "", v.get("phone_number") or "")
+    if phone.startswith("+233"):
+        phone = "0" + phone[4:]
+    elif phone.startswith("233") and len(phone) == 12:
+        phone = "0" + phone[3:]
+    id_number = (v.get("id_number") or "").strip().upper()
+    if len(name) < 3:
+        raise ValueError("Enter the full name as it appears on the Ghana Card")
+    if not re.match(r"^0\d{9}$", phone) or phone[:3] not in MTN_PREFIXES:
+        raise ValueError("AFA registration is for MTN numbers only (e.g. 0551234567)")
+    if not GHANA_CARD_RE.match(id_number):
+        raise ValueError("Ghana Card must look like GHA-123456789-0")
+    if v.get("region") not in GHANA_REGIONS:
+        raise ValueError("Select a valid region")
+    try:
+        dob = datetime.strptime(v.get("date_of_birth") or "", "%Y-%m-%d").date()
+    except ValueError:
+        raise ValueError("Date of birth must be YYYY-MM-DD")
+    today = utc_now().date()
+    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    if age < 18 or age > 110:
+        raise ValueError("Registrant must be 18 or older")
+    return {"name": name, "phone_number": phone, "id_number": id_number, "date_of_birth": dob.isoformat()}
+
+
+class AfaFields(BaseModel):
+    name: str = Field(min_length=3, max_length=80)
+    phone_number: str = Field(min_length=9, max_length=16)
+    id_number: str = Field(min_length=10, max_length=20)
+    occupation: str = Field(min_length=2, max_length=60)
+    location: str = Field(min_length=2, max_length=80)
+    region: str
+    date_of_birth: str
+
+    def cleaned(self) -> dict:
+        base = _afa_clean_fields(self.dict())
+        return {
+            **base,
+            "occupation": self.occupation.strip(),
+            "location":   self.location.strip(),
+            "region":     self.region,
+        }
+
+
+class CreateAfaRequest(AfaFields):
+    user_id: Optional[int] = None
+    email: Optional[EmailStr] = None
+
+
+class AgentBuyAfaRequest(AfaFields):
+    agent_id: int
+
+
+def map_afa_status(raw) -> str:
+    s = str(raw or "").strip().lower()
+    if s in ("approved", "completed", "complete", "successful", "success", "registered", "done", "delivered", "resolved"):
+        return "successful"
+    if s in ("rejected", "failed", "cancelled", "canceled", "declined", "refunded"):
+        return "rejected"
+    return "processing"
+
+
+def _sdl_afa_headers(idem: str = None) -> dict:
+    h = {"x-api-key": SWIFT_DATA_LINK_API_KEY, "Content-Type": "application/json"}
+    if idem:
+        h["Idempotency-Key"] = idem
+    return h
+
+
+def refund_agent_afa(row: dict, reason: str):
+    """Give an agent their wallet debit back, once."""
+    agent_id = row.get("agent_id")
+    if not agent_id:
+        return
+    claimed = supabase.table("afa_registrations").update({"status": "rejected", "failure_reason": reason[:300]}) \
+        .eq("id", row["id"]).neq("status", "rejected").execute()
+    if not claimed.data:
+        return  # already refunded
+    w = supabase.table("agent_wallets").select("balance").eq("agent_id", agent_id).limit(1).execute()
+    if not w.data:
+        logger.error("AFA REFUND: no wallet for agent %s (registration %s)", agent_id, row["id"])
+        return
+    new_bal = round(float(w.data[0]["balance"]) + float(row["price"]), 2)
+    supabase.table("agent_wallets").update({"balance": new_bal}).eq("agent_id", agent_id).execute()
+    supabase.table("agent_transactions").insert({
+        "agent_id": agent_id, "type": "credit", "amount": float(row["price"]),
+        "reference": f"{row['evosdata_ref']}-REFUND", "order_id": row["id"],
+    }).execute()
+    logger.info("AFA REFUND: GH₵%s returned to agent %s", row["price"], agent_id)
+
+
+def dispatch_afa_registration(row: dict) -> str:
+    """
+    Submit a paid registration to Swift Data Link. Returns the new status.
+    Raises only when the outcome is unknown/retryable (network, 5xx, 429) —
+    the Idempotency-Key (our evosdata_ref) makes re-sending safe.
+    """
+    payload = {
+        "name":        row["full_name"],
+        "phoneNumber": row["phone_number"],
+        "idNumber":    row["id_number"],
+        "occupation":  row["occupation"],
+        "location":    row["location"],
+        "region":      row["region"],
+        "dateOfBirth": str(row["date_of_birth"])[:10],
+        "webhookUrl":  AFA_WEBHOOK_URL,
+    }
+    res = requests.post(
+        f"{SWIFT_DATA_LINK_BASE}/afa/register",
+        headers=_sdl_afa_headers(row["evosdata_ref"]),
+        json=payload,
+        timeout=BG_TIMEOUT,
+    )
+    try:
+        data = res.json()
+    except Exception:
+        data = {}
+
+    if res.status_code == 429 or res.status_code >= 500:
+        raise RuntimeError(f"SDL AFA unavailable ({res.status_code})")
+
+    if res.ok and data.get("success") is not False:
+        reg = data.get("registration") or data.get("data") or {}
+        reg_id = reg.get("registrationId") or reg.get("id") or data.get("registrationId") or data.get("id")
+        update = {
+            "status": map_afa_status(reg.get("status") or data.get("status") or "pending"),
+            "provider_status": str(reg.get("status") or data.get("status") or "pending"),
+            "updated_at": utc_now().isoformat(),
+        }
+        if reg_id:
+            update["sdl_registration_id"] = str(reg_id)
+        supabase.table("afa_registrations").update(update).eq("id", row["id"]).execute()
+        return update["status"]
+
+    reason = str(data.get("error") or data.get("message") or f"HTTP {res.status_code}")
+    logger.warning("AFA DISPATCH REJECTED: reg %s — %s", row["id"], reason)
+    if row.get("agent_id"):
+        refund_agent_afa(row, reason)
+    else:
+        supabase.table("afa_registrations").update({
+            "status": "rejected", "failure_reason": reason[:300], "updated_at": utc_now().isoformat(),
+        }).eq("id", row["id"]).execute()
+    return "rejected"
+
+
+def sync_afa_from_sdl(row: dict) -> dict:
+    """Poll SDL for a registration we've already submitted (webhook fallback)."""
+    ident = row.get("sdl_registration_id") or row.get("phone_number")
+    try:
+        res = requests.get(f"{SWIFT_DATA_LINK_BASE}/afa/status/{ident}", headers=_sdl_afa_headers(), timeout=REQUEST_TIMEOUT)
+        data = res.json()
+    except Exception as e:
+        logger.warning("AFA SYNC: %s", e)
+        return row
+    reg = data.get("registration") or {}
+    if not reg:
+        return row
+    new_status = map_afa_status(reg.get("status"))
+    if new_status != row["status"] and row["status"] != "rejected":
+        if new_status == "rejected" and row.get("agent_id"):
+            refund_agent_afa(row, str(reg.get("rejectionReason") or reg.get("reason") or "Rejected by provider"))
+        else:
+            supabase.table("afa_registrations").update({
+                "status": new_status, "provider_status": str(reg.get("status")),
+                "failure_reason": str(reg.get("rejectionReason") or reg.get("reason") or "")[:300] or None,
+                "updated_at": utc_now().isoformat(),
+            }).eq("id", row["id"]).execute()
+        fresh = supabase.table("afa_registrations").select("*").eq("id", row["id"]).limit(1).execute()
+        return fresh.data[0] if fresh.data else row
+    return row
+
+
+def _afa_public(row: dict) -> dict:
+    idn = row.get("id_number") or ""
+    return {
+        "reference":     row.get("paystack_ref") or row.get("evosdata_ref"),
+        "evosdata_ref":  row.get("evosdata_ref"),
+        "status":        row.get("status"),
+        "name":          row.get("full_name"),
+        "phone_number":  row.get("phone_number"),
+        "id_number":     (idn[:4] + "•••••" + idn[-3:]) if len(idn) > 8 else "",
+        "region":        row.get("region"),
+        "price":         row.get("price"),
+        "failure_reason": row.get("failure_reason") if row.get("status") == "rejected" else None,
+        "created_at":    row.get("created_at"),
+    }
+
+
+def _afa_insert(agent_or_user: dict, f: dict, price: float, ref: str, paystack_ref: str, status: str):
+    return supabase.table("afa_registrations").insert({
+        **agent_or_user,
+        "full_name": f["name"], "phone_number": f["phone_number"], "id_number": f["id_number"],
+        "occupation": f["occupation"], "location": f["location"], "region": f["region"],
+        "date_of_birth": f["date_of_birth"], "price": price,
+        "evosdata_ref": ref, "paystack_ref": paystack_ref, "status": status,
+    }).execute()
+
+
+@app.get("/afa/info")
+@limiter.limit("60/minute")
+def afa_info(request: Request):
+    return {"price": AFA_SELL_PRICE, "regions": GHANA_REGIONS, "network": "MTN"}
+
+
+@app.post("/afa/create")
+@limiter.limit("10/minute")
+def create_afa_registration(request: Request, data: CreateAfaRequest):
+    try:
+        try:
+            f = data.cleaned()
+        except ValueError as ve:
+            raise HTTPException(400, str(ve))
+
+        # Same person + number paying twice in 10 min is almost always a double-tap
+        dupe_floor = (utc_now() - timedelta(minutes=10)).isoformat()
+        dupe = supabase.table("afa_registrations").select("id") \
+            .eq("phone_number", f["phone_number"]).in_("status", ["paid", "processing", "successful"]) \
+            .gte("created_at", dupe_floor).limit(1).execute()
+        if dupe.data:
+            raise HTTPException(400, "A registration for this number was just submitted. Check its status first.")
+
+        if data.user_id:
+            u = supabase.table("users").select("email").eq("id", data.user_id).limit(1).execute()
+            if not u.data:
+                raise HTTPException(404, "User not found")
+            email = u.data[0]["email"]
+        else:
+            email = data.email or "guest@evoshub.com"
+
+        try:
+            ps = requests.post(
+                "https://api.paystack.co/transaction/initialize",
+                headers={"Authorization": f"Bearer {PAYSTACK_SECRET}", "Content-Type": "application/json"},
+                json={"email": email, "amount": int(round(AFA_SELL_PRICE * 100)),
+                      "callback_url": "https://evosdata.xyz/success?type=afa"},
+                timeout=REQUEST_TIMEOUT,
+            ).json()
+        except requests.exceptions.RequestException:
+            raise HTTPException(500, "Payment service error")
+        if not ps.get("status"):
+            raise HTTPException(400, "Payment init failed")
+
+        ref = ps["data"]["reference"]
+        _afa_insert(
+            {"user_id": data.user_id, "guest_email": None if data.user_id else email},
+            f, AFA_SELL_PRICE, f"AFA-{uuid.uuid4().hex[:8].upper()}", ref, "pending_payment",
+        )
+        return {"status": True, "payment_url": ps["data"]["authorization_url"], "reference": ref}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("CREATE AFA ERROR: %s", str(e))
+        raise HTTPException(500, "Server error")
+
+
+def mark_afa_paid_and_dispatch(row: dict):
+    """Called from Paystack webhook / status check once payment is confirmed."""
+    supabase.table("afa_registrations").update({"status": "paid", "updated_at": utc_now().isoformat()}).eq("id", row["id"]).execute()
+    fresh = supabase.table("afa_registrations").select("*").eq("id", row["id"]).limit(1).execute().data[0]
+    try:
+        dispatch_afa_registration(fresh)
+    except Exception as e:
+        logger.error("AFA DISPATCH ERROR (will retry): reg %s: %s", row["id"], e)
+        supabase.table("afa_registrations").update({"status": "failed", "updated_at": utc_now().isoformat()}).eq("id", row["id"]).execute()
+
+
+@app.get("/afa/status/{reference}")
+@limiter.limit("20/minute")
+async def get_afa_status(request: Request, reference: str):
+    try:
+        if not re.match(r"^[A-Za-z0-9_\-]{4,80}$", reference):
+            raise HTTPException(404, "Registration not found")
+        res = supabase.table("afa_registrations").select("*") \
+            .or_(f"paystack_ref.eq.{reference},evosdata_ref.eq.{reference}").limit(1).execute()
+        if not res.data:
+            raise HTTPException(404, "Registration not found")
+        row = res.data[0]
+
+        # Customer bounced back from Paystack before the webhook landed
+        if row["status"] == "pending_payment" and row.get("paystack_ref"):
+            try:
+                async with httpx.AsyncClient() as client:
+                    pres = await client.get(
+                        f"https://api.paystack.co/transaction/verify/{row['paystack_ref']}",
+                        headers={"Authorization": f"Bearer {PAYSTACK_SECRET}"}, timeout=15)
+                if pres.json().get("data", {}).get("status") == "success":
+                    cur = supabase.table("afa_registrations").select("*").eq("id", row["id"]).limit(1).execute().data[0]
+                    if cur["status"] == "pending_payment":
+                        await asyncio.to_thread(mark_afa_paid_and_dispatch, cur)
+            except Exception as ve:
+                logger.error("AFA STATUS verify error %s: %s", reference, ve)
+            row = supabase.table("afa_registrations").select("*").eq("id", row["id"]).limit(1).execute().data[0]
+
+        elif row["status"] == "processing" and row.get("sdl_registration_id"):
+            row = await asyncio.to_thread(sync_afa_from_sdl, row)
+
+        return _afa_public(row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("AFA STATUS ERROR: %s", str(e))
+        raise HTTPException(500, "Failed to fetch registration status")
+
+
+@app.get("/afa/track")
+@limiter.limit("20/minute")
+def track_afa(request: Request, phone: str = Query(...)):
+    try:
+        cleaned = normalise_phone(phone)
+        res = supabase.table("afa_registrations").select("*").eq("phone_number", cleaned) \
+            .neq("status", "pending_payment").order("created_at", desc=True).limit(10).execute()
+        return {"registrations": [_afa_public(r) for r in (res.data or [])]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("AFA TRACK ERROR: %s", str(e))
+        raise HTTPException(500, "Failed to fetch registrations")
+
+
+@app.get("/agent/afa-info/{agent_id}")
+def agent_afa_info(request: Request, agent_id: int, _: int = Depends(require_agent)):
+    return {"price": AFA_AGENT_PRICE, "regions": GHANA_REGIONS}
+
+
+@app.get("/agent/afa/{agent_id}")
+def agent_afa_history(request: Request, agent_id: int, _: int = Depends(require_agent)):
+    res = supabase.table("afa_registrations").select("*").eq("agent_id", agent_id) \
+        .order("created_at", desc=True).limit(30).execute()
+    return {"registrations": [_afa_public(r) for r in (res.data or [])]}
+
+
+@app.post("/agent/buy-afa")
+@limiter.limit("10/minute")
+async def agent_buy_afa(request: Request, payload: AgentBuyAfaRequest):
+    try:
+        token = request.headers.get("X-Agent-Token", "")
+        if not token or not verify_agent_token(token, payload.agent_id):
+            raise HTTPException(status_code=403, detail="Forbidden")
+        agent_id = payload.agent_id
+
+        try:
+            f = payload.cleaned()
+        except ValueError as ve:
+            return {"status": "error", "message": str(ve)}
+
+        a = supabase.table("users").select("id").eq("id", agent_id).eq("role", "agent") \
+            .eq("agent_status", "approved").limit(1).execute()
+        if not a.data:
+            return {"status": "error", "message": "Agent not found or not approved"}
+
+        dupe_floor = (utc_now() - timedelta(minutes=10)).isoformat()
+        dupe = supabase.table("afa_registrations").select("id") \
+            .eq("phone_number", f["phone_number"]).in_("status", ["paid", "processing", "successful"]) \
+            .gte("created_at", dupe_floor).limit(1).execute()
+        if dupe.data:
+            return {"status": "error", "message": "A registration for this number was just submitted. Please wait before retrying.", "duplicate": True}
+
+        w = supabase.table("agent_wallets").select("balance").eq("agent_id", agent_id).limit(1).execute()
+        balance = float(w.data[0]["balance"]) if w.data else 0.0
+        if balance < AFA_AGENT_PRICE:
+            return {"status": "error", "message": f"Insufficient wallet balance. Need GH₵ {AFA_AGENT_PRICE:.2f}, have GH₵ {balance:.2f}"}
+
+        new_balance = round(balance - AFA_AGENT_PRICE, 2)
+        supabase.table("agent_wallets").update({"balance": new_balance}).eq("agent_id", agent_id).execute()
+
+        ref = f"AFA-AGT-{agent_id}-{uuid.uuid4().hex[:10].upper()}"
+        ins = _afa_insert({"agent_id": agent_id}, f, AFA_AGENT_PRICE, ref, ref, "paid")
+        if not ins.data:
+            supabase.table("agent_wallets").update({"balance": balance}).eq("agent_id", agent_id).execute()
+            return {"status": "error", "message": "Failed to create registration"}
+        row = ins.data[0]
+
+        supabase.table("agent_transactions").insert({
+            "agent_id": agent_id, "type": "debit", "amount": AFA_AGENT_PRICE, "reference": ref, "order_id": row["id"],
+        }).execute()
+
+        try:
+            outcome = await asyncio.to_thread(dispatch_afa_registration, row)
+        except Exception as e:
+            # Wallet already debited; leave as "failed" so the retry job resubmits (idempotent)
+            logger.error("AGENT BUY AFA DISPATCH ERROR (will retry): %s", e)
+            supabase.table("afa_registrations").update({"status": "failed"}).eq("id", row["id"]).execute()
+            outcome = "queued"
+
+        if outcome == "rejected":
+            cur = supabase.table("afa_registrations").select("failure_reason").eq("id", row["id"]).limit(1).execute()
+            reason = (cur.data[0].get("failure_reason") if cur.data else None) or "Registration was rejected"
+            fresh_w = supabase.table("agent_wallets").select("balance").eq("agent_id", agent_id).limit(1).execute()
+            return {"status": "error", "message": f"Registration rejected: {reason}. Your wallet was refunded.",
+                    "new_wallet_balance": float(fresh_w.data[0]["balance"]) if fresh_w.data else new_balance}
+
+        return {"status": "success", "message": f"AFA registration submitted for {f['phone_number']}",
+                "reference": ref, "new_wallet_balance": new_balance}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("AGENT BUY AFA ERROR: %s", str(e))
+        return {"status": "error", "message": "Something went wrong. Please try again."}
+
+
+# Resubmits paid registrations whose call to SDL failed (SDL's AFA endpoints
+# share a 5/min rate limit, so 429s are expected under load). Safe to repeat:
+# Idempotency-Key = evosdata_ref.
+_afa_retry_running = False
+
+async def retry_stuck_afa():
+    global _afa_retry_running
+    if _afa_retry_running:
+        return
+    _afa_retry_running = True
+    await asyncio.sleep(200)
+    while True:
+        try:
+            now = utc_now()
+            rows = supabase.table("afa_registrations").select("*").eq("status", "failed") \
+                .is_("sdl_registration_id", None) \
+                .lte("updated_at", (now - timedelta(minutes=2)).isoformat()) \
+                .gte("created_at", (now - timedelta(hours=24)).isoformat()).limit(5).execute().data or []
+            for row in rows:
+                try:
+                    await asyncio.to_thread(dispatch_afa_registration, row)
+                except Exception as e:
+                    logger.warning("AFA RETRY: reg %s still failing: %s", row["id"], e)
+                    supabase.table("afa_registrations").update({"updated_at": utc_now().isoformat()}).eq("id", row["id"]).execute()
+                await asyncio.sleep(13)  # stay under SDL's 5/min limit
+            # Anything stuck unpaid-looking agent rows or older than 24h failing → refund agents
+            old = supabase.table("afa_registrations").select("*").eq("status", "failed") \
+                .not_.is_("agent_id", None).lte("created_at", (now - timedelta(hours=24)).isoformat()).execute().data or []
+            for row in old:
+                refund_agent_afa(row, "Could not be submitted within 24h — auto-refunded")
+        except Exception as e:
+            logger.error("AFA RETRY LOOP ERROR: %s", e)
+        await asyncio.sleep(120)
+
+
+# =========================
 # VERIFY NUMBER (DataMart pre-check)
 # Informational only — never blocks a purchase. Any failure, timeout, or
 # rate-limit from DataMart just falls back to recommendation "unknown" so
@@ -2749,6 +3206,7 @@ async def startup_event():
     asyncio.create_task(retry_stuck_deposits())
     asyncio.create_task(retry_stuck_order_payments())
     asyncio.create_task(retry_stuck_checker_payments())
+    asyncio.create_task(retry_stuck_afa())
     asyncio.create_task(retry_stuck_paystack_withdrawals())
 
 
@@ -2996,6 +3454,15 @@ async def paystack_webhook(request: Request):
                     # since that job only scans status in ("pending_payment", "failed").
                     supabase.table("checkers").update({"status": "failed"}).eq("id", checker["id"]).execute()
                     return {"status": "checker dispatch failed"}
+
+            # ── AFA REGISTRATION? ────────────────────────────────────────
+            afa_res = supabase.table("afa_registrations").select("*").eq("paystack_ref", reference).limit(1).execute()
+            if afa_res.data:
+                afa = afa_res.data[0]
+                if afa["status"] != "pending_payment":
+                    return {"status": "already processed"}
+                await asyncio.to_thread(mark_afa_paid_and_dispatch, afa)
+                return {"status": "success"}
 
             # ── DATA ORDER (existing logic, unchanged) ────────────────────
             order_res = supabase.table("orders").select("*").eq("paystack_ref", reference).limit(1).execute()
@@ -3306,6 +3773,36 @@ async def swiftdatalink_webhook(request: Request):
         order_id  = payload.get("orderId", "")
         reference = payload.get("reference", "")
         status    = str(payload.get("status", "")).lower()
+
+        if str(event).lower().startswith("afa") or payload.get("registration") or payload.get("registrationId"):
+            reg    = payload.get("registration") or payload.get("data") or payload
+            reg_id = reg.get("registrationId") or reg.get("id") or payload.get("registrationId")
+            if not reg_id:
+                return {"received": True}
+            rows = supabase.table("afa_registrations").select("*").eq("sdl_registration_id", str(reg_id)).limit(1).execute().data
+            if not rows:
+                # webhook can beat our DB write of the id — match on our own idempotency reference/phone
+                ref = reg.get("reference") or reg.get("idempotencyKey")
+                if ref:
+                    rows = supabase.table("afa_registrations").select("*").eq("evosdata_ref", str(ref)).limit(1).execute().data
+            if not rows:
+                logger.warning("SDL AFA WEBHOOK: no registration for %s", reg_id)
+                return {"received": True}
+            row = rows[0]
+            new_status = map_afa_status(reg.get("status") or payload.get("status"))
+            reason = str(reg.get("rejectionReason") or reg.get("reason") or payload.get("reason") or "Rejected by provider")
+            if not row.get("sdl_registration_id"):
+                supabase.table("afa_registrations").update({"sdl_registration_id": str(reg_id)}).eq("id", row["id"]).execute()
+            if new_status == "rejected" and row.get("agent_id"):
+                refund_agent_afa(row, reason)
+            elif new_status != row["status"] and row["status"] != "rejected":
+                supabase.table("afa_registrations").update({
+                    "status": new_status, "provider_status": str(reg.get("status") or payload.get("status")),
+                    "failure_reason": reason[:300] if new_status == "rejected" else None,
+                    "updated_at": utc_now().isoformat(),
+                }).eq("id", row["id"]).execute()
+            logger.info("SDL AFA WEBHOOK: %s → %s", reg_id, new_status)
+            return {"received": True}
 
         logger.info("SDL WEBHOOK EVENT: %s", event)
         logger.info("SDL WEBHOOK ORDER ID: %s", order_id)

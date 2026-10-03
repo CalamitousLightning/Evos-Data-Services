@@ -112,4 +112,15 @@ export const getCheckerStatus = (reference) =>
 export const trackCheckers = (phone) =>
   request("get", `/checkers/track?phone=${encodeURIComponent(phone)}`);
 
+// =========================
+// AFA REGISTRATION (MTN)
+// =========================
+export const getAfaInfo = () => request("get", "/afa/info");
+
+export const createAfaRegistration = (data) => request("post", "/afa/create", data);
+
+export const getAfaStatus = (reference) => request("get", `/afa/status/${reference}`);
+
+export const trackAfa = (phone) => request("get", `/afa/track?phone=${encodeURIComponent(phone)}`);
+
 export default primaryClient;

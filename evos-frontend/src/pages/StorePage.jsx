@@ -630,7 +630,7 @@ export default function StorePage({ setPage }) {
 
   // On mount: restore previous step/network from session if available
   useEffect(() => {
-    if (!agentId) { setLoading(false); return; }
+    if (!agentId) { setLoading(false); window.__evosReady = true; return; }
 
     const saved = loadStoreSession(agentId);
     if (saved) {
@@ -650,6 +650,7 @@ export default function StorePage({ setPage }) {
         setStore(null);
       } finally {
         setLoading(false);
+        window.__evosReady = true; // lets the launch splash lift
       }
     };
     loadStore();
