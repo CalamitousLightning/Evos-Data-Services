@@ -598,10 +598,6 @@ def sanitise_checker_ref(ref: str) -> str:
     return cleaned[:40]
 
 
-
-
-
-
 def dispatch_checker_order(checker: dict):
     """Called once payment is confirmed (webhook or retry job). Buys the
     card(s) from DataMart and stores serial/pin. Raises on failure so the
