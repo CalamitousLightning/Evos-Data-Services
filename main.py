@@ -3213,27 +3213,38 @@ async def startup_event():
 def send_otp_email(to_email: str, otp: str, full_name: str) -> bool:
     try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = "EVOS Data Hub — Password Reset OTP"
-        msg["From"]    = f"EVOS Data Hub <{SMTP_USER}>"
+        msg["Subject"] = "Evoxera Technology — Password Reset OTP"
+        msg["From"]    = f"Evoxera Technology Team <{SMTP_USER}>"
         msg["To"]      = to_email
 
         html = f"""
         <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;
                     padding:24px;border:1px solid #eee;border-radius:8px;">
             <h2 style="color:#1a1a1a;">Password Reset</h2>
+
             <p>Hi <strong>{full_name}</strong>,</p>
-            <p>Use the OTP below to reset your EVOS Data Hub password.
-               It expires in <strong>10 minutes</strong>.</p>
+
+            <p>
+                Use the OTP below to reset your <strong>Evos password</strong>.
+                This password is used across your EvosHub products and services
+                by <strong>Evoxera Technology</strong>.
+                The OTP expires in <strong>10 minutes</strong>.
+            </p>
+
             <div style="font-size:36px;font-weight:bold;letter-spacing:8px;
                         text-align:center;padding:16px;background:#f4f4f4;
                         border-radius:6px;margin:24px 0;">
                 {otp}
             </div>
+
             <p style="color:#888;font-size:13px;">
-                If you didn't request this, ignore this email.
-                Your password won't change.
+                If you didn't request this password reset, you can safely ignore
+                this email. Your password won't change.
             </p>
-            <p style="color:#888;font-size:13px;">— EVOS Data Hub Team</p>
+
+            <p style="color:#888;font-size:13px;">
+                — Evoxera Technology Team
+            </p>
         </div>
         """
 
@@ -3249,7 +3260,6 @@ def send_otp_email(to_email: str, otp: str, full_name: str) -> bool:
     except Exception as e:
         logger.error("SPACEMAIL SMTP ERROR: %s", str(e))
         return False
-
 
 # =========================
 # ORDERS
