@@ -6122,3 +6122,17 @@ try:
 except Exception as _dashxera_err:
     # A dashboard must never be able to take the API down with it.
     logger.error("DASHXERA: failed to mount (%s) — API continues without it", _dashxera_err)
+
+
+# =========================
+# EVOXERA WHATSAPP BOT (Meta Cloud API)
+# =========================
+# Mounted last, like dashxera: it resolves `supabase` and the provider
+# helpers from this module lazily, and a failure here must never take the
+# API down. Needs supabase/migrations/20261012_evoxera_whatsapp_bot.sql and
+# the WA_* env vars (the bot stays off without them; the API still boots).
+try:
+    import evoxera_bot
+    evoxera_bot.install(app)
+except Exception as _evoxera_bot_err:
+    logger.error("EVOXERA BOT: failed to mount (%s) — API continues without it", _evoxera_bot_err)
