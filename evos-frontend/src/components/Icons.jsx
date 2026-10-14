@@ -23,6 +23,7 @@ export const Icon = ({ name, size = 20 }) => {
     case "download": return <svg {...p}><path d="M12 3v12M7 10l5 5 5-5M4 21h16" /></svg>;
     case "share": return <svg {...p}><path d="M12 15V3M8 7l4-4 4 4" /><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" /></svg>;
     case "plus-box": return <svg {...p}><rect x="4" y="4" width="16" height="16" rx="4" /><path d="M12 8v8M8 12h8" /></svg>;
+    case "gift": return <svg {...p}><rect x="3" y="8" width="18" height="4" rx="1" /><path d="M5 12v8h14v-8M12 8v12" /><path d="M12 8C10 8 7.5 7.3 7.5 5.5 7.5 4 9 3.5 10 4c1.2.6 2 2.5 2 4zM12 8c2 0 4.5-.7 4.5-2.5C16.5 4 15 3.5 14 4c-1.2.6-2 2.5-2 4z" /></svg>;
     case "shield": return <svg {...p}><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z" /><path d="m9 12 2 2 4-4" /></svg>;
     default: return null;
   }

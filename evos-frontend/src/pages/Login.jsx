@@ -36,6 +36,7 @@ export default function Login({ setUser, setPage }) {
                 referral_code: user.referral_code  || "",
                 rank:          user.rank           || 1,
                 agent_token:   user.agent_token    || null,
+                user_token:    user.user_token     || null,
             };
 
             // Persist user to localStorage (includes agent_token for page refresh rehydration)
@@ -43,6 +44,8 @@ export default function Login({ setUser, setPage }) {
             localStorage.setItem("email",     normalizedUser.email);
             localStorage.setItem("username",  normalizedUser.username);
             localStorage.setItem("user_id",   normalizedUser.id);
+
+            if (normalizedUser.user_token) localStorage.setItem("userToken", normalizedUser.user_token);
 
             // FIX: save token to BOTH storages so it's available however the component reads it
             if (normalizedUser.agent_token) {

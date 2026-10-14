@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 
 import { smartFetch } from "../config";
+import { userApi } from "../lib/userApi";
 
 export default function Success() {
   const [status, setStatus] = useState("verifying");
   const [checkerData, setCheckerData] = useState(null);
   const [afaData, setAfaData] = useState(null);
   const [copiedKey, setCopiedKey] = useState("");
+  const [spinReady, setSpinReady] = useState(false);
 
   const params    = new URLSearchParams(window.location.search);
   const reference = params.get("reference");
@@ -26,7 +28,10 @@ export default function Success() {
       return;
     }
 
-    if (type === "deposit") {
+    if (type === "agent-fee") {
+      // No work to do here: the server confirms the payment and upgrades the account on its own.
+      setStatus("agent_fee_success");
+    } else if (type === "deposit") {
       // fire-and-forget
       smartFetch(`/agent/deposit/verify`, {
         method: "POST",
@@ -68,6 +73,17 @@ export default function Success() {
     }
   }, [reference, type]);
 
+  // After a paid data order, remind a signed-in customer that today's free spin is waiting.
+  useEffect(() => {
+    if (status !== "order_success") return;
+    let u = null;
+    try { u = JSON.parse(localStorage.getItem("user") || "null"); } catch { /* ignore */ }
+    if (!u?.id || !u?.user_token) return;
+    userApi(u, `/spin/status?user_id=${u.id}`).then((r) => {
+      if (r.ok && r.data.can_spin) setSpinReady(true);
+    });
+  }, [status]);
+
   return (
     <div style={s.page}>
       <div style={s.card}>
@@ -78,6 +94,24 @@ export default function Success() {
             <div style={s.spinner}>⏳</div>
             <h2 style={s.title}>Verifying Payment</h2>
             <p style={s.sub}>Please wait, this takes a few seconds...</p>
+          </>
+        )}
+
+        {/* ── AGENT FEE ── */}
+        {status === "agent_fee_success" && (
+          <>
+            <div style={{ ...s.iconCircle, background: "rgba(200,255,62,0.12)", border: "2px solid rgba(200,255,62,0.35)" }}>🚀</div>
+            <h2 style={{ ...s.title, color: "#c8ff3e" }}>Payment Received</h2>
+            <p style={s.sub}>
+              We confirm your GH₵50 payment about 30 minutes from now, then your account becomes an agent account automatically.
+              You can close this page.
+            </p>
+            <div style={s.btnGroup}>
+              <button style={s.primaryBtn} onClick={() => window.location.href = `/become-agent${reference ? `?reference=${encodeURIComponent(reference)}` : ""}`}>
+                ⏱ See activation status
+              </button>
+              <button style={s.secondaryBtn} onClick={() => window.location.href = "/dashboard"}>🏠 Dashboard</button>
+            </div>
           </>
         )}
 
@@ -233,6 +267,17 @@ export default function Success() {
                 </span>
               </div>
             </div>
+
+            {spinReady && (
+              <div style={{ margin: "0 0 14px", padding: "14px", borderRadius: 16, textAlign: "center",
+                            background: "linear-gradient(135deg, rgba(200,255,62,0.16), rgba(255,77,141,0.12))",
+                            border: "1px solid rgba(200,255,62,0.4)" }}>
+                <div style={{ fontSize: 28 }}>🎡</div>
+                <div style={{ fontWeight: 900, color: "#f3f0fb", fontSize: 16 }}>Your free spin is ready!</div>
+                <div style={{ fontSize: 13, color: "#b4acd0", margin: "4px 0 10px" }}>Win free data from 1GB up to 10GB.</div>
+                <button style={s.primaryBtn} onClick={() => window.location.href = "/spin"}>Spin to Win</button>
+              </div>
+            )}
 
             {/* ── EVOSGPT PROMO BLOCK ── */}
             <div style={s.promoBox}>

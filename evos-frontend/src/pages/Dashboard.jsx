@@ -46,7 +46,7 @@ export default function Dashboard({ setPage, user }) {
     })();
   }, [user]);
 
-  const handleAgentAccess = () => (isAgentActive ? setPage("agent-dashboard") : setSupportOpen(true));
+  const handleAgentAccess = () => setPage(isAgentActive ? "agent-dashboard" : "become-agent");
 
   const rate = stats.my_orders ? Math.round((stats.my_successful_orders / stats.my_orders) * 100) : 0;
   const R = 34, C = 2 * Math.PI * R;

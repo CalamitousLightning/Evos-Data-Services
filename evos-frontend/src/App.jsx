@@ -22,6 +22,9 @@ import AgentCheckerPricing from "./pages/AgentCheckerPricing";
 import DashXera           from "./pages/DashXera";
 import Afa                from "./pages/Afa";
 import AgentBuyAfa        from "./pages/AgentBuyAfa";
+import SpinWheel          from "./pages/SpinWheel";
+import BecomeAgent        from "./pages/BecomeAgent";
+import SpinPopup          from "./components/SpinPopup";
 import CommunityPopup     from "./components/CommunityPopup";
 import { InstallBanner, InstallHelp, useInstall } from "./components/InstallApp";
 import { Icon } from "./components/Icons";
@@ -97,6 +100,8 @@ export default function App() {
             "/agent-buy-afa":      "agent-buy-afa",
             "/agent-checker-pricing": "agent-checker-pricing",
             "/agent-deposit":      "agent-deposit",
+            "/spin":               "spin",
+            "/become-agent":       "become-agent",
             "/track":              "track-order",
             "/eta-track":          "eta-track",
             "/forgot-password":    "forgot-password",
@@ -166,6 +171,8 @@ export default function App() {
             "agent-buy-afa":          "/agent-buy-afa",
             "agent-checker-pricing":  "/agent-checker-pricing",
             "agent-deposit":    "/agent-deposit",
+            spin:               "/spin",
+            "become-agent":     "/become-agent",
             store:              "/store",
             "track-order":      "/track",
             "eta-track":        "/eta-track",
@@ -216,6 +223,10 @@ export default function App() {
                 return <AgentCheckerPricing user={user} setPage={navigate} />;
             case "agent-deposit":
                 return <AgentDeposit user={user} setPage={navigate} />;
+            case "spin":
+                return <SpinWheel user={user} setPage={navigate} />;
+            case "become-agent":
+                return <BecomeAgent user={user} setUser={setUser} setPage={navigate} />;
             case "store":
                 return <StorePage setPage={navigate} theme={theme} />;
             case "track-order":
@@ -241,6 +252,7 @@ export default function App() {
         { label: "Main", items: [
             { icon: "home",   label: "Home",            target: "home" },
             { icon: "bolt",   label: "Buy Data",        target: "shop" },
+            { icon: "gift",   label: "Spin to Win",     target: "spin", green: true },
             { icon: "box",    label: "My Orders",       target: "orders" },
             { icon: "chart",  label: "Dashboard",       target: "dashboard" },
             { icon: "pin",    label: "Track Order",     target: "eta-track" },
@@ -248,7 +260,7 @@ export default function App() {
             { icon: "user",   label: "AFA Registration", target: "afa" },
         ] },
         ...(user ? [{ label: "Agent", items: [
-            { icon: "rocket", label: isAgentActive ? "Agent Dashboard" : "Become Agent", target: "agent-dashboard" },
+            { icon: "rocket", label: isAgentActive ? "Agent Dashboard" : "Become Agent", target: isAgentActive ? "agent-dashboard" : "become-agent" },
             ...(isAgentActive ? [
                 { icon: "store",  label: "Store Settings",        target: "agent-store-settings" },
                 { icon: "signal", label: "Buy Data (Base Price)", target: "agent-buy-data" },
@@ -410,6 +422,7 @@ export default function App() {
             {!isStorePage && <InstallBanner {...inst} hidden={sheetOpen} />}
             {inst.help && <InstallHelp ios={inst.ios} onClose={() => inst.setHelp(false)} />}
             <CommunityPopup />
+            <SpinPopup user={user} page={page} setPage={navigate} />
         </div>
     );
 }

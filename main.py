@@ -227,6 +227,38 @@ def require_agent(request: Request, agent_id: int) -> int:
     return agent_id
 
 # =========================
+# USER TOKEN AUTH (every logged-in customer)
+# =========================
+# Signed with a different domain prefix ("user:") from the agent token, so a
+# customer token can NEVER be replayed as an agent token on /agent/* routes.
+# Carries an expiry. Used by /spin/* and /agent-fee/* (spin.py, agent_fee.py).
+USER_TOKEN_TTL_SECONDS = 30 * 24 * 3600
+
+def _user_token_sig(msg: bytes) -> str:
+    return hmac.new(ADMIN_SECRET.encode(), b"user:" + msg, hashlib.sha256).hexdigest()
+
+def make_user_token(user_id: int, ttl: int = USER_TOKEN_TTL_SECONDS) -> str:
+    msg = f"{int(user_id)}:{int(time.time()) + ttl}".encode()
+    return f"{base64.urlsafe_b64encode(msg).decode()}.{_user_token_sig(msg)}"
+
+def verify_user_token(token: str, user_id: int) -> bool:
+    try:
+        payload, sig = token.rsplit(".", 1)
+        msg = base64.urlsafe_b64decode(payload.encode())
+        uid_s, exp_s = msg.decode().split(":", 1)
+        if int(uid_s) != int(user_id) or int(exp_s) < time.time():
+            return False
+        return hmac.compare_digest(sig, _user_token_sig(msg))
+    except Exception:
+        return False
+
+def require_user(request: Request, user_id: int) -> int:
+    token = request.headers.get("X-User-Token", "")
+    if not token or not verify_user_token(token, user_id):
+        raise HTTPException(status_code=403, detail="Please sign in again")
+    return int(user_id)
+
+# =========================
 # MODELS
 # =========================
 
@@ -5580,6 +5612,7 @@ def login(request: Request, data: LoginRequest):
             "rank":          user.get("rank", 1),
             "role":          user.get("role", "user"),
             "agent_status":  user.get("agent_status", "pending"),
+            "user_token":    make_user_token(user["id"]),
             "agent_token":   make_agent_token(user["id"]) if (
                 user.get("role") == "agent" and user.get("agent_status") == "approved"
             ) else None,
@@ -6136,3 +6169,16 @@ try:
     evoxera_bot.install(app)
 except Exception as _evoxera_bot_err:
     logger.error("EVOXERA BOT: failed to mount (%s) — API continues without it", _evoxera_bot_err)
+
+
+# =========================
+# SPIN TO WIN + BECOME-AGENT FEE
+# =========================
+# Mounted last, same pattern as dashxera and the bot: each resolves `supabase`
+# and the provider helpers from this module lazily, and a failure in either
+# must never take the API down. Needs supabase/migrations/20261013_spin_and_agent_fee.sql.
+for _mod_name in ("spin", "agent_fee"):
+    try:
+        __import__(_mod_name).install(app)
+    except Exception as _mod_err:
+        logger.error("%s: failed to mount (%s) — API continues without it", _mod_name.upper(), _mod_err)
